@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>{{site.title}}</title>
+    <link>{{site.base_url}}</link>
+    <description>{{site.title}}</description>
+    <lastBuildDate>{{site.updated}}</lastBuildDate>
+{{#content_entries}}    <item>
+      <title>{{title}}</title>
+      <link>{{site.base_url}}{{url}}</link>
+      <guid>{{site.base_url}}{{url}}</guid>
+      <pubDate>{{date}}</pubDate>
+      <description>{{body}}</description>
+    </item>
+{{/content_entries}}  </channel>
+</rss>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>{{site.title}}</title>
+  <link href="{{site.base_url}}"/>
+  <id>{{site.base_url}}</id>
+  <updated>{{site.updated}}</updated>
+{{#content_entries}}  <entry>
+    <title>{{title}}</title>
+    <link href="{{site.base_url}}{{url}}"/>
+    <id>{{site.base_url}}{{url}}</id>
+    <updated>{{date}}</updated>
+  </entry>
+{{/content_entries}}</feed>

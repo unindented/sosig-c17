@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>C17 Notes</title>
+  <link href="https://www.unindented.org"/>
+  <id>https://www.unindented.org</id>
+  <updated>2026-09-13T09:00:00-07:00</updated>
+  <entry>
+    <title>Basic Paragraph</title>
+    <link href="https://www.unindented.org/basic-paragraph/index.html"/>
+    <id>https://www.unindented.org/basic-paragraph/index.html</id>
+    <updated>2026-09-13T09:00:00-07:00</updated>
+  </entry>
+  <entry>
+    <title>Without Slug</title>
+    <link href="https://www.unindented.org/without-slug/index.html"/>
+    <id>https://www.unindented.org/without-slug/index.html</id>
+    <updated>2026-08-16T09:00:00-07:00</updated>
+  </entry>
+  <entry>
+    <title>With Slug</title>
+    <link href="https://www.unindented.org/nested/with-slug/index.html"/>
+    <id>https://www.unindented.org/nested/with-slug/index.html</id>
+    <updated>2026-08-14T09:00:00-07:00</updated>
+  </entry>
+  <entry>
+    <title>Nested Without Slug</title>
+    <link href="https://www.unindented.org/nested/without-slug/index.html"/>
+    <id>https://www.unindented.org/nested/without-slug/index.html</id>
+    <updated>2026-08-10T09:00:00-07:00</updated>
+  </entry>
+</feed>

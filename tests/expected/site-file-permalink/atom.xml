@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>C17 Notes</title>
+  <link href="https://www.unindented.org/atom.xml" rel="self"/>
+  <link href="https://www.unindented.org"/>
+  <id>https://www.unindented.org</id>
+  <updated>2026-09-13T09:00:00-07:00</updated>
+  <author><name>Daniel Perez Alvarez</name></author>
+  <entry>
+    <title>Basic Paragraph</title>
+    <link href="https://www.unindented.org/basic-paragraph.html"/>
+    <id>https://www.unindented.org/basic-paragraph.html</id>
+    <updated>2026-09-13T09:00:00-07:00</updated>
+    <content type="html">&lt;p&gt;Welcome to the test site.&lt;/p&gt;
+</content>
+  </entry>
+  <entry>
+    <title>Custom Template</title>
+    <link href="https://www.unindented.org/custom-template.html"/>
+    <id>https://www.unindented.org/custom-template.html</id>
+    <updated>2026-09-11T09:00:00-07:00</updated>
+    <content type="html">&lt;p&gt;This entry overrides the default content template with one of its own.&lt;/p&gt;
+</content>
+  </entry>
+  <entry>
+    <title>Inline Math</title>
+    <link href="https://www.unindented.org/inline-math.html"/>
+    <id>https://www.unindented.org/inline-math.html</id>
+    <updated>2026-09-02T09:00:00-07:00</updated>
+    <content type="html">&lt;p&gt;Inline math uses &lt;x-equation&gt;E = mc^2&lt;/x-equation&gt;.&lt;/p&gt;
+</content>
+  </entry>
+</feed>

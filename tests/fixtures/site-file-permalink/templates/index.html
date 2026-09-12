@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>{{site.title}}</title>
+  {{> header}}
+</head>
+<body>
+  <main class="shell">
+    {{> nav}}
+    <h1>{{site.title}}</h1>
+    <p class="meta">Newest content entries first.</p>
+    {{#content_entries}}
+    <section class="content-entry-card">
+      <h2><a href="{{url}}">{{title}}</a></h2>
+      <p class="meta">{{date}}</p>
+      <p>{{description}}</p>
+    </section>
+    {{/content_entries}}
+    {{> footer}}
+  </main>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>{{title}} - {{site.title}}</title>
+  <meta name="site-updated" content="{{site.updated}}">
+  {{> header}}
+</head>
+<body>
+  <main class="shell">
+    {{> nav}}
+    <article>
+      <h1>{{title}}</h1>
+      <p class="meta">{{date}} · {{#tags}}{{.}}{{/tags}}</p>
+      {{{body}}}
+    </article>
+    {{> footer}}
+  </main>
+</body>
+</html>

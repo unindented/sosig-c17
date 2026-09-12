@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>{{title}} - {{site.title}}</title>
+  {{> header}}
+</head>
+<body>
+  <main class="shell custom-template">
+    {{> nav}}
+    <article class="custom-entry">
+      <header class="custom-entry-header">
+        <h1>{{title}}</h1>
+        <p class="custom-meta">{{date}} · {{description}}</p>
+        <ul class="custom-tags">{{#tags}}<li>{{.}}</li>{{/tags}}</ul>
+      </header>
+      <div class="custom-body">
+        {{{body}}}
+      </div>
+    </article>
+    <nav class="custom-related">
+      <ul>
+      {{#content_entries}}
+        <li><a href="{{url}}">{{title}}</a></li>
+      {{/content_entries}}
+      </ul>
+    </nav>
+    {{> footer}}
+  </main>
+</body>
+</html>

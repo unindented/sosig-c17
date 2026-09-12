@@ -1,0 +1,8 @@
+base_url = "https://www.unindented.org"
+title = "C17 Notes"
+author = "Daniel Perez Alvarez"
+content_dir = "content"
+output_dir = "public"
+templates_dir = "templates"
+feed_templates = ["atom.xml", "rss.xml"]
+feed_count = 3

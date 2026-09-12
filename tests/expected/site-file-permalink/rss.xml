@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>C17 Notes</title>
+    <link>https://www.unindented.org</link>
+    <description>C17 Notes</description>
+    <lastBuildDate>2026-09-13T09:00:00-07:00</lastBuildDate>
+    <item>
+      <title>Basic Paragraph</title>
+      <link>https://www.unindented.org/basic-paragraph.html</link>
+      <guid>https://www.unindented.org/basic-paragraph.html</guid>
+      <pubDate>2026-09-13T09:00:00-07:00</pubDate>
+      <description>&lt;p&gt;Welcome to the test site.&lt;/p&gt;
+</description>
+    </item>
+    <item>
+      <title>Custom Template</title>
+      <link>https://www.unindented.org/custom-template.html</link>
+      <guid>https://www.unindented.org/custom-template.html</guid>
+      <pubDate>2026-09-11T09:00:00-07:00</pubDate>
+      <description>&lt;p&gt;This entry overrides the default content template with one of its own.&lt;/p&gt;
+</description>
+    </item>
+    <item>
+      <title>Inline Math</title>
+      <link>https://www.unindented.org/inline-math.html</link>
+      <guid>https://www.unindented.org/inline-math.html</guid>
+      <pubDate>2026-09-02T09:00:00-07:00</pubDate>
+      <description>&lt;p&gt;Inline math uses &lt;x-equation&gt;E = mc^2&lt;/x-equation&gt;.&lt;/p&gt;
+</description>
+    </item>
+  </channel>
+</rss>

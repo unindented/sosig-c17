@@ -1,0 +1,7 @@
+base_url = "https://www.unindented.org"
+title = "C17 Notes"
+author = "Daniel Perez Alvarez"
+permalink = "/{section}/{slug}/"
+content_dir = "content"
+output_dir = "public"
+templates_dir = "templates"
