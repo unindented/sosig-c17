@@ -75,7 +75,8 @@ SAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-fr
 TSAN_FLAGS := -fsanitize=thread -fno-sanitize-recover=all -fno-omit-frame-pointer
 DEBUG_BASE_CFLAGS := $(CSTD) -pthread -g -Og
 DEBUG_CFLAGS := $(DEBUG_BASE_CFLAGS) $(WARN) $(SAN_FLAGS)
-RELEASE_CFLAGS := $(CSTD) -pthread -g -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 $(WARN)
+RELEASE_CFLAGS := $(CSTD) -pthread -O2 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 $(WARN)
+RELEASE_LDFLAGS := -s
 TSAN_CFLAGS := $(DEBUG_BASE_CFLAGS) $(WARN) $(TSAN_FLAGS)
 TEST_CFLAGS := $(DEBUG_BASE_CFLAGS) $(TEST_WARN) $(SAN_FLAGS)
 LDLIBS := -pthread
@@ -149,7 +150,7 @@ define COMPILE_VENDOR
 endef
 
 define LINK
-@$(CC) $(CFLAGS) $^ $(LDLIBS) -o "$@"
+@$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o "$@"
 endef
 
 # Generate the compile and link rules for one build variant.
@@ -164,6 +165,7 @@ $$($(1)_VENDOR_OBJS): $$($(1)_DIR)/vendor/%.o: vendor/%.c Makefile | dirs
 	$$(COMPILE_VENDOR)
 
 $$($(1)_BIN): CFLAGS := $$($(1)_CFLAGS)
+$$($(1)_BIN): LDFLAGS := $$($(1)_LDFLAGS)
 $$($(1)_BIN): $$($(1)_OBJS) $$($(1)_VENDOR_OBJS) | dirs
 	$$(LINK)
 endef
