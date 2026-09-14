@@ -1,4 +1,8 @@
-# `sosig` /ˈsɔsɪdʒ/
+<div align="center">
+  <img src="media/logo.png" height="300" alt="">
+</div>
+
+<h1 align="center"><code>sosig</code> /ˈsɔsɪdʒ/</h1>
 
 This is a small static site generator written in C17.
 
