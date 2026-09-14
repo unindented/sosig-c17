@@ -1,0 +1,51 @@
+name: Checks
+
+# Reusable CI job shared by workflows so install/build steps stay in a single place and cannot
+# drift.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to check out; defaults to the triggering ref when empty"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - macos-26
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install quality tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22 all
+          sudo apt-get install -y cppcheck
+          echo "CC=clang-22" >> "$GITHUB_ENV"
+          echo "CLANG_FORMAT=clang-format-22" >> "$GITHUB_ENV"
+          echo "CLANG_TIDY=clang-tidy-22" >> "$GITHUB_ENV"
+
+      - name: Install quality tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm cppcheck
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Run CI
+        run: make ci
