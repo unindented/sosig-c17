@@ -21,9 +21,9 @@ static void test_renders_basic_html(void) {
   free(html);
 }
 
-// The enabled extension set renders GitHub-style tables. The rendered table itself is diffed end to
-// end by `tests/expected/site-file-permalink/table.html`. This checks the module boundary:
-// `markdown_to_html` enables the extension and returns an owned string.
+// The enabled extension set renders GitHub-style tables. The golden test compares the rendered
+// table end to end with `tests/expected/site-file-permalink/table.html`. This checks the module
+// boundary: `markdown_to_html` enables the extension and returns an owned string.
 static void test_renders_github_tables(void) {
   const char markdown[] = "| a | b |\n|---|---|\n| 1 | 2 |\n";
   char* html = NULL;
@@ -51,7 +51,7 @@ static void test_passes_through_raw_html(void) {
 
 // Runs of whitespace inside a paragraph collapse to one space, which is
 // `MD_FLAG_COLLAPSEWHITESPACE` and affects the text content of every generated page. No fixture
-// body has a whitespace run, so the golden diff cannot see this flag.
+// body has a whitespace run, so the golden test suite cannot detect this flag.
 static void test_collapses_whitespace_runs(void) {
   const char markdown[] = "a    b   c\n";
   char* html = NULL;

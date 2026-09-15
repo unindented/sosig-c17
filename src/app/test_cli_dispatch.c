@@ -13,6 +13,7 @@
 
 #include "app/cli_dispatch.h"
 #include "app/exit_code.h"
+#include "app/sosig_version.h"
 #include "core/arena.h"
 #include "core/path.h"
 #include "runtime/fs.h"
@@ -159,10 +160,8 @@ static void test_version_action_reports_ok(void) {
   char* argv[] = {(char*)"sosig", (char*)"--version", NULL};
   struct DispatchOutput captured;
   TEST_CHECK(dispatch_capturing(2, argv, &captured) == EXIT_CODE_OK);
-  // Composed rather than concatenated with the macro: `"sosig " SOSIG_VERSION` is a string
-  // concatenation cppcheck cannot parse without the build's `-DSOSIG_VERSION`.
   char expected[64];
-  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", SOSIG_VERSION);
+  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(strcmp(captured.out, expected) == 0);
   TEST_CHECK(captured.err[0] == '\0');

@@ -93,9 +93,9 @@ static void test_append_len_accepts_null_when_empty(void) {
 // `APPEND_COUNT` must stay above `STRING_BUFFER_CAPACITY_MIN` (256, file-local to
 // `src/core/string_buffer.c` and so not reachable from here). Raising that constant means raising
 // this count, or the test stops forcing a growth. The test asserts the exact final capacity rather
-// than a lower bound, as `tests/test_path_list.c` does for the sibling container. Content surviving
-// is true under any growth factor, so without the exact assertion neither the seed nor the doubling
-// is pinned and a buffer that grew one byte at a time would pass.
+// than a lower bound, as `src/core/test_path_list.c` does for the sibling container. Content
+// surviving is true under any growth factor, so without the exact assertion neither the seed nor
+// the doubling is pinned and a buffer that grew one byte at a time would pass.
 static void test_growth_preserves_contents(void) {
   struct StringBuffer buffer;
   string_buffer_init(&buffer);
@@ -154,7 +154,7 @@ static void test_steal_from_never_grown_buffer(void) {
 // the contract in `core/string_buffer.h`. Three things rest on the reset: an append after the free
 // rebuilds from empty rather than reallocating the freed pointer, a second free is not a double
 // free, and the field state is what `string_buffer_init` would have written. The arena carries the
-// same contract and pins it in `tests/test_arena.c`.
+// same contract and pins it in `src/core/test_arena.c`.
 static void test_free_allows_reuse(void) {
   struct StringBuffer buffer;
   string_buffer_init(&buffer);

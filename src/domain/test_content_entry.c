@@ -124,7 +124,8 @@ static void test_sort_handles_empty_and_single(void) {
 }
 
 // The latest date is the newest entry's own `date` pointer, not a copy, and the empty set falls
-// back to the Unix epoch. Neither is reachable from the golden fixtures, which always have entries.
+// back to the Unix epoch. Neither is reachable from the golden test suite, whose fixture sites
+// always have entries.
 // Without this test, `LATEST_DATE_FALLBACK` could change without a failure. An invalid `<updated>`
 // value would then appear in every feed for an empty site. Both expected values came from a run.
 static void test_latest_date_uses_newest_or_epoch(void) {

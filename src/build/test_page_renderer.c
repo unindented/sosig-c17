@@ -251,7 +251,7 @@ static void cleanup_multi_source_fixture(const char* root_dir) {
 // A content template resolves `site.updated` to the newest entry's date, not to nothing. The page
 // pass runs after the build parses and sorts every source, so the value can exist: the date belongs
 // to a different entry than the one being rendered. The end-to-end assertion lives in the golden
-// diff.
+// test suite.
 static void test_renders_site_updated_in_content_template(void) {
   char dir[] = "/tmp/sosig-render-test.XXXXXX";
   const char* tmp = init_render_fixture(dir);

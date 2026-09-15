@@ -4,9 +4,9 @@
 #include "core/arena.h"
 #include "domain/permalink.h"
 
-// Expansion is exercised end-to-end through the renderer and the golden fixtures, where
-// `site-file-permalink` covers the default pattern and `site-index-permalink` covers one ending in
-// `/`. The cases in this file pin the pattern grammar itself, including the shapes
+// Expansion is exercised end-to-end by the golden test suite, whose `site-file-permalink` fixture
+// site covers the default pattern and whose `site-index-permalink` fixture site covers one ending
+// in `/`. The cases in this file pin the pattern grammar itself, including the shapes
 // `site_config_load` relies on when it validates a configured pattern by expanding it over a sample
 // grid.
 
