@@ -10,8 +10,9 @@
 - [src/formats/](src/formats/): Boundaries for HTML, Markdown, and TOML data.
 - [src/runtime/](src/runtime/): Filesystem and thread-pool services that interact with the host.
 - [src/core/](src/core/): Small reusable primitives, containers, diagnostics, text, and path logic.
-- [tests/](tests/): `acutest` unit tests and golden fixture sites. Each directory under [tests/fixtures/](tests/fixtures/) has a matching expected output directory under [tests/expected/](tests/expected/). [tests/fixtures/site-file-permalink/](tests/fixtures/site-file-permalink/) covers Markdown and templates with the default permalink. [tests/fixtures/site-index-permalink/](tests/fixtures/site-index-permalink/) covers a permalink that publishes a directory index for each entry.
-- [scripts/](scripts/): Release packaging. `package-release.sh` builds one supported target in an isolated build directory and archives the binary with its license and user documentation.
+- [tests/](tests/): Golden test suite and the shared unit-test support library ([tests/test_support.h](tests/test_support.h)). Each fixture site under [tests/fixtures/](tests/fixtures/) has a matching expected output directory under [tests/expected/](tests/expected/). [tests/fixtures/site_file_permalink/](tests/fixtures/site_file_permalink/) covers Markdown and templates with the default permalink. [tests/fixtures/site_index_permalink/](tests/fixtures/site_index_permalink/) covers a permalink that publishes a directory index for each entry.
+- [CMakeLists.txt](CMakeLists.txt) and [CMakePresets.json](CMakePresets.json): Project entry point and supported build configurations.
+- [cmake/](cmake/): Build profiles, quality tools, packaging, the golden test driver, and reusable cross toolchains. [BUILD.md](BUILD.md) documents their boundaries and policy.
 - [vendor/](vendor/): Bundled dependencies (`copt`, `tomlc17`, `md4c`, `mustache4c`, `acutest`).
 
 First-party dependencies point inward:

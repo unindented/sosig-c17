@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          matrix='{"include":[{"target":"x86_64-linux-musl","runner":"ubuntu-latest"},{"target":"aarch64-linux-musl","runner":"ubuntu-latest"},{"target":"aarch64-macos","runner":"macos-26"}]}'
+          matrix='{"include":[{"target":"x86_64-linux-musl","runner":"ubuntu-latest","preset":"release-linux-x86_64"},{"target":"aarch64-linux-musl","runner":"ubuntu-latest","preset":"release-linux-aarch64"},{"target":"aarch64-macos","runner":"macos-26","preset":"release"}]}'
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "count=$(printf '%s' "$matrix" | jq '.include | length')" >> "$GITHUB_OUTPUT"
 
@@ -59,12 +59,18 @@ jobs:
             *) tag="v$tag" ;;
           esac
 
-          if ! [[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "version must match vMAJOR.MINOR.PATCH with an optional prerelease suffix" >&2
+          if ! [[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+            echo "version must match vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
 
           git fetch --force --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
+
+          project_version=$(git show "$tag:CMakeLists.txt" | sed -n 's/^ *VERSION \([0-9][0-9.]*\) *$/\1/p')
+          if [ "$project_version" != "${tag#v}" ]; then
+            echo "tag $tag does not match project(VERSION $project_version) in CMakeLists.txt" >&2
+            exit 1
+          fi
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
@@ -103,26 +109,46 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-user
 
+      - name: Install LLVM binutils
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm
+
+      - name: Check native macOS host
+        if: matrix.target == 'aarch64-macos'
+        run: |
+          set -euo pipefail
+          if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+            echo "aarch64-macos packages must be built on an arm64 macOS host" >&2
+            exit 1
+          fi
+
       - name: Build package
         env:
+          PRESET: ${{ matrix.preset }}
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ needs.resolve.outputs.version }}
-        run: scripts/package-release.sh "$TARGET" "$VERSION"
+        run: |
+          set -euo pipefail
+          cmake --preset "$PRESET" -DSOSIG_RELEASE_TARGET="$TARGET"
+          cmake --build --preset "$PRESET"
+          cpack --preset "$PRESET"
 
       - name: Smoke test packaged binary
         shell: bash
         env:
+          PRESET: ${{ matrix.preset }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          archive="dist/release/$VERSION/sosig-$VERSION-$TARGET.tar.gz"
+          archive="build/$PRESET/sosig-$VERSION-$TARGET.tar.gz"
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
           tar -C "$tmp" -xzf "$archive"
-          bin="$tmp/sosig-$VERSION-$TARGET/sosig"
-          # Every fixture site the Makefile golden targets cover, built here by the packaged binary
-          # instead of a locally compiled one.
+          bin="$tmp/sosig-$VERSION-$TARGET/bin/sosig"
+          # Every fixture site in the golden test suite, built by the installed binary rather than
+          # a build-tree binary.
           for fixture in tests/fixtures/*; do
             site=$(basename "$fixture")
             mkdir -p "$tmp/$site"
@@ -141,22 +167,44 @@ jobs:
       - name: Verify archive contents
         shell: bash
         env:
+          PRESET: ${{ matrix.preset }}
           TARGET: ${{ matrix.target }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
           root="sosig-$VERSION-$TARGET"
-          tar -tzf "dist/release/$VERSION/$root.tar.gz" > contents.txt
-          grep -Fx "$root/sosig" contents.txt
-          grep -Fx "$root/README.md" contents.txt
-          grep -Fx "$root/LICENSE.txt" contents.txt
-          grep -Fx "$root/THIRD_PARTY_NOTICES.md" contents.txt
+          archive="build/$PRESET/$root.tar.gz"
+          tar -tzf "$archive" > contents.txt
+          grep -Fx "$root/bin/sosig" contents.txt
+          grep -Fx "$root/share/doc/sosig/README.md" contents.txt
+          grep -Fx "$root/share/doc/sosig/LICENSE.txt" contents.txt
+          grep -Fx "$root/share/doc/sosig/THIRD_PARTY_NOTICES.md" contents.txt
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          tar -C "$tmp" -xzf "$archive" "$root/bin/sosig"
+          case "$TARGET" in
+            aarch64-macos)
+              if nm "$tmp/$root/bin/sosig" |
+                awk 'NF >= 3 && $2 ~ /^[a-z]$/ { found = 1 } END { exit(found ? 0 : 1) }'
+              then
+                echo "packaged Mach-O binary still carries local symbols" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              if file "$tmp/$root/bin/sosig" | grep -q "not stripped"; then
+                echo "packaged ELF binary still carries its symbol table" >&2
+                exit 1
+              fi
+              ;;
+          esac
 
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: dist/release/${{ needs.resolve.outputs.version }}/*.tar.gz
+          path: build/${{ matrix.preset }}/*.tar.gz
           if-no-files-found: error
 
   release:

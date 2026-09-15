@@ -13,10 +13,10 @@
 #include "domain/site_config.h"
 #include "runtime/fs.h"
 
-// This module's three exported writers are exercised end-to-end by the `golden-debug` and
-// `golden-tsan` `Makefile` targets, which build every fixture site and diff each result against its
-// `tests/expected/<site>` tree, so there is no `tests/test_site_writer.c`. Collision checks live in
-// `manifest_builder`, unit-tested in `tests/test_manifest_builder.c`.
+// This module's three exported writers are exercised end-to-end by CTest's golden test suite, which
+// builds every fixture site and compares each result with its `tests/expected/<site>` tree, so
+// there is no `src/build/test_site_writer.c`. Collision checks live in `manifest_builder`,
+// unit-tested in `src/build/test_manifest_builder.c`.
 
 /**
  * @brief Renders one configured template and writes it to its matching output path.
