@@ -11,7 +11,7 @@
 // This result proves that the function dropped the bucket index. Without the reset the stale bucket
 // table is read on the next add, which is a use-after-free. The second free would release every
 // entry string twice. The sibling container with the same contract pins this in
-// `test_free_allows_reuse` in `tests/test_path_list.c`.
+// `test_free_allows_reuse` in `src/core/test_path_list.c`.
 static void test_free_allows_reuse(void) {
   struct Manifest manifest;
   manifest_init(&manifest);
@@ -97,13 +97,13 @@ static void test_grows_and_rehashes(void) {
     TEST_CHECK(manifest_add(&manifest, output_path, source_label, NULL) == MANIFEST_ADD_INSERTED);
   }
   TEST_CHECK(manifest.count == ENTRY_COUNT);
-  // Both arrays doubled to their expected totals, as `tests/test_path_list.c` pins for the sibling
-  // container. Finding the entries still proves neither, since a correct lookup survives any
-  // capacity. The bucket total reveals the load factor. That factor has a correctness role rather
-  // than only a performance one: a table that reaches full load never terminates the linear probes
-  // in `manifest_bucket_place` and `manifest_lookup`, so a factor widened to 100% hangs the suite
-  // rather than failing it. This assertion turns that hang into a failure. It does not separate
-  // every factor below 100%: at this entry count a 1/2 factor also lands on 512.
+  // Both arrays doubled to their expected totals, as `src/core/test_path_list.c` pins for the
+  // sibling container. Finding the entries still proves neither, since a correct lookup survives
+  // any capacity. The bucket total reveals the load factor. That factor has a correctness role
+  // rather than only a performance one: a table that reaches full load never terminates the linear
+  // probes in `manifest_bucket_place` and `manifest_lookup`, so a factor widened to 100% hangs the
+  // suite rather than failing it. This assertion turns that hang into a failure. It does not
+  // separate every factor below 100%: at this entry count a 1/2 factor also lands on 512.
   TEST_CHECK(manifest.capacity == ENTRIES_CAPACITY_MIN_ASSUMED * 16);
   TEST_CHECK(manifest.bucket_count == BUCKETS_CAPACITY_MIN_ASSUMED * 16);
 

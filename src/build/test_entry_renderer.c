@@ -301,7 +301,7 @@ static void test_skips_draft_entry(void) {
 // A verbose pass prints one progress dot per finished job, drafts included, then closes the line.
 // The dots are written from worker threads under `stderr`'s lock, which is the only hand-written
 // locking outside the pool. This drives it with more workers than one so the lock is contended, and
-// `make golden-tsan` runs the same path under ThreadSanitizer.
+// the `tsan` test preset runs the same path under ThreadSanitizer.
 static void test_verbose_prints_one_dot_per_job(void) {
   char dir[] = "/tmp/sosig-render-test.XXXXXX";
   const char* tmp = init_render_fixture(dir);
@@ -965,7 +965,7 @@ static void test_reports_unreadable_source(void) {
 // Two failing sources append one diagnostic line each, separated by exactly one newline, with none
 // leading or trailing the buffer. That separator placement is what the "one per line" contract in
 // `entry_renderer.h` means, and a single-source failure cannot observe it at all. The build-level
-// counterpart is `test_reports_one_line_per_failing_entry` in `tests/test_cmd_build.c`. This one
+// counterpart is `test_reports_one_line_per_failing_entry` in `src/app/test_cmd_build.c`. This one
 // pins it at the module boundary, where the contract is documented.
 static void test_appends_one_error_line_per_failing_source(void) {
   char dir[] = "/tmp/sosig-render-test.XXXXXX";

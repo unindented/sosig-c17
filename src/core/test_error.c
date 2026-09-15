@@ -4,7 +4,7 @@
 #include "core/error.h"
 
 // Only two of `error`'s three exported functions are tested directly here, which reads as a
-// coverage hole and is not one. `record_error` in `test_cli.c` exercises `error_report_va`.
+// coverage hole and is not one. `record_error` in `src/app/test_cli.c` exercises `error_report_va`.
 // `expected_errno_reason` in `test_runtime/fs.c` asserts `error_system_message`'s success branch,
 // but only with `ENOENT`. The `strerror_r`-failed branch is reachable only from an `errno` the
 // system cannot describe, so this file pins it below.
@@ -84,7 +84,7 @@ static void test_report_error_marks_only_when_marker_fits(void) {
 }
 
 // `error_report` accepts a `NULL` buffer with a zero length and writes nothing. That is what call
-// sites that want no message pass. Every `fs_write_file(..., NULL, 0)` fixture write in `tests/`
+// sites that want no message pass. Every `fs_write_file(..., NULL, 0)` unit-test fixture write
 // reaches this on a failure. `vsnprintf` tolerates the pair by contract. What needs pinning is the
 // truncation marker: the `err_len >= sizeof(TRUNCATION_MARKER)` guard is the only thing between an
 // over-long message and a `memcpy` through a null pointer. Nothing here can observe that directly.

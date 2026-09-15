@@ -1,0 +1,7 @@
+/* Generated from `sosig_version.c.in`. Change project(VERSION), not the generated source. */
+
+#include "app/sosig_version.h"
+
+const char* sosig_version_string(void) {
+  return "@PROJECT_VERSION@";
+}

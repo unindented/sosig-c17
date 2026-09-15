@@ -9,13 +9,8 @@
 #define COPT_IMPL
 #include <copt.h>
 
+#include "app/sosig_version.h"
 #include "core/parse.h"
-
-// The build normally injects this from the release tag. The fallback keeps a bare `cc` invocation
-// of this file compiling.
-#ifndef SOSIG_VERSION
-#define SOSIG_VERSION "0.0.0-dev"
-#endif
 
 /**
  * Largest worker count `--workers` accepts.
@@ -245,7 +240,7 @@ void cli_parse(struct CliOptions* options, int argc, char** argv) {
 }
 
 int cli_print_version(FILE* stream) {
-  fprintf(stream, "sosig %s\n", SOSIG_VERSION);
+  fprintf(stream, "sosig %s\n", sosig_version_string());
   return flush_stream(stream);
 }
 

@@ -260,7 +260,7 @@ static void test_populate_manifest_rejects_config_overwrite(void) {
 // rejected. The sibling above claims a content *source*. This claims a *template*. That is the
 // other half of the protection: it guards the files the user writes by hand. Two loops do it, one
 // over the configured template lists and one over each entry's `template` override. Both are
-// covered, since deleting either leaves every other test and the golden diff green.
+// covered, since deleting either leaves every other test, including the golden tests, passing.
 static void test_populate_manifest_rejects_template_overwrite(void) {
   char dir[] = "/tmp/sosig-manifest-builder-template-XXXXXX";
   TEST_ASSERT(mkdtemp(dir) != NULL);
@@ -428,10 +428,9 @@ static void test_populate_manifest_rejects_oversize_template_segment(void) {
 }
 
 // `manifest_builder_populate` is this module's one exported function, tested above. The writing it
-// guards lives in `site_writer`, whose `write_*` functions are exercised end-to-end by the
-// `golden-debug` and `golden-tsan` `Makefile` targets rather than in a unit test. Entry ordering
-// and `site.updated` derivation live in `content_entry` and are tested in
-// `tests/test_content_entry.c`.
+// guards lives in `site_writer`, whose `write_*` functions are exercised end-to-end by the golden
+// test suite rather than in a unit test. Entry ordering and `site.updated` derivation live in
+// `content_entry` and are tested in `src/domain/test_content_entry.c`.
 
 TEST_LIST = {
     {"populate manifest accepts unique", test_populate_manifest_accepts_unique},

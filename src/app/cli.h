@@ -77,7 +77,7 @@ struct CliOptions {
 void cli_parse(struct CliOptions* options, int argc, char** argv) __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Writes the `sosig <version>` line to `stream`, where the version is `SOSIG_VERSION`.
+ * @brief Writes the `sosig <version>` line to `stream`.
  *
  * @param stream Destination stream. Must not be `NULL`.
  * @return `0` on success, or `-1` if writing to `stream` failed, with `errno` set by the failing

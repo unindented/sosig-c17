@@ -89,8 +89,8 @@ static void cleanup_template_fixture(const char* root_dir) {
 
 // `{{title}}` is escaped and `{{{body}}}` is not in the same render, so escaping is chosen per tag
 // rather than per template. This renders the real `templates/content.html`, whose output, including
-// the feed `<link rel="alternate">`, is diffed end to end by the golden files in
-// `tests/expected/site-file-permalink`.
+// the feed `<link rel="alternate">`, is compared end to end with the expected output in
+// `tests/expected/site-file-permalink` by the golden test.
 static void test_renders_escaped_title_and_raw_body(void) {
   struct SiteConfig site_config;
   init_test_site_config(&site_config);
@@ -380,7 +380,8 @@ static void test_repeated_partial_stays_under_distinct_limit(void) {
 
 // The feed template renders through the same name-based entry point as an HTML page. A body that
 // already holds HTML is escaped again for XML. This renders the real `templates/atom.xml`, so the
-// end-to-end assertion lives in the `tests/expected/site-file-permalink/atom.xml` diff.
+// golden test compares its output end to end with
+// `tests/expected/site-file-permalink/atom.xml`.
 static void test_renders_atom_feed(void) {
   struct SiteConfig site_config;
   init_test_site_config(&site_config);
@@ -876,7 +877,7 @@ static void test_rejects_mutual_partial_cycle(void) {
 // An oversize render is rejected once the accumulated output passes the configured byte bound.
 //
 // `template.c` enforces `RENDER_OUTPUT_LEN_MAX`, which this binary overrides down to
-// `SOSIG_RENDER_OUTPUT_LEN_MAX` (see the `Makefile`). Reaching a byte-count limit means
+// `SOSIG_RENDER_OUTPUT_LEN_MAX` (see `src/build/CMakeLists.txt`). Reaching a byte-count limit means
 // accumulating that many bytes. The production bound is sized for the largest real site, so
 // asserting it at that value would cost most of a gigabyte of peak RSS for one diagnostic.
 static void test_rejects_oversize_render_output(void) {

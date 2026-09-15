@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "app/cli.h"
+#include "app/sosig_version.h"
 
 // Parses a `NULL`-terminated `argv` array, returning the resolved options by value.
 static struct CliOptions parse(char** argv) {
@@ -394,9 +395,9 @@ static void test_extra_positional_argument(void) {
   TEST_CHECK(strcmp(options.error_message, "unexpected argument 'extra'") == 0);
 }
 
-// The injected `SOSIG_VERSION` macro is defined and non-empty.
-static void test_version_macro_present(void) {
-  TEST_CHECK(sizeof(SOSIG_VERSION) > 1);
+// The generated version accessor returns a non-empty version.
+static void test_version_accessor_present(void) {
+  TEST_CHECK(sosig_version_string()[0] != '\0');
 }
 
 // `cli_print_version` writes exactly one `sosig <version>` line and nothing else.
@@ -413,7 +414,7 @@ static void test_print_version_writes_version_line(void) {
   TEST_ASSERT(rc == 0);
 
   char expected[64];
-  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", SOSIG_VERSION);
+  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(strcmp(buf, expected) == 0);
   TEST_CHECK(len == strlen(expected));
@@ -561,7 +562,7 @@ TEST_LIST = {
     {"unknown long option", test_unknown_long_option},
     {"unknown command", test_unknown_command},
     {"extra positional argument", test_extra_positional_argument},
-    {"version macro present", test_version_macro_present},
+    {"version accessor present", test_version_accessor_present},
     {"print version writes version line", test_print_version_writes_version_line},
     {"print version reports write failure", test_print_version_reports_write_failure},
     {"print version reports flush failure errno", test_print_version_reports_flush_failure_errno},

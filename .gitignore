@@ -1,4 +1,2 @@
 /build/
-/dist/
-/sosig
-/sosig-tsan
+/CMakeUserPresets.json
