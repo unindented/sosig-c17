@@ -313,6 +313,23 @@ Workflow presets run the complete configure, build, and test sequences used by C
 - `cmake --workflow --preset ci-release`: `Release` build.
 - `cmake --workflow --preset ci-multi`: `Debug` and `RelWithDebInfo` builds and tests under the `Ninja Multi-Config` generator.
 
+To run the same Linux workflows from a machine with Podman, build the pinned Ubuntu image:
+
+```sh
+podman build --tag sosig-linux-ci --file Containerfile .
+```
+
+The image contains a snapshot of the source tree, so container builds do not mix Linux products with the host's `build/` directory. Run each workflow preset in a fresh container:
+
+```sh
+podman run --rm sosig-linux-ci ci-debug
+podman run --rm sosig-linux-ci ci-tsan
+podman run --rm sosig-linux-ci ci-release
+podman run --rm sosig-linux-ci ci-multi
+```
+
+The image supports x86-64 and AArch64 hosts and pins LLVM 22. Zig remains a release-only dependency and is not included in the CI image.
+
 See [BUILD.md](BUILD.md) for the target graph and the reasons behind these configurations.
 
 ### Packaging
