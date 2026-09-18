@@ -8,7 +8,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET
 
 project(
   sosig
-  VERSION 0.1.0
+  VERSION 0.1.1
   DESCRIPTION "A small static site generator written in C17"
   HOMEPAGE_URL "https://github.com/unindented/sosig-c17"
   LANGUAGES C
