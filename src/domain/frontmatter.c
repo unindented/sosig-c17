@@ -6,12 +6,12 @@
 #include <string.h>
 #include <tomlc17.h>
 
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/text.h"
 #include "domain/content_entry.h"
 #include "formats/toml.h"
+#include "shared/arena.h"
 
 /** UTF-8 byte order mark, tolerated as an optional prefix before the opening frontmatter fence. */
 static const char UTF8_BOM[] = "\xEF\xBB\xBF";

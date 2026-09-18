@@ -4,8 +4,8 @@
 #include <string.h>
 #include <tomlc17.h>
 
-#include "core/arena.h"
 #include "formats/toml.h"
+#include "shared/arena.h"
 
 /**
  * @brief Parses a one-value TOML document.

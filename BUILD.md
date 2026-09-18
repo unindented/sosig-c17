@@ -23,7 +23,7 @@ The top-level CMake file controls the build. It sets project policy and finds th
 
 ## Target graph
 
-`sosig_app` is a private static library. It contains all first-party source files except `main.c`. The `sosig` executable links to this library. Unit tests link to the same library.
+`sosig_app` is a private static library. It contains all application source files except `main.c`. The `sosig` executable and unit tests link to it. `sosig_app` links to `sosig_vendor_sharedstuff` for the arena and string buffer implementations.
 
 The library is static because it supports one product. It does not provide a public ABI.
 

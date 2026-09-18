@@ -1,4 +1,4 @@
-#include "core/arena.h"
+#include "shared/arena.h"
 
 #include <stdalign.h>
 #include <stdbool.h>

@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 #include "core/error.h"
-#include "core/string_buffer.h"
+#include "shared/string_buffer.h"
 
 _Static_assert((size_t)MARKDOWN_INPUT_LEN_MAX <= (size_t)((MD_SIZE)-1),
                "the product cap must stay inside md4c's addressable input range");

@@ -90,13 +90,11 @@ The phase order follows the data dependencies. A content template can read `site
 ### Core (`src/core`)
 
 - [ascii](src/core/ascii.h): Locale-independent ASCII byte classification.
-- [arena](src/core/arena.h): Bump allocator and primary ownership tool.
 - [error](src/core/error.h): Uniform diagnostic reporting for fallible actions.
 - [grow](src/core/grow.h): Doubling-capacity arithmetic shared by the growable containers.
 - [parse](src/core/parse.h): Parsing of terminated text into scalar values.
 - [path](src/core/path.h): Path construction and validation.
 - [path_list](src/core/path_list.h): Growable list of path strings.
-- [string_buffer](src/core/string_buffer.h): Growable string buffer for accumulating output.
 - [text](src/core/text.h): Text normalization and validation.
 
 ## Cross-cutting conventions

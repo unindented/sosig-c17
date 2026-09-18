@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "core/arena.h"
+#include "shared/arena.h"
 
 /**
  * @brief Expands a permalink pattern, writing into `url_out` when given and returning the length.

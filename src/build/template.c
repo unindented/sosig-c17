@@ -7,16 +7,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
-#include "core/string_buffer.h"
 #include "core/text.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "formats/html.h"
 #include "mustache.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
+#include "shared/string_buffer.h"
 
 // Bounds on one template render. There are three independent failure modes, so three limits, each
 // enforced at the one place that can observe it. Each limit names the resource it protects. All

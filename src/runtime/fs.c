@@ -10,11 +10,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "core/text.h"
+#include "shared/arena.h"
 
 /**
  * One directory on the active recursion path, identified by device and inode so a symlinked

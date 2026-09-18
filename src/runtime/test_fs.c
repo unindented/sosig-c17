@@ -9,10 +9,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "core/arena.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 #include "test_support.h"
 
 /**

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "core/arena.h"
+#include "shared/arena.h"
 
 /**
  * Size in bytes of a `YYYY-MM-DDT00:00:00Z` date-only timestamp. A well-formed date needs 21 bytes

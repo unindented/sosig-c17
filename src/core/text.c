@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "core/ascii.h"
+#include "shared/arena.h"
 
 /** Slug used when the source text yields no alphanumeric characters. */
 static const char SLUG_FALLBACK[] = "untitled";

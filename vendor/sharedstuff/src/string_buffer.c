@@ -1,4 +1,4 @@
-#include "core/string_buffer.h"
+#include "shared/string_buffer.h"
 
 #include <stdint.h>
 #include <stdlib.h>

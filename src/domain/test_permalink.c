@@ -1,8 +1,8 @@
 #include <acutest.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "domain/permalink.h"
+#include "shared/arena.h"
 
 // Expansion is exercised end-to-end by the golden test suite, whose `site_file_permalink` fixture
 // site covers the default pattern and whose `site_index_permalink` fixture site covers one ending

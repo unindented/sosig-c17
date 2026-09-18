@@ -17,6 +17,7 @@ add_subdirectory(runtime)
 target_link_libraries(
   sosig_app
   PUBLIC sosig_vendor_tomlc17
+         sosig_vendor_sharedstuff
   PRIVATE sosig_build_project
           sosig_vendor_copt
           sosig_vendor_md4c

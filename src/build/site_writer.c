@@ -6,12 +6,12 @@
 
 #include "build/render_job.h"
 #include "build/template.h"
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 
 // This module's three exported writers are exercised end-to-end by CTest's golden test suite, which
 // builds every fixture site and compares each result with its `tests/expected/<site>` tree, so

@@ -21,9 +21,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "core/arena.h"
 #include "core/path.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 
 const char* init_fixture_dir(char root_dir[static 1]) {
   char* created_root_dir = mkdtemp(root_dir);

@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "build/render_job.h"
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -17,6 +16,7 @@
 #include "domain/site_config.h"
 #include "formats/markdown.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 
 /**
  * Slugified `/`-separated path segments and their lengths, sized and filled in one pass.

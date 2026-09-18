@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "core/text.h"
+#include "shared/arena.h"
 
 /**
  * @brief Slugifies a whole terminated string.

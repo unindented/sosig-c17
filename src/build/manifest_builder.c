@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/grow.h"
 #include "core/path.h"
@@ -14,6 +13,7 @@
 #include "domain/manifest.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 
 /** Slots allocated when the input identity set first grows. */
 enum { INPUT_IDENTITIES_CAPACITY_MIN = 16 };

@@ -14,14 +14,14 @@
 #include "build/entry_renderer.h"
 #include "build/page_renderer.h"
 #include "build/render_job.h"
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
-#include "core/string_buffer.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
+#include "shared/string_buffer.h"
 #include "test_support.h"
 
 /**

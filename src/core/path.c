@@ -3,8 +3,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "core/ascii.h"
+#include "shared/arena.h"
 
 /**
  * @brief Returns the longest `/`-delimited segment in a path, and its length.

@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#include "core/arena.h"
+#include "shared/arena.h"
 
 /**
  * Path every command loads its site configuration from, relative to the working directory.

@@ -17,10 +17,10 @@
 #include "app/cli_dispatch.h"
 #include "app/exit_code.h"
 #include "app/sosig_version.h"
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 #include "test_support.h"
 
 /**

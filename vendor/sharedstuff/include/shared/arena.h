@@ -1,5 +1,5 @@
-#ifndef SOSIG_ARENA_H
-#define SOSIG_ARENA_H
+#ifndef SHARED_ARENA_H
+#define SHARED_ARENA_H
 
 #include <stddef.h>
 

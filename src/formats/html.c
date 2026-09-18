@@ -1,6 +1,6 @@
 #include "formats/html.h"
 
-#include "core/string_buffer.h"
+#include "shared/string_buffer.h"
 
 /**
  * @brief Returns the character reference that escapes `c`, or `NULL` when `c` needs no escaping.

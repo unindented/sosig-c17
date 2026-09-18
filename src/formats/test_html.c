@@ -1,8 +1,8 @@
 #include <acutest.h>
 #include <string.h>
 
-#include "core/string_buffer.h"
 #include "formats/html.h"
+#include "shared/string_buffer.h"
 
 // HTML escaping replaces the five special characters `&`, `<`, `>`, `"` and `'`.
 static void test_html_escape_replaces_special_chars(void) {

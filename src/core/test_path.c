@@ -1,8 +1,8 @@
 #include <acutest.h>
 #include <string.h>
 
-#include "core/arena.h"
 #include "core/path.h"
+#include "shared/arena.h"
 
 // `path_check_output_limits` is the single place both output-path limits are applied. Two producers
 // depend on it, so it is tested here rather than only through them. The function checks both limits

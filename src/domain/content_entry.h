@@ -5,8 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/arena.h"
 #include "core/path.h"
+#include "shared/arena.h"
 
 /**
  * Upper bound on a slug, excluding the terminator. This bound is sized so that `<slug>.html`, the

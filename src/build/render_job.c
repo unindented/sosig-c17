@@ -14,8 +14,8 @@
 #include <string.h>
 
 #include "core/error.h"
-#include "core/string_buffer.h"
 #include "runtime/pool.h"
+#include "shared/string_buffer.h"
 
 /**
  * @brief Appends one buffered worker diagnostic to the growable render error buffer.

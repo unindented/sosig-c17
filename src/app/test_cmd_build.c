@@ -14,12 +14,12 @@
 
 #include "app/cmd_build.h"
 #include "app/exit_code.h"
-#include "core/arena.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
-#include "core/string_buffer.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
+#include "shared/string_buffer.h"
 #include "test_support.h"
 
 /**

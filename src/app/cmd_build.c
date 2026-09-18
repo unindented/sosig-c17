@@ -13,12 +13,12 @@
 #include "build/site_writer.h"
 #include "core/error.h"
 #include "core/path_list.h"
-#include "core/string_buffer.h"
 #include "domain/content_entry.h"
 #include "domain/manifest.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
 #include "runtime/pool.h"
+#include "shared/string_buffer.h"
 
 /** Mutable state owned by one `cmd_build_execute` invocation. */
 struct BuildState {

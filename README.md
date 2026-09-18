@@ -199,6 +199,7 @@ A partial reference loads `templates_dir/partials/<name>.html`. The name can con
 
 Vendored dependencies are included under `vendor/`:
 
+- [`sharedstuff`](https://github.com/unindented/sharedstuff-c17): Arena allocation and string buffers.
 - [`copt`](https://github.com/fardaniqbal/copt): Command line option parsing.
 - [`tomlc17`](https://github.com/cktan/tomlc17): TOML frontmatter parsing.
 - [`md4c`](https://github.com/mity/md4c): Markdown-to-HTML conversion.
@@ -319,7 +320,7 @@ To run the same Linux workflows from a machine with Podman, build the pinned Ubu
 podman build --tag sosig-linux-ci --file Containerfile .
 ```
 
-The image contains a snapshot of the source tree, so container builds do not mix Linux products with the host's `build/` directory. Run each workflow preset in a fresh container:
+Docker accepts the same command with `docker` in place of `podman`. The image contains a snapshot of the source tree, including vendored dependencies, so container builds do not mix Linux products with the host's `build/` directory. Run each workflow preset in a fresh container:
 
 ```sh
 podman run --rm sosig-linux-ci ci-debug

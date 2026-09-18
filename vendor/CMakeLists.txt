@@ -20,6 +20,15 @@ target_include_directories(
   sosig_vendor_mustache SYSTEM PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/mustache4c>"
 )
 
+add_library(
+  sosig_vendor_sharedstuff STATIC sharedstuff/src/arena.c sharedstuff/src/string_buffer.c
+)
+target_include_directories(
+  sosig_vendor_sharedstuff SYSTEM
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/sharedstuff/include>"
+)
+target_link_libraries(sosig_vendor_sharedstuff PRIVATE sosig_build_project)
+
 add_library(sosig_vendor_tomlc17 STATIC tomlc17/tomlc17.c)
 target_include_directories(
   sosig_vendor_tomlc17 SYSTEM PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/tomlc17>"
