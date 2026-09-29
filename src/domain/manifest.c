@@ -96,7 +96,7 @@ static int manifest_reserve_buckets(struct Manifest* manifest) __attribute__((no
  *
  * Requires the table to hold at least one empty bucket, which the load factor in
  * `manifest_reserve_buckets` guarantees. A table with none is a broken invariant. This stops the
- * process rather than probing forever.
+ * process rather than leave the entry unindexed.
  *
  * @param buckets     Bucket table to insert into. Must not be `NULL`.
  * @param bucket_mask Power-of-two table length minus one, used to wrap the linear probe.
@@ -266,10 +266,10 @@ static int manifest_reserve_buckets(struct Manifest* manifest) {
   }
   const size_t count_next = manifest->count + 1;
   // Keep the table below a 3/4 load factor. Short probe chains are the performance reason. The
-  // correctness reason is that a table never full leaves at least one empty bucket, which alone
-  // terminates the unbounded probe loops in `manifest_bucket_place` and `manifest_lookup`. Both
-  // would spin forever on a full table. This is written as `/ 4 * 3` rather than `* 3 / 4` so a
-  // large `bucket_count` cannot wrap the multiply.
+  // correctness reason is that a table never full leaves at least one empty bucket.
+  // `manifest_bucket_place` needs one to index a new entry, and aborts without it, and a
+  // `manifest_lookup_bytes` miss otherwise scans every bucket before its bound stops it. This is
+  // written as `/ 4 * 3` rather than `* 3 / 4` so a large `bucket_count` cannot wrap the multiply.
   if (manifest->bucket_count != 0 && count_next <= (manifest->bucket_count / 4) * 3) {
     return 0;
   }
@@ -306,12 +306,13 @@ static void manifest_bucket_place(size_t* buckets,
                                   const char* output_path,
                                   size_t index) {
   size_t slot = (size_t)(manifest_hash(output_path) & bucket_mask);
-  // This is bounded like `manifest_lookup`'s probe, for the same reason. Reaching the bound means
-  // the table holds no empty bucket, which `manifest_reserve_buckets` must have ruled out before
-  // this runs. There is no recovery to return. The caller has already stored the entry and bumped
-  // `count`, so a failure here would leave a recorded entry that no bucket points at. An unindexed
-  // entry is an output path whose next claimant `manifest_add` never reports as a duplicate. A
-  // broken invariant would therefore hide a duplicate output path, so the process stops instead.
+  // This is bounded like `manifest_lookup_bytes`'s probe, for the same reason. Reaching the bound
+  // means the table holds no empty bucket, which `manifest_reserve_buckets` must have ruled out
+  // before this runs. There is no recovery to return. The caller has already stored the entry and
+  // bumped `count`, so a failure here would leave a recorded entry that no bucket points at. An
+  // unindexed entry is an output path whose next claimant `manifest_add` never reports as a
+  // duplicate. A broken invariant would therefore hide a duplicate output path, so the process
+  // stops instead.
   for (size_t probe = 0; probe <= bucket_mask; probe++) {
     if (buckets[slot] == 0) {
       buckets[slot] = index + 1;

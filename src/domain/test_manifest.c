@@ -102,10 +102,11 @@ static void test_grows_and_rehashes(void) {
   // Both arrays doubled to their expected totals, as `src/core/test_path_list.c` pins for the
   // sibling container. Finding the entries still proves neither, since a correct lookup survives
   // any capacity. The bucket total reveals the load factor. That factor has a correctness role
-  // rather than only a performance one: a table that reaches full load never terminates the linear
-  // probes in `manifest_bucket_place` and `manifest_lookup`, so a factor widened to 100% hangs the
-  // suite rather than failing it. This assertion turns that hang into a failure. It does not
-  // separate every factor below 100%: at this entry count a 1/2 factor also lands on 512.
+  // rather than only a performance one: `manifest_bucket_place` needs an empty bucket to index a
+  // new entry and aborts without one, so a factor widened to 100% would pass every lookup here and
+  // still leave the table one insert from stopping the process. This assertion catches that
+  // widening. It does not separate every factor below 100%: at this entry count a 1/2 factor also
+  // lands on 512.
   TEST_CHECK(manifest.capacity == ENTRIES_CAPACITY_MIN_ASSUMED * 16);
   TEST_CHECK(manifest.bucket_count == BUCKETS_CAPACITY_MIN_ASSUMED * 16);
 
