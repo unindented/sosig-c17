@@ -31,8 +31,10 @@ struct SiteConfig;
  * `output_dir` naming the same directory as `content_dir`, so a text comparison is neither
  * sufficient on its own nor useful as a first check. Comparing `(device, inode)` covers both, and
  * also rejects a collision created by a symlink, a hard link, or a case-insensitive filesystem.
- * This does not cover partials, because `template_render_file` resolves them lazily from names
- * found inside template bytes. No pass before the first write can enumerate them.
+ * Every file below `templates_dir` is claimed, not only the configured templates, so partials are
+ * covered even though `template_render_file` resolves them lazily from names inside template
+ * bytes. A missing `templates_dir` claims nothing, because it holds no file to overwrite. The
+ * render then reports the template it could not read.
  *
  * @param manifest            Manifest that receives the output paths. Must not be `NULL`.
  * @param site_config         Configuration supplying `output_dir`, `templates_dir` and the template
@@ -48,7 +50,8 @@ struct SiteConfig;
  * @param err                 Destination buffer for a failure diagnostic.
  * @param err_len             Size of `err` in bytes.
  * @return `0` when every output path is unique, overwrites no input, and nests under no other, or
- *         `-1` on a duplicate, a prefix collision, an input overwrite, or an allocation failure.
+ *         `-1` on a duplicate, a prefix collision, an input overwrite, an oversize template path,
+ *         a failed template walk, or an allocation failure.
  */
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,

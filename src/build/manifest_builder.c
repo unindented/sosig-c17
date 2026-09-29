@@ -70,45 +70,60 @@ struct InputIdentities {
 /**
  * @brief Records the identity of every file this build reads.
  *
- * Claims the configuration file, each discovered content source, and every directly named template.
- * This includes the content template, aggregate and feed templates, and entry overrides. It claims
- * drafts too. A draft's source file is ordinary user content and just as overwritable as a
- * published one.
+ * Claims the configuration file, each discovered content source, and every file below
+ * `templates_dir`. It claims drafts too. A draft's source file is ordinary user content and just as
+ * overwritable as a published one.
  *
  * This claims the configuration file for the same reason as the rest. It is a file this build
  * reads, and `output_dir = "."` with a template named after it is enough to aim an output path at
  * it. If unclaimed, that output would overwrite the project's configuration. The build would still
  * report success.
  *
- * This skips a path with no identity rather than refusing it. A configured template that does not
- * exist cannot be overwritten. The render reports its absence with a template-specific diagnostic.
+ * The whole template tree is claimed rather than the configured template names, because partials
+ * are inputs too. `template.c` resolves them lazily during the render, from names that only appear
+ * inside a template's bytes, so no pass that runs before the first write can enumerate the partials
+ * a build will read. Claiming every file below `templates_dir` covers them without that list, so an
+ * output path aimed inside `templates_dir/partials/` is rejected. It also covers every configured
+ * template, the content template, aggregate and feed templates, and entry overrides alike, because
+ * each is a safe relative name joined below `templates_dir`.
  *
- * Partials are the one input class not claimed here. `template.c` resolves them lazily during the
- * render, from names that only appear inside a template's bytes, so no pass that runs before the
- * first write can enumerate them. An output path aimed inside `templates_dir/partials/` is
- * therefore still able to overwrite a partial.
+ * This skips a path with no identity rather than refusing it. A missing configuration file or
+ * source cannot be overwritten, and neither can a missing `templates_dir`, which claims nothing.
+ * The render reports a missing template with a template-specific diagnostic, so failing here would
+ * only report the same absence earlier and with less context.
  *
- * @param inputs              Identity set that receives one entry per readable input file. Must not
- *                            be `NULL`.
- * @param site_config         Configuration supplying `templates_dir` and the template lists. Must
- *                            not be `NULL`.
- * @param config_path         Path the configuration was loaded from. Must not be `NULL`.
- * @param source_paths        Every discovered content source path, drafts included. Must not be
- *                            `NULL`.
- * @param content_entries     Non-draft entries whose `template` overrides are claimed. May be
- *                            `NULL` only when `content_entry_count` is 0.
- * @param content_entry_count Number of entries in `content_entries`.
- * @param scratch             Arena that owns the joined template paths during the scan. Must not be
- *                            `NULL`.
- * @return `0` when every readable input was claimed, or `-1` on allocation failure.
+ * @param inputs       Identity set that receives one entry per readable input file. Must not be
+ *                     `NULL`.
+ * @param site_config  Configuration supplying `templates_dir`. Must not be `NULL`.
+ * @param config_path  Path the configuration was loaded from. Must not be `NULL`.
+ * @param source_paths Every discovered content source path, drafts included. Must not be `NULL`.
+ * @param err          Destination buffer for a failure diagnostic.
+ * @param err_len      Size of `err` in bytes.
+ * @return `0` when every readable input was claimed, or `-1` when the template tree cannot be
+ *         walked or on allocation failure.
  */
 static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct SiteConfig* site_config,
                               const char* config_path,
                               const struct PathList* source_paths,
-                              const struct ContentEntry* const* content_entries,
-                              size_t content_entry_count,
-                              struct Arena* scratch) __attribute__((nonnull(1, 2, 3, 4, 7)));
+                              char* err,
+                              size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
+
+/**
+ * @brief Claims the identity of every file below `templates_dir`, partials included.
+ *
+ * @param inputs        Identity set to append to. Must not be `NULL`.
+ * @param templates_dir Template directory root to walk. A path with no identity claims nothing.
+ *                      Must not be `NULL`.
+ * @param err           Destination buffer for a failure diagnostic.
+ * @param err_len       Size of `err` in bytes.
+ * @return `0` when every file in the tree was claimed or `templates_dir` has no identity, or `-1`
+ *         when the walk fails or on allocation failure.
+ */
+static int claim_build_inputs_template_tree(struct InputIdentities* inputs,
+                                            const char* templates_dir,
+                                            char* err,
+                                            size_t err_len) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Claims one path's identity, ignoring a path that has none.
@@ -201,11 +216,7 @@ int manifest_builder_populate(struct Manifest* manifest,
   arena_init(&scratch);
   struct InputIdentities inputs = {0};
 
-  int rc = 0;
-  if (claim_build_inputs(&inputs, site_config, config_path, source_paths, content_entries,
-                         content_entry_count, &scratch) != 0) {
-    rc = error_report(err, err_len, "out of memory recording build input files");
-  }
+  int rc = claim_build_inputs(&inputs, site_config, config_path, source_paths, err, err_len);
 
   for (size_t i = 0; rc == 0 && i < content_entry_count; i++) {
     const struct ContentEntry* entry = content_entries[i];
@@ -248,54 +259,50 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct SiteConfig* site_config,
                               const char* config_path,
                               const struct PathList* source_paths,
-                              const struct ContentEntry* const* content_entries,
-                              size_t content_entry_count,
-                              struct Arena* scratch) {
+                              char* err,
+                              size_t err_len) {
   if (claim_input_identity(inputs, config_path) != 0) {
-    return -1;
+    return error_report(err, err_len, "out of memory recording build input files");
   }
-
   for (size_t i = 0; i < source_paths->count; i++) {
     if (claim_input_identity(inputs, source_paths->items[i]) != 0) {
-      return -1;
+      return error_report(err, err_len, "out of memory recording build input files");
     }
+  }
+  return claim_build_inputs_template_tree(inputs, site_config->templates_dir, err, err_len);
+}
+
+static int claim_build_inputs_template_tree(struct InputIdentities* inputs,
+                                            const char* templates_dir,
+                                            char* err,
+                                            size_t err_len) {
+  // A `templates_dir` with no identity holds no file to overwrite, so there is nothing to claim.
+  // This is the same skip `claim_input_identity` applies to a single missing path. The walk below
+  // would otherwise fail on it, and report a missing template directory ahead of the render's
+  // diagnostic naming the template it needed. An existing root that cannot be walked still fails,
+  // because a partial the walk could not see would stay overwritable.
+  struct FsIdentity templates_dir_identity;
+  if (fs_identify(templates_dir, &templates_dir_identity) != 0) {
+    return 0;
   }
 
-  // Every template name is relative to `templates_dir`, so the code joins each the same way
-  // `write_rendered_template` will join it when it reads the file. A join that runs out of memory
-  // is an allocation failure like any other. A name too long to join is not reachable here, because
-  // `register_template_output` checks the configured names against the output-path limits.
-  const char* const* template_lists[] = {
-      &site_config->content_template,
-      site_config->aggregate_templates,
-      site_config->feed_templates,
-  };
-  const size_t template_counts[] = {
-      1,
-      site_config->aggregate_template_count,
-      site_config->feed_template_count,
-  };
-  for (size_t list = 0; list < sizeof(template_lists) / sizeof(template_lists[0]); list++) {
-    for (size_t i = 0; i < template_counts[list]; i++) {
-      const char* template_path =
-          path_join(site_config->templates_dir, template_lists[list][i], scratch);
-      if (template_path == NULL || claim_input_identity(inputs, template_path) != 0) {
-        return -1;
-      }
+  struct PathList template_paths;
+  path_list_init(&template_paths);
+  int rc = 0;
+  // An empty suffix matches every filename, so the walk lists the whole tree.
+  char reason[FS_REASON_SIZE];
+  if (fs_list_files_with_suffix(&template_paths, templates_dir, "", reason, sizeof(reason)) != 0) {
+    // The reason names the directory or entry that failed, which is more precise than the
+    // configured root, so the root is not repeated here.
+    rc = error_report(err, err_len, "failed to list template files: %s", reason);
+  }
+  for (size_t i = 0; rc == 0 && i < template_paths.count; i++) {
+    if (claim_input_identity(inputs, template_paths.items[i]) != 0) {
+      rc = error_report(err, err_len, "out of memory recording build input files");
     }
   }
-
-  for (size_t i = 0; i < content_entry_count; i++) {
-    if (content_entries[i]->template == NULL) {
-      continue;
-    }
-    const char* override_path =
-        path_join(site_config->templates_dir, content_entries[i]->template, scratch);
-    if (override_path == NULL || claim_input_identity(inputs, override_path) != 0) {
-      return -1;
-    }
-  }
-  return 0;
+  path_list_free(&template_paths);
+  return rc;
 }
 
 static int claim_input_identity(struct InputIdentities* inputs, const char* file_path) {
@@ -377,9 +384,9 @@ static int register_output_path(struct Manifest* manifest,
                                 size_t err_len) {
   // This is checked before the manifest, because it is the failure that destroys work rather than
   // merely abandoning it. An output path that names one of this build's own input files would
-  // overwrite it with rendered output, losing a content source or a template. Nothing later in the
-  // build would notice or report it. `fs_identify` failing means the path names nothing yet, which
-  // is the ordinary case for an output about to be created.
+  // overwrite it with rendered output, losing a content source, a template, or a partial. Nothing
+  // later in the build would notice or report it. `fs_identify` failing means the path names
+  // nothing yet, which is the ordinary case for an output about to be created.
   struct FsIdentity identity;
   if (fs_identify(output_path, &identity) == 0 && has_input_identity(inputs, &identity)) {
     // The producer is the actionable part and the path trails it, matching the duplicate message

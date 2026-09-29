@@ -2,6 +2,7 @@
 #define _DEFAULT_SOURCE
 
 #include <acutest.h>
+#include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -17,6 +18,8 @@
 #include "domain/manifest.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
+#include "test_support.h"
 
 // Distinct output paths are all registered without error.
 static void test_populate_manifest_accepts_unique(void) {
@@ -42,6 +45,48 @@ static void test_populate_manifest_accepts_unique(void) {
   manifest_free(&manifest);
   path_list_free(&sources);
   site_config_free(&config);
+}
+
+// A `templates_dir` that does not exist holds no file an output could overwrite, so it claims
+// nothing and the manifest still populates. The build reports the missing template later, from the
+// render that needed it, as `test_reports_bad_template` in `src/app/test_cmd_build.c` pins.
+static void test_populate_manifest_accepts_missing_templates_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-missing-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct Arena arena;
+  arena_init(&arena);
+  char* templates_dir = path_join(root_dir, "templates", &arena);
+  TEST_ASSERT(templates_dir != NULL);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.output_dir = "public";
+  config.templates_dir = templates_dir;
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+
+  struct ContentEntry entry = {.output_path = "public/a.html", .source_path = "content/a.md"};
+  const struct ContentEntry* entries[] = {&entry};
+
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, entries, 1, err,
+                                       sizeof(err)) == 0);
+  TEST_CHECK(err[0] == '\0');
+  TEST_CHECK(manifest.count == 1);
+
+  manifest_free(&manifest);
+  path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // Two entries claiming the same output path are rejected with a diagnostic naming the path.
@@ -298,11 +343,13 @@ static void test_populate_manifest_rejects_config_overwrite(void) {
   rmdir(root_dir);
 }
 
-// A configured template file is a build input too, so an entry whose output path names one is
-// rejected. The sibling above claims a content *source*. This claims a *template*. That is the
-// other half of the protection: it guards the files the user writes by hand. Two loops do it, one
-// over the configured template lists and one over each entry's `template` override. Both are
-// covered, since deleting either leaves every other test, including the golden tests, passing.
+// Every file below `templates_dir` is a build input too, so an entry whose output path names one
+// is rejected. The sibling above claims a content *source*. This claims a *template*. That is the
+// other half of the protection: it guards the files the user writes by hand. The claim comes from a
+// walk of the whole template tree, so it covers a template named in a configured list, one named
+// only by an entry's `template` override, and a partial that nothing configures at all, which
+// `template.c` resolves only during the render. Each is a separate case, since a claim built from
+// the configured names instead would pass the first two and miss the third.
 static void test_populate_manifest_rejects_template_overwrite(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-template-XXXXXX";
   char* root_dir = mkdtemp(root_dir_template);
@@ -315,6 +362,7 @@ static void test_populate_manifest_rejects_template_overwrite(void) {
   char output_dir[PATH_MAX];
   char aggregate_path[PATH_MAX];
   char override_path[PATH_MAX];
+  char partial_path[PATH_MAX];
   int n = snprintf(templates_dir, sizeof(templates_dir), "%s/templates", root_dir);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(templates_dir));
   n = snprintf(output_dir, sizeof(output_dir), "%s/public", root_dir);
@@ -323,8 +371,11 @@ static void test_populate_manifest_rejects_template_overwrite(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(aggregate_path));
   n = snprintf(override_path, sizeof(override_path), "%s/templates/custom.html", root_dir);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(override_path));
+  n = snprintf(partial_path, sizeof(partial_path), "%s/templates/partials/card.html", root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(partial_path));
   TEST_CHECK(fs_write_file(aggregate_path, "{{title}}", 9, NULL, 0) == 0);
   TEST_CHECK(fs_write_file(override_path, "{{title}}", 9, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(partial_path, "{{title}}", 9, NULL, 0) == 0);
 
   // Second spellings of the two template files. `stat` collapses the `/./`, so the identities match
   // while the path strings do not, the same trick the source-overwrite test uses.
@@ -363,8 +414,8 @@ static void test_populate_manifest_rejects_template_overwrite(void) {
   TEST_CHECK(strcmp(err, expected) == 0);
   manifest_free(&manifest);
 
-  // Second case: the collision is with an entry's own `template` override, claimed by the other
-  // loop. No template list is configured here, so only that loop can claim the file.
+  // Second case: the collision is with an entry's own `template` override. No template list is
+  // configured here, so the file is known only by that override and by the tree walk.
   config.aggregate_template_count = 0;
   struct ContentEntry override_entry = {
       .output_path = override_output, .source_path = "content/b.md", .template = "custom.html"};
@@ -381,12 +432,72 @@ static void test_populate_manifest_rejects_template_overwrite(void) {
   TEST_CHECK(strcmp(override_err, expected) == 0);
   manifest_free(&override_manifest);
 
+  // Third case: the collision is with a partial that no configuration or entry names. The output
+  // path is the one a permalink aimed into the template tree would produce, and only the walk of
+  // `templates_dir` can know the partial is there.
+  struct ContentEntry partial_entry = {.output_path = partial_path, .source_path = "content/c.md"};
+  const struct ContentEntry* partial_entries[] = {&partial_entry};
+  struct Manifest partial_manifest;
+  manifest_init(&partial_manifest);
+  char partial_err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&partial_manifest, &config, "sosig.toml", &sources,
+                                       partial_entries, 1, partial_err, sizeof(partial_err)) == -1);
+  n = snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
+               "content/c.md", partial_path);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(partial_err, expected) == 0);
+  manifest_free(&partial_manifest);
+
   path_list_free(&sources);
   site_config_free(&config);
-  unlink(aggregate_path);
-  unlink(override_path);
-  rmdir(templates_dir);
-  rmdir(root_dir);
+  remove_fixture_tree(root_dir);
+}
+
+// A `templates_dir` that exists but cannot be walked fails the manifest rather than claiming
+// nothing, because a partial the walk could not see would stay overwritable. A regular file in
+// place of the directory is the portable way to make the walk fail. The reason names the path the
+// walk failed on, so the configured root is not repeated ahead of it.
+static void test_populate_manifest_rejects_unlistable_templates_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-unlistable-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_fixture_file(root_dir, "templates", "not a directory") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+  char* templates_dir = path_join(root_dir, "templates", &arena);
+  TEST_ASSERT(templates_dir != NULL);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.output_dir = "public";
+  config.templates_dir = templates_dir;
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, NULL, 0, err,
+                                       sizeof(err)) == -1);
+  char reason[FS_REASON_SIZE];
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "failed to list template files: cannot open directory: %s ('%s')",
+                         error_system_message(reason, sizeof(reason), ENOTDIR), templates_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_CHECK(manifest.count == 0);
+
+  manifest_free(&manifest);
+  path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // A configured template whose output path exceeds the whole-path limit is rejected, and the
@@ -480,6 +591,8 @@ static void test_populate_manifest_rejects_oversize_template_segment(void) {
 
 TEST_LIST = {
     {"populate manifest accepts unique", test_populate_manifest_accepts_unique},
+    {"populate manifest accepts missing templates dir",
+     test_populate_manifest_accepts_missing_templates_dir},
     {"populate manifest rejects duplicate", test_populate_manifest_rejects_duplicate},
     {"populate manifest rejects case folded duplicate",
      test_populate_manifest_rejects_case_folded_duplicate},
@@ -490,6 +603,8 @@ TEST_LIST = {
     {"populate manifest rejects config overwrite", test_populate_manifest_rejects_config_overwrite},
     {"populate manifest rejects template overwrite",
      test_populate_manifest_rejects_template_overwrite},
+    {"populate manifest rejects unlistable templates dir",
+     test_populate_manifest_rejects_unlistable_templates_dir},
     {"populate manifest rejects oversize template path",
      test_populate_manifest_rejects_oversize_template_path},
     {"populate manifest rejects oversize template segment",
