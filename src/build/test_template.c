@@ -54,6 +54,28 @@ static void init_test_content_entry(struct ContentEntry* entry) {
   TEST_ASSERT(entry->body_html != NULL);
 }
 
+/**
+ * @brief Writes one fixture file whose bytes may include a `NUL`.
+ *
+ * @param root_dir      Fixture root directory.
+ * @param relative_path Relative fixture path below `root_dir`.
+ * @param data          Bytes to write.
+ * @param data_len      Number of bytes in `data`.
+ * @return `0` on success, or `-1` on test-plumbing failure.
+ */
+static int write_fixture_bytes(const char* root_dir,
+                               const char* relative_path,
+                               const char* data,
+                               size_t data_len) {
+  char fixture_path[256];
+  const int n = snprintf(fixture_path, sizeof(fixture_path), "%s/%s", root_dir, relative_path);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(fixture_path));
+  if (n <= 0 || (size_t)n >= sizeof(fixture_path)) {
+    return -1;
+  }
+  return fs_write_file(fixture_path, data, data_len, NULL, 0);
+}
+
 // `{{title}}` is escaped and `{{{body}}}` is not in the same render, so escaping is chosen per tag
 // rather than per template. This renders the real `templates/content.html`, whose output, including
 // the feed `<link rel="alternate">`, is compared end to end with the expected output in
@@ -691,6 +713,67 @@ static void test_rejects_unreadable_partial(void) {
   site_config_free(&site_config);
 }
 
+// A template holding a `NUL` byte is rejected at the read, naming the template file. Rendering past
+// it would emit a page with a raw `NUL` in it.
+static void test_rejects_template_with_nul_byte(void) {
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  TEST_ASSERT(init_fixture_dir(root_dir) != NULL);
+  static const char bytes[] = {'a', '\0', 'b'};
+  TEST_ASSERT(write_fixture_bytes(root_dir, "content-entry.html", bytes, sizeof(bytes)) == 0);
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct ContentEntry entry;
+  init_test_content_entry(&entry);
+  struct TemplateContext context = {
+      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(template_render_file(root_dir, "content-entry.html", &context, NULL, err,
+                                  sizeof(err)) == NULL);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "failed to read template: contains an embedded NUL byte "
+                         "('%s/content-entry.html')",
+                         root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  remove_fixture_tree(root_dir);
+  content_entry_free(&entry);
+  site_config_free(&site_config);
+}
+
+// A partial holding a `NUL` byte is rejected on the same grounds as a template, naming the partial
+// file rather than the template that included it.
+static void test_rejects_partial_with_nul_byte(void) {
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  TEST_ASSERT(init_fixture_dir(root_dir) != NULL);
+  TEST_ASSERT(write_fixture_file(root_dir, "content-entry.html", "before {{>card}} after") == 0);
+  static const char bytes[] = {'a', '\0', 'b'};
+  TEST_ASSERT(write_fixture_bytes(root_dir, "partials/card.html", bytes, sizeof(bytes)) == 0);
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct ContentEntry entry;
+  init_test_content_entry(&entry);
+  struct TemplateContext context = {
+      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(template_render_file(root_dir, "content-entry.html", &context, NULL, err,
+                                  sizeof(err)) == NULL);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "failed to read partial: contains an embedded NUL byte "
+                         "('%s/partials/card.html')",
+                         root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  remove_fixture_tree(root_dir);
+  content_entry_free(&entry);
+  site_config_free(&site_config);
+}
+
 // A template or partial larger than `TEMPLATE_FILE_LEN_MAX` fails the render at the read, from its
 // size, naming the limit and the size. The constant is file-local to `template.c`, so the 4 MiB
 // below is spelled out and must change with it. The files are sparse, so the fixture costs no disk.
@@ -1106,6 +1189,8 @@ TEST_LIST = {
     {"rejects unsafe partial name", test_rejects_unsafe_partial_name},
     {"rejects oversize partial name", test_rejects_oversize_partial_name},
     {"rejects unreadable partial", test_rejects_unreadable_partial},
+    {"rejects template with NUL byte", test_rejects_template_with_nul_byte},
+    {"rejects partial with NUL byte", test_rejects_partial_with_nul_byte},
     {"rejects oversize template and partial", test_rejects_oversize_template_and_partial},
     {"rejects partial count past limit", test_rejects_partial_count_past_limit},
     {"rejects recursive partial", test_rejects_recursive_partial},
