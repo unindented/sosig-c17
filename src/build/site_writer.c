@@ -26,8 +26,9 @@
  * @param template_name Safe relative template name to render. `manifest_builder_populate` already
  *                      checked it against the output-path limits, because every call site runs the
  *                      manifest pass over the same configured lists first. This pass does not
- *                      re-check, so an overlong name reaching here fails as an opaque
- * write error from the OS rather than with a diagnostic naming the limit. Must not be `NULL`.
+ *                      re-check, so an overlong name reaching here fails as an opaque write error
+ *                      from the OS rather than with a diagnostic naming the limit. Must not be
+ *                      `NULL`.
  * @param context       Template context for this render. Must not be `NULL`.
  * @param err           Destination buffer for a failure diagnostic.
  * @param err_len       Size of `err` in bytes.

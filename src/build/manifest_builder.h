@@ -40,8 +40,8 @@ struct SiteConfig;
  * @param site_config         Configuration supplying `output_dir`, `templates_dir` and the template
  *                            lists. Must not be `NULL`.
  * @param config_path         Path the configuration itself was loaded from. Claimed as an input
- *                            like any other, so a build cannot overwrite the file that
- * configured it. Must not be `NULL`.
+ *                            like any other, so a build cannot overwrite the file that configured
+ *                            it. Must not be `NULL`.
  * @param source_paths        Every discovered content source path, drafts included, whose files
  *                            must not be overwritten. Must not be `NULL`.
  * @param content_entries     Rendered non-draft content entries whose output paths are recorded.

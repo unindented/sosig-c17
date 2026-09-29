@@ -338,7 +338,7 @@ static MUSTACHE_TEMPLATE* node_get_partial_compile(struct ProviderData* provider
  * @param relative_path_out Receives the `partials/<name>.html` form, arena-owned, on success only.
  *                          Handed back rather than rebuilt by the caller because that is the form
  *                          `record_parse_error` names. It is already formatted here. Must not be
- * `NULL`.
+ *                          `NULL`.
  * @return The terminated joined path owned by the render arena, or `NULL` on an oversize name or
  *         allocation failure.
  */
