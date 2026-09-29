@@ -147,20 +147,24 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           tar -C "$tmp" -xzf "$archive"
           bin="$tmp/sosig-$VERSION-$TARGET/bin/sosig"
+          run_sosig() {
+            case "$TARGET" in
+              aarch64-linux-musl)
+                qemu-aarch64 "$bin" "$@"
+                ;;
+              *)
+                "$bin" "$@"
+                ;;
+            esac
+          }
+          run_sosig --version
           # Every fixture site in the golden test suite, built by the installed binary rather than
           # a build-tree binary.
           for fixture in tests/fixtures/*; do
             site=$(basename "$fixture")
             mkdir -p "$tmp/$site"
             cp -R "$fixture/." "$tmp/$site/"
-            case "$TARGET" in
-              aarch64-linux-musl)
-                (cd "$tmp/$site" && qemu-aarch64 "$bin" build)
-                ;;
-              *)
-                (cd "$tmp/$site" && "$bin" build)
-                ;;
-            esac
+            (cd "$tmp/$site" && run_sosig build)
             diff -ru "tests/expected/$site" "$tmp/$site/public"
           done
 
