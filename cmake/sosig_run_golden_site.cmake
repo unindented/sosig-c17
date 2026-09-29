@@ -14,9 +14,14 @@ execute_process(
   COMMAND "${SOSIG_EXECUTABLE}" build ${SOSIG_BUILD_ARGS}
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
+  OUTPUT_VARIABLE build_stdout
+  ERROR_VARIABLE build_stderr
 )
 if(NOT build_result EQUAL 0)
-  message(FATAL_ERROR "fixture site build failed with exit status ${build_result}")
+  message(
+    FATAL_ERROR
+      "fixture site build failed with exit status ${build_result}:\n${build_stdout}${build_stderr}"
+  )
 endif()
 
 set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
