@@ -89,9 +89,12 @@ struct InputRoot {
  *
  * Each root is compared by identity against the directories an output passes through, for the same
  * reasons the identity set is. `./content`, `content/`, a symlinked root, and a case-insensitive
- * alias spell one directory in different ways. The directories compared are `output_dir`, each of
- * its physical ancestors, and each directory between `output_dir` and the output file. A root that
- * holds `output_dir` holds every output, so that answer is computed once.
+ * alias spell one directory in different ways. A root that holds `output_dir` holds every output,
+ * so `manifest_builder_check_output_dir` answers that once, against `output_dir` and each of its
+ * physical ancestors. The build runs it before it walks any input tree, and
+ * `manifest_builder_populate` runs it again so that no caller can skip it. Populate then compares
+ * each directory between `output_dir` and the output file, which is where a symlink inside the
+ * output tree can still lead into a root.
  */
 struct InputRoots {
   /** The `content_dir` and `templates_dir` roots. */
@@ -99,9 +102,6 @@ struct InputRoots {
 
   /** Output directory every registered output path is joined onto. */
   const char* output_dir;
-
-  /** Config key of the root at or above `output_dir`, or `NULL` when neither root is. */
-  const char* output_dir_root_key;
 };
 
 /**
@@ -154,6 +154,8 @@ static int claim_build_inputs(struct InputIdentities* inputs,
  * @param template_paths Initialized, empty path list that receives the files. Must not be `NULL`.
  * @param templates_dir  Template directory root to walk. A path with no identity lists nothing.
  *                       Must not be `NULL`.
+ * @param output_dir     Output directory the walk leaves out, so a generated file reached through
+ *                       a symlink is not claimed as a template. Must not be `NULL`.
  * @param err            Destination buffer for a failure diagnostic.
  * @param err_len        Size of `err` in bytes.
  * @return `0` when every file in the tree was listed or `templates_dir` has no identity, or `-1`
@@ -161,8 +163,9 @@ static int claim_build_inputs(struct InputIdentities* inputs,
  */
 static int claim_build_inputs_list_templates(struct PathList* template_paths,
                                              const char* templates_dir,
+                                             const char* output_dir,
                                              char* err,
-                                             size_t err_len) __attribute__((nonnull(1, 2)));
+                                             size_t err_len) __attribute__((nonnull(1, 2, 3)));
 
 /**
  * @brief Claims one path's identity, ignoring a path that has none.
@@ -190,39 +193,56 @@ static int compare_identities(const void* a, const void* b) __attribute__((nonnu
 static void free_input_identities(struct InputIdentities* inputs) __attribute__((nonnull(1)));
 
 /**
- * @brief Records the identity of `content_dir` and `templates_dir`, and which of them, if either,
- *        holds `output_dir`.
+ * @brief Records the identity of `content_dir` and `templates_dir`.
  *
  * A root with no identity is recorded as absent rather than refused, for the same reason
  * `claim_input_identity` skips a missing file: it holds no input an output could land among.
  *
  * @param roots       Root set to fill. Must not be `NULL`.
- * @param site_config Configuration supplying the three directories. Must not be `NULL`.
- * @param scratch     Arena that owns the ancestor paths built while walking up from `output_dir`.
- *                    Must not be `NULL`.
- * @param err         Destination buffer for a failure diagnostic.
- * @param err_len     Size of `err` in bytes.
- * @return `0` on success, or `-1` on allocation failure.
+ * @param site_config Configuration supplying the roots and `output_dir`. Must not be `NULL`.
  */
-static int claim_input_roots(struct InputRoots* roots,
-                             const struct SiteConfig* site_config,
-                             struct Arena* scratch,
-                             char* err,
-                             size_t err_len) __attribute__((nonnull(1, 2, 3)));
+static void claim_input_roots(struct InputRoots* roots, const struct SiteConfig* site_config)
+    __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Records which input root, if either, is `output_dir` or one of its physical ancestors.
+ * @brief Finds the input root that `output_dir` is at or below, whether or not it exists yet.
  *
- * The walk appends `..` rather than trimming the text, because `output_dir` can be relative, hold
- * `..` segments, or pass through a symlink, and the kernel resolves `..` against the directory
- * actually reached. It stops at a root match, at a path with no identity, or at the filesystem
- * root, whose `..` is itself.
+ * Starts from the nearest existing ancestor of `output_dir`, which is `output_dir` itself once it
+ * exists, so the answer is the same before and after the build creates it. From there the walk
+ * appends `..` rather than trimming the text, because the path can be relative, hold `..` segments,
+ * or pass through a symlink, and the kernel resolves `..` against the directory actually reached.
+ * It stops at a root match, at a path with no identity, or at the filesystem root, whose `..` is
+ * itself.
  *
- * @param roots   Root set whose `output_dir_root_key` is set. Must not be `NULL`.
- * @param scratch Arena that owns the ancestor paths. Must not be `NULL`.
+ * @param roots          Input directory trees to look for. Must not be `NULL`.
+ * @param scratch        Arena that owns the ancestor paths. Must not be `NULL`.
+ * @param config_key_out Receives the config key of the root holding `output_dir`, or `NULL` when
+ *                       neither root does. Must not be `NULL`.
  * @return `0` on success, or `-1` on allocation failure.
  */
-static int claim_input_roots_output_dir(struct InputRoots* roots, struct Arena* scratch)
+static int find_input_root_holding_output_dir(const struct InputRoots* roots,
+                                              struct Arena* scratch,
+                                              const char** config_key_out)
+    __attribute__((nonnull(1, 2, 3)));
+
+/**
+ * @brief Returns the nearest existing ancestor of `dir_path`, which is `dir_path` itself when it
+ *        exists.
+ *
+ * Each component is joined onto the nearest path known to exist, so an existing component, `..`
+ * included, resolves the way the kernel resolves it. Past the first missing component the
+ * components are only counted, because `fs_mkdir_p` creates each of them as a real directory: a
+ * `..` there cancels the missing component before it, and probing resumes once none is left. That
+ * keeps `missing/../content/new` from hiding that it lands in `content`.
+ *
+ * @param dir_path Directory path, absolute or relative to the working directory. Must not be
+ *                 `NULL`.
+ * @param scratch  Arena that owns the returned path and the copies built on the way. Must not be
+ *                 `NULL`.
+ * @return The nearest existing ancestor, owned by `scratch` or static, or `NULL` on allocation
+ *         failure.
+ */
+static const char* find_nearest_existing_ancestor(const char* dir_path, struct Arena* scratch)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -299,10 +319,11 @@ static int register_output_path(struct Manifest* manifest,
 /**
  * @brief Finds the input root that an output path lands at or below.
  *
- * Checks the answer recorded for `output_dir` first. Then it checks each existing directory from
- * `output_dir` down to the output path itself, so a symlink inside `output_dir` that points into
- * an input root is caught too. The walk stops at the first missing directory, because the build
- * creates that directory and everything below it fresh.
+ * Checks each existing directory below `output_dir` down to the output path itself, so a symlink
+ * inside `output_dir` that points into an input root is caught. `output_dir` and its ancestors are
+ * not checked here, because `manifest_builder_populate` has already cleared them through
+ * `manifest_builder_check_output_dir`. The walk stops at the first missing directory, because the
+ * build creates that directory and everything below it fresh.
  *
  * @param roots          Input directory trees to look for. Must not be `NULL`.
  * @param output_path    Output path joined onto `roots->output_dir`. Must not be `NULL`.
@@ -327,6 +348,27 @@ static int find_input_root_holding(const struct InputRoots* roots,
 static bool has_input_identity(const struct InputIdentities* inputs,
                                const struct FsIdentity* identity) __attribute__((nonnull(1, 2)));
 
+int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
+                                      char* err,
+                                      size_t err_len) {
+  struct Arena scratch;
+  arena_init(&scratch);
+  struct InputRoots roots;
+  claim_input_roots(&roots, site_config);
+  const char* root_key = NULL;
+  int rc = find_input_root_holding_output_dir(&roots, &scratch, &root_key);
+  if (rc != 0) {
+    (void)error_report(err, err_len, "out of memory checking output directory");
+  } else if (root_key != NULL) {
+    // The root is a config key and bounded, so it stays in the sentence. The configured path
+    // trails, because it is unbounded and the rule it broke is the actionable part.
+    rc = error_report(err, err_len, "output directory would write inside '%s': '%s'", root_key,
+                      site_config->output_dir);
+  }
+  arena_free(&scratch);
+  return rc;
+}
+
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,
                               const char* config_path,
@@ -340,9 +382,12 @@ int manifest_builder_populate(struct Manifest* manifest,
   struct InputIdentities inputs = {0};
   struct InputRoots roots;
 
-  int rc = claim_build_inputs(&inputs, site_config, config_path, source_paths, err, err_len);
+  // The build already ran this check before walking any input tree. Running it again here keeps
+  // the protection from depending on the caller, and costs a few `fs_identify` calls.
+  int rc = manifest_builder_check_output_dir(site_config, err, err_len);
+  claim_input_roots(&roots, site_config);
   if (rc == 0) {
-    rc = claim_input_roots(&roots, site_config, &scratch, err, err_len);
+    rc = claim_build_inputs(&inputs, site_config, config_path, source_paths, err, err_len);
   }
 
   for (size_t i = 0; rc == 0 && i < content_entry_count; i++) {
@@ -396,8 +441,8 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               size_t err_len) {
   struct PathList template_paths;
   path_list_init(&template_paths);
-  int rc =
-      claim_build_inputs_list_templates(&template_paths, site_config->templates_dir, err, err_len);
+  int rc = claim_build_inputs_list_templates(&template_paths, site_config->templates_dir,
+                                             site_config->output_dir, err, err_len);
   if (rc == 0) {
     // One slot for the configuration file, then one per source and per template file. `calloc`
     // fails on product overflow rather than wrapping.
@@ -421,6 +466,7 @@ static int claim_build_inputs(struct InputIdentities* inputs,
 
 static int claim_build_inputs_list_templates(struct PathList* template_paths,
                                              const char* templates_dir,
+                                             const char* output_dir,
                                              char* err,
                                              size_t err_len) {
   // A `templates_dir` with no identity holds no file to overwrite, so there is nothing to claim.
@@ -434,7 +480,8 @@ static int claim_build_inputs_list_templates(struct PathList* template_paths,
   }
   // An empty suffix matches every filename, so the walk lists the whole tree.
   char reason[FS_REASON_SIZE];
-  if (fs_list_files_with_suffix(template_paths, templates_dir, "", reason, sizeof(reason)) != 0) {
+  if (fs_list_files_with_suffix(template_paths, templates_dir, output_dir, "", reason,
+                                sizeof(reason)) != 0) {
     // The reason names the directory or entry that failed, which is more precise than the
     // configured root, so the root is not repeated here.
     return error_report(err, err_len, "failed to list template files: %s", reason);
@@ -466,11 +513,7 @@ static void free_input_identities(struct InputIdentities* inputs) {
   *inputs = (struct InputIdentities){0};
 }
 
-static int claim_input_roots(struct InputRoots* roots,
-                             const struct SiteConfig* site_config,
-                             struct Arena* scratch,
-                             char* err,
-                             size_t err_len) {
+static void claim_input_roots(struct InputRoots* roots, const struct SiteConfig* site_config) {
   *roots = (struct InputRoots){
       .items = {{.config_key = "content_dir"}, {.config_key = "templates_dir"}},
       .output_dir = site_config->output_dir,
@@ -479,21 +522,23 @@ static int claim_input_roots(struct InputRoots* roots,
   for (size_t i = 0; i < INPUT_ROOT_COUNT; i++) {
     roots->items[i].is_present = fs_identify(root_dirs[i], &roots->items[i].identity) == 0;
   }
-  if (claim_input_roots_output_dir(roots, scratch) != 0) {
-    return error_report(err, err_len, "out of memory recording build input directories");
-  }
-  return 0;
 }
 
-static int claim_input_roots_output_dir(struct InputRoots* roots, struct Arena* scratch) {
-  const char* dir_path = roots->output_dir;
+static int find_input_root_holding_output_dir(const struct InputRoots* roots,
+                                              struct Arena* scratch,
+                                              const char** config_key_out) {
+  *config_key_out = NULL;
+  const char* dir_path = find_nearest_existing_ancestor(roots->output_dir, scratch);
+  if (dir_path == NULL) {
+    return -1;
+  }
   struct FsIdentity identity;
   if (fs_identify(dir_path, &identity) != 0) {
     return 0;
   }
   for (;;) {
-    roots->output_dir_root_key = find_input_root(roots, &identity);
-    if (roots->output_dir_root_key != NULL) {
+    *config_key_out = find_input_root(roots, &identity);
+    if (*config_key_out != NULL) {
       return 0;
     }
     dir_path = path_join(dir_path, "..", scratch);
@@ -507,6 +552,42 @@ static int claim_input_roots_output_dir(struct InputRoots* roots, struct Arena* 
     }
     identity = parent_identity;
   }
+}
+
+static const char* find_nearest_existing_ancestor(const char* dir_path, struct Arena* scratch) {
+  char* components = arena_strdup(scratch, dir_path);
+  if (components == NULL) {
+    return NULL;
+  }
+  const char* ancestor_path = dir_path[0] == '/' ? "/" : ".";
+  size_t missing_count = 0;
+  char* cursor = components;
+  while (*cursor != '\0') {
+    char* component = cursor;
+    cursor += strcspn(cursor, "/");
+    if (*cursor == '/') {
+      *cursor = '\0';
+      cursor++;
+    }
+    if (component[0] == '\0' || strcmp(component, ".") == 0) {
+      continue;
+    }
+    if (missing_count > 0) {
+      missing_count = strcmp(component, "..") == 0 ? missing_count - 1 : missing_count + 1;
+      continue;
+    }
+    const char* candidate_path = path_join(ancestor_path, component, scratch);
+    if (candidate_path == NULL) {
+      return NULL;
+    }
+    struct FsIdentity identity;
+    if (fs_identify(candidate_path, &identity) == 0) {
+      ancestor_path = candidate_path;
+    } else {
+      missing_count = 1;
+    }
+  }
+  return ancestor_path;
 }
 
 static const char* find_input_root(const struct InputRoots* roots,
@@ -607,10 +688,7 @@ static int find_input_root_holding(const struct InputRoots* roots,
                                    const char* output_path,
                                    struct Arena* scratch,
                                    const char** config_key_out) {
-  *config_key_out = roots->output_dir_root_key;
-  if (*config_key_out != NULL) {
-    return 0;
-  }
+  *config_key_out = NULL;
   // Each directory below `output_dir` is named by cutting a copy of the path at a `/`. Starting
   // past `output_dir` and its separator keeps the walk off `output_dir`'s own text, whose prefixes
   // need not be its ancestors once it holds `..`. The final pass checks the output path itself, so

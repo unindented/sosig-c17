@@ -78,12 +78,16 @@ static void build_state_init(struct BuildState* state) __attribute__((nonnull(1)
 static void build_state_free(struct BuildState* state) __attribute__((nonnull(1)));
 
 /**
- * @brief Loads `sosig.toml`, creates the output directory, and discovers content entry sources.
+ * @brief Loads `sosig.toml`, rejects an `output_dir` inside an input tree, and discovers content
+ *        entry sources.
+ *
+ * The `output_dir` check runs before the content walk, and the walk leaves `output_dir` out, so a
+ * file an earlier build generated is never read back as a source.
  *
  * @param state   Build state that receives the config and source paths. Must not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
- * @return `0` on success, or `-1` on a config, directory, or listing failure.
+ * @return `0` on success, or `-1` on a config, output directory, or listing failure.
  */
 static int load_build_inputs(struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
@@ -138,6 +142,20 @@ static int collect_content_entries_compact(struct BuildState* state, char* err, 
  * @return `0` when all output paths are unique, or `-1` on a collision or allocation failure.
  */
 static int populate_output_manifest(struct BuildState* state, char* err, size_t err_len)
+    __attribute__((nonnull(1)));
+
+/**
+ * @brief Creates the output directory once the manifest has accepted every output path.
+ *
+ * Nothing before this phase writes, so a build the manifest or an earlier phase refuses leaves the
+ * filesystem as it found it, without even an empty `output_dir`.
+ *
+ * @param state   Build state supplying `output_dir`. Must not be `NULL`.
+ * @param err     Destination buffer for a failure diagnostic.
+ * @param err_len Size of `err` in bytes.
+ * @return `0` on success, or `-1` when a component of `output_dir` cannot be created.
+ */
+static int prepare_output_dir(const struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
 
 /**
@@ -219,6 +237,10 @@ int cmd_build_execute(const struct BuildOptions* options, struct StringBuffer* e
     (void)string_buffer_append(error_out, err);
     goto cleanup;
   }
+  if (prepare_output_dir(&state, err, sizeof(err)) != 0) {
+    (void)string_buffer_append(error_out, err);
+    goto cleanup;
+  }
   if (render_content_pages(&state, error_out) != 0) {
     goto cleanup;
   }
@@ -281,17 +303,16 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
   if (site_config_load(&state->site_config, SITE_CONFIG_PATH_DEFAULT, err, err_len) != 0) {
     return -1;
   }
-  char reason[FS_REASON_SIZE];
-  if (fs_mkdir_p(state->site_config.output_dir, reason, sizeof(reason)) != 0) {
-    // The reason names the component that failed, which is more precise than the configured root,
-    // so the root is not repeated here.
-    return error_report(err, err_len, "failed to prepare output directory: %s", reason);
+  if (manifest_builder_check_output_dir(&state->site_config, err, err_len) != 0) {
+    return -1;
   }
   build_verbose(state, "discovering content");
-  if (fs_list_files_with_suffix(&state->source_paths, state->site_config.content_dir, ".md", reason,
+  char reason[FS_REASON_SIZE];
+  if (fs_list_files_with_suffix(&state->source_paths, state->site_config.content_dir,
+                                state->site_config.output_dir, ".md", reason,
                                 sizeof(reason)) != 0) {
     // The reason names the directory or entry that failed, which is more precise than the
-    // configured root, so the root is not repeated here, as for `fs_mkdir_p` above.
+    // configured root, so the root is not repeated here.
     return error_report(err, err_len, "failed to list Markdown files: %s", reason);
   }
   return 0;
@@ -346,12 +367,22 @@ static int collect_content_entries_compact(struct BuildState* state, char* err, 
 static int populate_output_manifest(struct BuildState* state, char* err, size_t err_len) {
   build_verbose(state, "building output manifest");
   // This runs ahead of the page renders, so a duplicate output path fails before rendering is
-  // wasted. It also runs ahead of every write, so an output aimed at one of this build's own inputs
-  // is refused before it can destroy the file.
+  // wasted. It also runs ahead of every write, `output_dir` itself included, so an output aimed at
+  // one of this build's own inputs is refused before it can destroy the file.
   return manifest_builder_populate(&state->manifest, &state->site_config, SITE_CONFIG_PATH_DEFAULT,
                                    &state->source_paths,
                                    (const struct ContentEntry* const*)state->content_entries,
                                    state->content_entry_count, err, err_len);
+}
+
+static int prepare_output_dir(const struct BuildState* state, char* err, size_t err_len) {
+  char reason[FS_REASON_SIZE];
+  if (fs_mkdir_p(state->site_config.output_dir, reason, sizeof(reason)) != 0) {
+    // The reason names the component that failed, which is more precise than the configured root,
+    // so the root is not repeated here.
+    return error_report(err, err_len, "failed to prepare output directory: %s", reason);
+  }
+  return 0;
 }
 
 static int render_content_pages(struct BuildState* state, struct StringBuffer* error_out) {

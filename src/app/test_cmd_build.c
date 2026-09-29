@@ -145,6 +145,22 @@ static bool has_output_path(const struct PathList* outputs,
   return found;
 }
 
+/**
+ * @brief Reports whether a path below a fixture root exists.
+ *
+ * @param root_dir      Fixture root directory.
+ * @param relative_path Relative path below `root_dir` to inspect.
+ * @return `true` when the path exists, or `false` otherwise.
+ */
+static bool fixture_path_exists(const char* root_dir, const char* relative_path) {
+  struct Arena arena;
+  arena_init(&arena);
+  char* path = path_join(root_dir, relative_path, &arena);
+  const bool exists = path != NULL && access(path, F_OK) == 0;
+  arena_free(&arena);
+  return exists;
+}
+
 // A configured content template name is used instead of the default.
 static void test_honors_configured_content_template(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
@@ -236,7 +252,7 @@ static void test_writes_exactly_manifest_outputs(void) {
   struct PathList outputs;
   path_list_init(&outputs);
   TEST_CHECK(public_dir != NULL &&
-             fs_list_files_with_suffix(&outputs, public_dir, "", NULL, 0) == 0);
+             fs_list_files_with_suffix(&outputs, public_dir, NULL, "", NULL, 0) == 0);
 
   // Exactly the expected set: matching count plus membership rules out extras and the draft.
   TEST_CHECK(outputs.count == expected_count);
@@ -374,6 +390,65 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
       read_fixture_file(root_dir, "public/b/post.html", &generated_file, &generated_file_len) == 0);
   free(generated_file);
 
+  remove_fixture_tree(root_dir);
+}
+
+// An `output_dir` that a symlink inside `content_dir` reaches is left out of the content walk, so a
+// rebuild does not read the first build's outputs back as sources. The aggregate here publishes a
+// `.md` file, which the walk would otherwise parse as a content entry and claim as an input.
+static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  const char config[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Site\"\n"
+      "author = \"Author\"\n"
+      "aggregate_templates = [\"notes.md\"]\n"
+      "feed_templates = []\n";
+  const char content[] =
+      "+++\n"
+      "title = \"Hello\"\n"
+      "date = 2026-07-01T00:00:00Z\n"
+      "+++\n"
+      "Body\n";
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/notes.md", "notes\n") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+  char* link_path = path_join(root_dir, "content/published", &arena);
+  TEST_ASSERT(link_path != NULL);
+  if (link_path == NULL) {
+    arena_free(&arena);
+    return;
+  }
+  TEST_ASSERT(symlink("../public", link_path) == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
+
+  char* public_dir = path_join(root_dir, "public", &arena);
+  struct PathList outputs;
+  path_list_init(&outputs);
+  TEST_CHECK(public_dir != NULL &&
+             fs_list_files_with_suffix(&outputs, public_dir, NULL, "", NULL, 0) == 0);
+  // The page and the aggregate, and no page rendered from the aggregate's own output.
+  TEST_CHECK(outputs.count == 2);
+  TEST_CHECK(has_output_path(&outputs, root_dir, "public/hello.html"));
+  TEST_CHECK(has_output_path(&outputs, root_dir, "public/notes.md"));
+  path_list_free(&outputs);
+
+  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -635,9 +710,10 @@ static void test_reports_absent_content_dir(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A configured `output_dir` that already exists as a regular file is reported from the first build
-// phase, before any content is read. The reason names the component that failed and the caller does
-// not repeat the configured root, so the message is compared whole.
+// A configured `output_dir` that already exists as a regular file is reported once the manifest has
+// passed, where the build creates `output_dir`, before any page is written. The reason names the
+// component that failed and the caller does not repeat the configured root, so the message is
+// compared whole.
 static void test_reports_unusable_output_dir(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -651,7 +727,14 @@ static void test_reports_unusable_output_dir(void) {
       "author = \"Author\"\n"
       "aggregate_templates = []\n"
       "feed_templates = []\n";
+  const char content[] =
+      "+++\n"
+      "title = \"Hello\"\n"
+      "date = 2026-07-01T00:00:00Z\n"
+      "+++\n"
+      "Body\n";
   TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   // `public` is the default `output_dir`, so a file there is what makes `fs_mkdir_p` fail.
   TEST_ASSERT(write_fixture_file(root_dir, "public", "not a directory") == 0);
 
@@ -663,6 +746,50 @@ static void test_reports_unusable_output_dir(void) {
       strcmp(error_buffer.data,
              "failed to prepare output directory: exists and is not a directory ('public')") == 0);
   string_buffer_free(&error_buffer);
+
+  remove_fixture_tree(root_dir);
+}
+
+// An `output_dir` below `content_dir` is refused before content is discovered, so no earlier
+// build's output can be read back as a source, and it is refused although it does not exist yet.
+// The verbose phase lines show that the build stopped before the content walk, and the refused
+// build creates none of the nested directories.
+static void test_rejects_output_dir_inside_content_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  const char config[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Site\"\n"
+      "author = \"Author\"\n"
+      "output_dir = \"content/generated/site\"\n"
+      "aggregate_templates = []\n"
+      "feed_templates = []\n";
+  const char content[] =
+      "+++\n"
+      "title = \"Hello\"\n"
+      "date = 2026-07-01T00:00:00Z\n"
+      "+++\n"
+      "Body\n";
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+
+  const struct BuildOptions options = {.is_verbose = true};
+  char stdout_out[ERROR_MESSAGE_SIZE];
+  char stderr_out[ERROR_MESSAGE_SIZE * 4];
+  TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
+                                 sizeof(stderr_out)) == EXIT_CODE_FAILURE);
+  TEST_CHECK(stdout_out[0] == '\0');
+  TEST_CHECK(strcmp(stderr_out,
+                    "loading config\n"
+                    "output directory would write inside 'content_dir': "
+                    "'content/generated/site'\n") == 0);
+  TEST_MSG("actual: '%s'", stderr_out);
+  TEST_CHECK(!fixture_path_exists(root_dir, "content/generated"));
 
   remove_fixture_tree(root_dir);
 }
@@ -709,7 +836,8 @@ static void test_reports_unparsable_content(void) {
 }
 
 // A configured aggregate output that collides with a content entry output is rejected, with the
-// collision described in the returned diagnostic.
+// collision described in the returned diagnostic. The refused build creates no `output_dir`,
+// because nothing is written before the manifest passes.
 static void test_rejects_duplicate_output(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -746,6 +874,7 @@ static void test_rejects_duplicate_output(void) {
   // it from the same message with something appended.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   string_buffer_free(&error_buffer);
+  TEST_CHECK(!fixture_path_exists(root_dir, "public"));
 
   remove_fixture_tree(root_dir);
 }
@@ -916,6 +1045,8 @@ TEST_LIST = {
     {"tolerates trailing slash on content_dir", test_tolerates_trailing_slash_on_content_dir},
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
+    {"rebuild skips output dir linked from content dir",
+     test_rebuild_skips_output_dir_linked_from_content_dir},
     {"honors requested worker count", test_honors_requested_worker_count},
     {"leaves error buffer empty on success", test_leaves_error_buffer_empty_on_success},
     {"run prints diagnostic once and fails", test_run_prints_diagnostic_once_and_fails},
@@ -923,6 +1054,7 @@ TEST_LIST = {
     {"reports missing config", test_reports_missing_config},
     {"reports absent content dir", test_reports_absent_content_dir},
     {"reports unusable output dir", test_reports_unusable_output_dir},
+    {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
     {"reports unparsable content", test_reports_unparsable_content},
     {"rejects duplicate output", test_rejects_duplicate_output},
     {"reports bad template", test_reports_bad_template},

@@ -56,14 +56,16 @@ The search follows symlinked directories but reads each directory only once. A d
 
 The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
 
+Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.
+
 Before the tool renders page templates or writes files, it rejects an output plan with one of these conflicts:
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
-- An output is at or below `content_dir` or `templates_dir`, even if no file exists at that path yet. Otherwise the next build would read a generated `.md` file as a content source, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
+- An output is at or below `content_dir` or `templates_dir`, even if no file exists at that path yet, such as through a symlink inside `output_dir`. Otherwise the next build would read a generated `.md` file as a content source, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
 - An output overwrites the config, a content source, or any file below `templates_dir`, including partials.
 
-The build does not remove stale files from an earlier build. If rendering or writing fails partway, some outputs can be new while others remain unchanged.
+The build creates `output_dir` only after these checks pass, so a rejected build creates nothing. The build does not remove stale files from an earlier build. If rendering or writing fails partway, some outputs can be new while others remain unchanged.
 
 ```toml
 # Required absolute site URL for feed links. It must be an `http://` or `https://` URL with a host.

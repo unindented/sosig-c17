@@ -10,6 +10,30 @@ struct PathList;
 struct SiteConfig;
 
 /**
+ * @brief Rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not it
+ *        exists yet.
+ *
+ * A build runs this before it walks an input tree or creates anything. An `output_dir` inside a
+ * root puts every output inside it, where the next build would read them back as inputs, so this
+ * one answer covers every output at once. Each root is compared by `(device, inode)` against the
+ * nearest existing ancestor of `output_dir` and each of that directory's physical ancestors, so an
+ * alternate spelling of a root, a symlinked root, and a symlink on the way to `output_dir` are all
+ * caught, and a sibling such as `contentx` is not. The nearest existing ancestor is `output_dir`
+ * itself once it exists, so the answer does not depend on whether an earlier build created it. A
+ * root that does not exist holds nothing to protect and is skipped.
+ *
+ * @param site_config Configuration supplying `content_dir`, `output_dir`, and `templates_dir`. Must
+ *                    not be `NULL`.
+ * @param err         Destination buffer for a failure diagnostic.
+ * @param err_len     Size of `err` in bytes.
+ * @return `0` when no input root holds `output_dir`, or `-1` when one does or on allocation
+ *         failure.
+ */
+int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
+                                      char* err,
+                                      size_t err_len) __attribute__((nonnull(1)));
+
+/**
  * @brief Records every intended output path in the build manifest, rejecting duplicates and any
  *        output that would land inside a build input tree or overwrite a build input file.
  *
@@ -22,11 +46,12 @@ struct SiteConfig;
  *
  * The first case catches an output that would be read back as an input without overwriting one: a
  * new Markdown file below `content_dir` is parsed as a source by the next build, and a new file
- * below `templates_dir` can be read as a partial by the render of this same build. Each root is
- * compared by `(device, inode)` against `output_dir`, each of its ancestors, and each existing
- * directory between `output_dir` and the output, so an alternate spelling of a root, a symlinked
- * root, and a symlink inside `output_dir` are all caught, and a sibling such as `contentx` is not.
- * A root that does not exist holds nothing to protect and is skipped.
+ * below `templates_dir` can be read as a partial by the render of this same build. This runs
+ * `manifest_builder_check_output_dir` itself first, so an `output_dir` inside a root is rejected
+ * even when the caller skipped the early check, and then compares each root by `(device, inode)`
+ * against each existing directory between `output_dir` and the output. That catches a symlink
+ * inside `output_dir` that leads into a root. A root that does not exist holds nothing to protect
+ * and is skipped.
  *
  * The last case requires one path to be both a file and a directory.
  * `manifest_find_prefix_collision` checks for it after all paths are recorded. Both path checks
@@ -39,8 +64,10 @@ struct SiteConfig;
  * the config path `sosig.toml`. Comparing `(device, inode)` also rejects a collision created by a
  * symlink, a hard link, or a case-insensitive filesystem. It claims the config, every discovered
  * source, and every file below `templates_dir`, so it still protects an input that a link places
- * outside both roots. A missing `templates_dir` claims nothing, because it holds no file to
- * overwrite. The render then reports the template it could not read.
+ * outside both roots. The template walk leaves out `output_dir`, so a generated file that a symlink
+ * inside `templates_dir` reaches is not mistaken for a template. A missing `templates_dir` claims
+ * nothing, because it holds no file to overwrite. The render then reports the template it could not
+ * read.
  *
  * @param manifest            Manifest that receives the output paths. Must not be `NULL`.
  * @param site_config         Configuration supplying `content_dir`, `output_dir`, `templates_dir`

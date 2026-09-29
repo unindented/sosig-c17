@@ -4,6 +4,7 @@
 #include <acutest.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,29 @@ static void check_rejects_output_in_root(const struct SiteConfig* config,
   TEST_MSG("actual: '%s'", err);
   manifest_free(&manifest);
   path_list_free(&sources);
+}
+
+/**
+ * @brief Checks that `manifest_builder_check_output_dir` rejects `config->output_dir` and creates
+ *        nothing.
+ *
+ * @param config   Configuration whose `output_dir` lies at or below an input root. Must not be
+ *                 `NULL`.
+ * @param root_key Config key of the root the diagnostic must name. Must not be `NULL`.
+ */
+static void check_rejects_output_dir_in_root(const struct SiteConfig* config,
+                                             const char* root_key) {
+  const bool had_output_dir = access(config->output_dir, F_OK) == 0;
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_check_output_dir(config, err, sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n =
+      snprintf(expected, sizeof(expected), "output directory would write inside '%s': '%s'",
+               root_key, config->output_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_MSG("actual: '%s'", err);
+  TEST_CHECK((access(config->output_dir, F_OK) == 0) == had_output_dir);
 }
 
 // Distinct output paths are all registered without error.
@@ -163,6 +187,45 @@ static void test_accepts_output_beside_input_roots(void) {
 
   manifest_free(&manifest);
   path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
+// An `output_dir` outside every input root passes the early check whether or not it exists yet.
+// That includes a directory whose name only starts with a root's name, and one that holds the roots
+// rather than lying inside them, which is the `output_dir = "."` layout.
+static void test_check_output_dir_accepts_dir_outside_input_roots(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-outside-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "") == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.content_dir = path_join(root_dir, "content", &arena);
+  config.templates_dir = path_join(root_dir, "templates", &arena);
+  TEST_ASSERT(config.content_dir != NULL && config.templates_dir != NULL);
+  const char* const output_dirs[] = {
+      root_dir,
+      path_join(root_dir, "public", &arena),
+      path_join(root_dir, "contentx/new", &arena),
+      path_join(root_dir, "content/../public/new", &arena),
+  };
+  for (size_t i = 0; i < sizeof(output_dirs) / sizeof(output_dirs[0]); i++) {
+    TEST_ASSERT(output_dirs[i] != NULL);
+    config.output_dir = output_dirs[i];
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(manifest_builder_check_output_dir(&config, err, sizeof(err)) == 0);
+    TEST_MSG("output_dir: '%s', actual: '%s'", output_dirs[i], err);
+  }
+
   site_config_free(&config);
   arena_free(&arena);
   remove_fixture_tree(root_dir);
@@ -542,11 +605,58 @@ static void test_rejects_template_overwrite(void) {
   remove_fixture_tree(root_dir);
 }
 
+// An `output_dir` at or below an input root is rejected before anything walks or writes, whether
+// or not it exists yet, and the check creates none of it. A missing `output_dir` is judged by the
+// directory it would be created in, so a nested path, a `..` past a missing component, and a path
+// through a symlinked root all land where `fs_mkdir_p` would put them.
+static void test_check_output_dir_rejects_dir_in_input_root(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-output-dir-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "content/public/old.html", "") == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+  const char* content_dir = path_join(root_dir, "content", &arena);
+  const char* content_link = path_join(root_dir, "content-link", &arena);
+  TEST_ASSERT(content_dir != NULL && content_link != NULL);
+  TEST_CHECK(symlink(content_dir, content_link) == 0);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.content_dir = content_dir;
+  config.templates_dir = path_join(root_dir, "templates", &arena);
+  TEST_ASSERT(config.templates_dir != NULL);
+  const char* const content_output_dirs[] = {
+      content_dir,
+      path_join(root_dir, "content/public", &arena),
+      path_join(root_dir, "content/new/deeper", &arena),
+      path_join(root_dir, "missing/../content/new", &arena),
+      path_join(root_dir, "content-link/new", &arena),
+  };
+  for (size_t i = 0; i < sizeof(content_output_dirs) / sizeof(content_output_dirs[0]); i++) {
+    TEST_ASSERT(content_output_dirs[i] != NULL);
+    config.output_dir = content_output_dirs[i];
+    check_rejects_output_dir_in_root(&config, "content_dir");
+  }
+
+  config.output_dir = path_join(root_dir, "templates/partials", &arena);
+  TEST_ASSERT(config.output_dir != NULL);
+  check_rejects_output_dir_in_root(&config, "templates_dir");
+
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // An output that would land below `content_dir` is rejected even though no file sits at its path
 // yet. Left through, `output_dir = "."` with a permalink aimed into the content tree wrote a
 // Markdown file there, and the next build failed to parse it as a content source. The root is
-// compared by identity, so an alternate spelling of it, a symlink to it, and an `output_dir` inside
-// it are rejected the same way.
+// compared by identity, so an alternate spelling of it, a symlink to it, a symlink inside
+// `output_dir` that leads into it, and an `output_dir` inside it are rejected the same way.
 static void test_rejects_output_in_content_dir(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-content-XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -555,7 +665,6 @@ static void test_rejects_output_in_content_dir(void) {
     return;
   }
   TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "") == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/public/old.html", "") == 0);
   struct Arena arena;
   arena_init(&arena);
   const char* content_dir = path_join(root_dir, "content", &arena);
@@ -583,15 +692,35 @@ static void test_rejects_output_in_content_dir(void) {
   check_rejects_output_in_root(&config, path_join(root_dir, "content/sub/b.md", &arena),
                                "content_dir");
 
-  // `output_dir` itself lies inside the root, so every output does.
-  config.content_dir = content_dir;
-  config.output_dir = path_join(root_dir, "content/public", &arena);
-  check_rejects_output_in_root(&config, path_join(config.output_dir, "a.html", &arena),
-                               "content_dir");
-
   // A symlink inside `output_dir` leads into the root.
+  config.content_dir = content_dir;
   config.output_dir = output_dir;
   check_rejects_output_in_root(&config, path_join(output_dir, "link/b.md", &arena), "content_dir");
+
+  // `output_dir` itself lies inside the root, and does not exist yet. Populate runs the early check
+  // itself, so a caller that skipped it is still refused, with the early check's diagnostic.
+  config.output_dir = path_join(root_dir, "content/public", &arena);
+  TEST_ASSERT(config.output_dir != NULL);
+  struct ContentEntry entry = {.output_path = path_join(config.output_dir, "a.html", &arena),
+                               .source_path = "content/a.md"};
+  const struct ContentEntry* entries[] = {&entry};
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, entries, 1, err,
+                                       sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n =
+      snprintf(expected, sizeof(expected),
+               "output directory would write inside 'content_dir': '%s'", config.output_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_MSG("actual: '%s'", err);
+  TEST_CHECK(manifest.count == 0);
+  manifest_free(&manifest);
+  path_list_free(&sources);
 
   site_config_free(&config);
   arena_free(&arena);
@@ -801,6 +930,8 @@ TEST_LIST = {
     {"accepts unique", test_accepts_unique},
     {"accepts missing templates dir", test_accepts_missing_templates_dir},
     {"accepts output beside input roots", test_accepts_output_beside_input_roots},
+    {"check output dir accepts dir outside input roots",
+     test_check_output_dir_accepts_dir_outside_input_roots},
     {"rejects duplicate", test_rejects_duplicate},
     {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
     {"rejects prefix collision", test_rejects_prefix_collision},
@@ -808,6 +939,7 @@ TEST_LIST = {
     {"rejects input overwrite", test_rejects_input_overwrite},
     {"rejects config overwrite", test_rejects_config_overwrite},
     {"rejects template overwrite", test_rejects_template_overwrite},
+    {"check output dir rejects dir in input root", test_check_output_dir_rejects_dir_in_input_root},
     {"rejects output in content dir", test_rejects_output_in_content_dir},
     {"rejects output in templates dir", test_rejects_output_in_templates_dir},
     {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},

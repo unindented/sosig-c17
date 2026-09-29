@@ -58,22 +58,31 @@ enum { FS_REASON_SIZE = 256 };
  * It holds one directory open at a time, so the depth of the tree is bounded by path length rather
  * than by the open-file limit.
  *
- * @param paths      Initialized path list that receives the matching paths. Must not be `NULL`.
- * @param root_dir   Directory tree to walk. Must not be `NULL`.
- * @param suffix     Literal filename suffix to match, such as `.md`. Must not be `NULL`.
- * @param reason     Receives the failure reason, always naming the exact path the failure happened
- *                   on: the directory that could not be inspected, opened, read or closed, or the
- *                   entry that could not be inspected. A caller must not append the root it passed,
- *                   because the reason is already more precise than that. May be `NULL` only when
- *                   `reason_len` is 0. Untouched on success.
- * @param reason_len Size of `reason` in bytes.
+ * It skips `excluded_dir` and everything below it, compared by identity rather than by path text,
+ * so the skip holds on every path that reaches it: its own path in the tree, a symlinked alias, or
+ * `root_dir` itself. A build passes its `output_dir` here for every input tree it walks, so a file
+ * that an earlier build generated is never read back as an input, even through a symlink into the
+ * output tree. An `excluded_dir` that does not exist yet holds no file and excludes nothing.
+ *
+ * @param paths        Initialized path list that receives the matching paths. Must not be `NULL`.
+ * @param root_dir     Directory tree to walk. Must not be `NULL`.
+ * @param excluded_dir Directory left out of the walk, or `NULL` to walk the whole tree. A path with
+ *                     no identity excludes nothing.
+ * @param suffix       Literal filename suffix to match, such as `.md`. Must not be `NULL`.
+ * @param reason       Receives the failure reason, always naming the exact path the failure
+ *                     happened on: the directory that could not be inspected, opened, read or
+ *                     closed, or the entry that could not be inspected. A caller must not append
+ *                     the root it passed, because the reason is already more precise than that.
+ *                     May be `NULL` only when `reason_len` is 0. Untouched on success.
+ * @param reason_len   Size of `reason` in bytes.
  * @return `0` on success, or `-1` on a directory, entry, or allocation failure.
  */
 int fs_list_files_with_suffix(struct PathList* paths,
                               const char* root_dir,
+                              const char* excluded_dir,
                               const char* suffix,
                               char* reason,
-                              size_t reason_len) __attribute__((nonnull(1, 2, 3)));
+                              size_t reason_len) __attribute__((nonnull(1, 2, 4)));
 
 /**
  * @brief Reads a regular file into a freshly allocated, `NUL`-terminated buffer.

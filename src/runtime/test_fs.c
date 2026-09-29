@@ -121,7 +121,7 @@ static void test_list_files_matches_suffix(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "untouched";
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", reason, sizeof(reason)) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason)) == 0);
   TEST_CHECK(paths.count == 2);
   TEST_CHECK(strcmp(paths.items[0], root_md) == 0);
   TEST_CHECK(strcmp(paths.items[1], nested_md) == 0);
@@ -149,7 +149,7 @@ static void test_list_files_empty_suffix_matches_all(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, "", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, "", NULL, 0) == 0);
   TEST_CHECK(paths.count == 2);
   path_list_free(&paths);
 
@@ -167,7 +167,7 @@ static void test_list_files_accepts_empty_dir(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 0);
   path_list_free(&paths);
 
@@ -193,7 +193,7 @@ static void test_list_files_skips_symlink_cycle(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -222,7 +222,7 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -251,7 +251,7 @@ static void test_list_files_walks_aliased_dir_once(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -289,7 +289,7 @@ static void test_list_files_walks_alias_chain_once(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   char* expected = path_join(root_dir, "a/x/x/page.md", &arena);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], expected) == 0);
@@ -297,6 +297,55 @@ static void test_list_files_walks_alias_chain_once(void) {
 
   arena_free(&arena);
   remove_fixture_tree(base_dir);
+}
+
+// A directory passed as `excluded_dir` is left out with everything below it on every path that
+// reaches it, its own path and a symlinked alias alike, because the walk compares identities. The
+// exclusion names the same directory whichever of those spellings the caller passes. A sibling that
+// only shares its name as a prefix is still walked, and an `excluded_dir` that does not exist
+// excludes nothing.
+static void test_list_files_skips_excluded_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-list-excluded.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* page = path_join(root_dir, "page.md", &arena);
+  char* excluded_page = path_join(root_dir, "public/old.md", &arena);
+  char* sibling_page = path_join(root_dir, "publicx/page.md", &arena);
+  char* excluded_dir = path_join(root_dir, "public", &arena);
+  char* alias_dir = path_join(root_dir, "alias", &arena);
+  char* missing_dir = path_join(root_dir, "missing", &arena);
+  TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(excluded_page, "x", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(sibling_page, "x", 1, NULL, 0) == 0);
+  TEST_ASSERT(symlink("public", alias_dir) == 0);
+
+  const char* const exclusions[] = {excluded_dir, alias_dir};
+  for (size_t i = 0; i < sizeof(exclusions) / sizeof(exclusions[0]); i++) {
+    struct PathList paths;
+    path_list_init(&paths);
+    TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, exclusions[i], ".md", NULL, 0) == 0);
+    TEST_CHECK(paths.count == 2);
+    TEST_CHECK(paths.count == 2 && strcmp(paths.items[0], page) == 0 &&
+               strcmp(paths.items[1], sibling_page) == 0);
+    path_list_free(&paths);
+  }
+
+  struct PathList paths;
+  path_list_init(&paths);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, missing_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(paths.count == 3);
+  TEST_CHECK(paths.count == 3 && strcmp(paths.items[0], page) == 0 &&
+             strcmp(paths.items[1], excluded_page) == 0 &&
+             strcmp(paths.items[2], sibling_page) == 0);
+  path_list_free(&paths);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // A tree deeper than the open-file limit is walked, because the walk closes each directory before
@@ -325,7 +374,7 @@ static void test_list_files_walks_tree_deeper_than_open_file_limit(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  const int rc = fs_list_files_with_suffix(&paths, root_dir, ".md", reason, sizeof(reason));
+  const int rc = fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason));
   // Restore the limit before asserting, so a failure cannot starve later tests of descriptors.
   (void)setrlimit(RLIMIT_NOFILE, &limit);
 
@@ -353,8 +402,8 @@ static void test_list_files_rejects_missing_dir(void) {
   struct PathList missing_paths;
   path_list_init(&missing_paths);
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_list_files_with_suffix(&missing_paths, missing, ".md", reason, sizeof(reason)) ==
-             -1);
+  TEST_CHECK(fs_list_files_with_suffix(&missing_paths, missing, NULL, ".md", reason,
+                                       sizeof(reason)) == -1);
   // Every walk failure names its own path, so the reason is self-contained.
   char expected[FS_REASON_SIZE];
   char message[FS_REASON_SIZE];
@@ -387,7 +436,7 @@ static void test_list_files_rejects_file_root(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_list_files_with_suffix(&paths, plain, ".md", reason, sizeof(reason)) == -1);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, plain, NULL, ".md", reason, sizeof(reason)) == -1);
   TEST_CHECK(paths.count == 0);
   char expected[FS_REASON_SIZE];
   char message[FS_REASON_SIZE];
@@ -428,7 +477,7 @@ static void test_list_files_rejects_unstatable_entry(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  const int rc = fs_list_files_with_suffix(&paths, root_dir, ".md", reason, sizeof(reason));
+  const int rc = fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason));
   // Restore the mode before asserting: a failing assertion aborts the test, and neither the cleanup
   // below nor the harness can remove a directory it is not allowed to search.
   (void)chmod(sealed_dir, 0700);
@@ -992,6 +1041,7 @@ TEST_LIST = {
     {"list files skips symlink cycle to ancestor", test_list_files_skips_symlink_cycle_to_ancestor},
     {"list files walks aliased dir once", test_list_files_walks_aliased_dir_once},
     {"list files walks alias chain once", test_list_files_walks_alias_chain_once},
+    {"list files skips excluded dir", test_list_files_skips_excluded_dir},
     {"list files walks tree deeper than open file limit",
      test_list_files_walks_tree_deeper_than_open_file_limit},
     {"list files rejects missing dir", test_list_files_rejects_missing_dir},

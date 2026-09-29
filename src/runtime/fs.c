@@ -35,8 +35,9 @@ struct FsWalk {
 
   /**
    * Heap array of `visited_capacity` slots. The first `visited_count` hold the identity of every
-   * directory walked so far, sorted by device and then inode, so a directory reached a second time
-   * through a symlink is found by binary search and skipped.
+   * directory walked so far and of the excluded directory, sorted by device and then inode, so a
+   * directory reached a second time through a symlink, or the excluded one reached at all, is found
+   * by binary search and skipped.
    */
   struct FsIdentity* visited;
 
@@ -77,18 +78,33 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
                                            size_t reason_len) __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Records `dir_path` as visited, reporting whether an earlier step already walked it.
+ * @brief Records `excluded_dir` as already walked, so every path that reaches it is skipped.
+ *
+ * @param walk         Walk state whose visited set is seeded. Must not be `NULL`.
+ * @param excluded_dir Directory to leave out of the walk, or `NULL` for none. A path with no
+ *                     identity records nothing, because nothing below it can be listed.
+ * @param reason       Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ * @param reason_len   Size of `reason` in bytes.
+ * @return `0` on success, or `-1` on allocation failure.
+ */
+static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
+                                             const char* excluded_dir,
+                                             char* reason,
+                                             size_t reason_len) __attribute__((nonnull(1)));
+
+/**
+ * @brief Records one directory identity as visited, reporting whether it was already recorded.
  *
  * @param walk        Walk state whose visited set is searched and extended. Must not be `NULL`.
- * @param dir_path    Directory about to be walked. Symlinks are followed. Must not be `NULL`.
- * @param is_new_out  Receives `true` when `dir_path` had not been visited and is now recorded, or
+ * @param identity    Identity of the directory about to be walked or excluded. Must not be `NULL`.
+ * @param is_new_out  Receives `true` when `identity` had not been visited and is now recorded, or
  *                    `false` when it had. Written only on success. Must not be `NULL`.
  * @param reason      Receives the failure reason. May be `NULL` only when `reason_len` is 0.
  * @param reason_len  Size of `reason` in bytes.
- * @return `0` on success, or `-1` when `dir_path` cannot be inspected or on allocation failure.
+ * @return `0` on success, or `-1` on allocation failure.
  */
 static int fs_list_files_with_suffix_record(struct FsWalk* walk,
-                                            const char* dir_path,
+                                            const struct FsIdentity* identity,
                                             bool* is_new_out,
                                             char* reason,
                                             size_t reason_len) __attribute__((nonnull(1, 2, 3)));
@@ -253,12 +269,16 @@ static int fs_reason_path_errno(char* reason,
 
 int fs_list_files_with_suffix(struct PathList* paths,
                               const char* root_dir,
+                              const char* excluded_dir,
                               const char* suffix,
                               char* reason,
                               size_t reason_len) {
   struct FsWalk walk = {.paths = paths, .suffix = suffix};
   path_list_init(&walk.links);
-  int rc = fs_list_files_with_suffix_inner(&walk, root_dir, reason, reason_len);
+  int rc = fs_list_files_with_suffix_exclude(&walk, excluded_dir, reason, reason_len);
+  if (rc == 0) {
+    rc = fs_list_files_with_suffix_inner(&walk, root_dir, reason, reason_len);
+  }
   // A deferred link can defer more links of its own, so this reads `count` on every iteration
   // rather than once.
   for (size_t i = 0; rc == 0 && i < walk.links.count; i++) {
@@ -421,15 +441,24 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
                                            const char* dir_path,
                                            char* reason,
                                            size_t reason_len) {
+  // This `stat` does not validate the type. `opendir` in `read_dir_names` rejects a non-directory,
+  // which only the root can be, because `visit_matching_entry` passes on only entries it found to
+  // be directories.
+  struct stat st;
+  if (stat(dir_path, &st) != 0) {
+    return fs_reason_path_errno(reason, reason_len, "inspect directory", dir_path, errno);
+  }
+  const struct FsIdentity identity = {.device = (uint64_t)st.st_dev, .inode = (uint64_t)st.st_ino};
   bool is_new = false;
-  if (fs_list_files_with_suffix_record(walk, dir_path, &is_new, reason, reason_len) != 0) {
+  if (fs_list_files_with_suffix_record(walk, &identity, &is_new, reason, reason_len) != 0) {
     return -1;
   }
   if (!is_new) {
     // This silently skips a directory the walk already reached by another path: a symlink back
     // into its own ancestry, or a second alias of one directory. Every file below it is already in
     // `paths` under the first path, so nothing is missing. Walking it again would list each file
-    // once per path, and a chain of aliased directories multiplies that at every level.
+    // once per path, and a chain of aliased directories multiplies that at every level. The
+    // excluded directory is recorded before the walk starts, so it takes this skip on every path.
     return 0;
   }
 
@@ -452,32 +481,35 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
   return rc;
 }
 
+static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
+                                             const char* excluded_dir,
+                                             char* reason,
+                                             size_t reason_len) {
+  struct FsIdentity identity;
+  if (excluded_dir == NULL || fs_identify(excluded_dir, &identity) != 0) {
+    return 0;
+  }
+  bool is_new = false;
+  return fs_list_files_with_suffix_record(walk, &identity, &is_new, reason, reason_len);
+}
+
 static int fs_list_files_with_suffix_record(struct FsWalk* walk,
-                                            const char* dir_path,
+                                            const struct FsIdentity* identity,
                                             bool* is_new_out,
                                             char* reason,
                                             size_t reason_len) {
-  // This `stat` does not validate the type. `opendir` in `read_dir_names` rejects a non-directory,
-  // which only the root can be, because `visit_matching_entry` passes on only entries it found to
-  // be directories.
-  struct stat st;
-  if (stat(dir_path, &st) != 0) {
-    return fs_reason_path_errno(reason, reason_len, "inspect directory", dir_path, errno);
-  }
-  const struct FsIdentity identity = {.device = (uint64_t)st.st_dev, .inode = (uint64_t)st.st_ino};
-
   // Binary search for the first slot not below `identity`, which is where it is or belongs.
   size_t low = 0;
   size_t high = walk->visited_count;
   while (low < high) {
     const size_t mid = low + (high - low) / 2;
-    if (compare_identities(&walk->visited[mid], &identity) < 0) {
+    if (compare_identities(&walk->visited[mid], identity) < 0) {
       low = mid + 1;
     } else {
       high = mid;
     }
   }
-  if (low < walk->visited_count && compare_identities(&walk->visited[low], &identity) == 0) {
+  if (low < walk->visited_count && compare_identities(&walk->visited[low], identity) == 0) {
     *is_new_out = false;
     return 0;
   }
@@ -500,7 +532,7 @@ static int fs_list_files_with_suffix_record(struct FsWalk* walk,
   // directory once, and a content tree has far fewer directories than files.
   memmove(&walk->visited[low + 1], &walk->visited[low],
           (walk->visited_count - low) * sizeof(*walk->visited));
-  walk->visited[low] = identity;
+  walk->visited[low] = *identity;
   walk->visited_count++;
   *is_new_out = true;
   return 0;
