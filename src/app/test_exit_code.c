@@ -14,5 +14,7 @@ static void test_exit_codes_have_documented_values(void) {
   TEST_CHECK(EXIT_CODE_USAGE == 2);
 }
 
-TEST_LIST = {{"exit codes have documented values", test_exit_codes_have_documented_values},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"exit codes have documented values", test_exit_codes_have_documented_values},
+    {NULL, NULL},
+};

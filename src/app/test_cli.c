@@ -585,4 +585,5 @@ TEST_LIST = {
     {"print version reports flush failure errno", test_print_version_reports_flush_failure_errno},
     {"print usage names program and command", test_print_usage_names_program_and_command},
     {"print usage reports write failure", test_print_usage_reports_write_failure},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

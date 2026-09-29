@@ -115,10 +115,12 @@ static void test_propagates_job_failure(void) {
   TEST_CHECK(atomic_load_explicit(&counter.count, memory_order_relaxed) == 16);
 }
 
-TEST_LIST = {{"default worker count is at least one", test_default_worker_count_is_at_least_one},
-             {"runs all jobs", test_runs_all_jobs},
-             {"zero jobs starts no workers", test_zero_jobs_starts_no_workers},
-             {"zero workers promoted to one", test_zero_workers_promoted_to_one},
-             {"worker count clamped to job count", test_worker_count_clamped_to_job_count},
-             {"propagates job failure", test_propagates_job_failure},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"default worker count is at least one", test_default_worker_count_is_at_least_one},
+    {"runs all jobs", test_runs_all_jobs},
+    {"zero jobs starts no workers", test_zero_jobs_starts_no_workers},
+    {"zero workers promoted to one", test_zero_workers_promoted_to_one},
+    {"worker count clamped to job count", test_worker_count_clamped_to_job_count},
+    {"propagates job failure", test_propagates_job_failure},
+    {NULL, NULL},
+};

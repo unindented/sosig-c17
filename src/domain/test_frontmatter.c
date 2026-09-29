@@ -453,4 +453,5 @@ TEST_LIST = {
     {"rejects invalid metadata", test_rejects_invalid_metadata},
     {"rejects overlong slug", test_rejects_overlong_slug},
     {"rejects nul in string values", test_rejects_nul_in_string_values},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

@@ -115,4 +115,5 @@ TEST_LIST = {
     {"report error accepts null buffer", test_report_error_accepts_null_buffer},
     {"system message falls back for unknown errno",
      test_system_message_falls_back_for_unknown_errno},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

@@ -105,4 +105,5 @@ TEST_LIST = {
     {"html escape appends to existing content", test_html_escape_appends_to_existing_content},
     {"html escape honors length", test_html_escape_honors_length},
     {"html escape empty input", test_html_escape_empty_input},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

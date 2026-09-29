@@ -1096,4 +1096,5 @@ TEST_LIST = {
      test_reports_frontmatter_reason_before_long_source_path},
     {"reports unreadable source", test_reports_unreadable_source},
     {"appends one error line per failing source", test_appends_one_error_line_per_failing_source},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

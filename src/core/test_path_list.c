@@ -63,7 +63,9 @@ static void test_push_grows_and_copies(void) {
   TEST_CHECK(list.items == NULL);
 }
 
-TEST_LIST = {{"init is empty", test_init_is_empty},
-             {"free allows reuse", test_free_allows_reuse},
-             {"push grows and copies", test_push_grows_and_copies},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"init is empty", test_init_is_empty},
+    {"free allows reuse", test_free_allows_reuse},
+    {"push grows and copies", test_push_grows_and_copies},
+    {NULL, NULL},
+};

@@ -495,9 +495,11 @@ static void test_reports_unwritable_stdout(void) {
   TEST_CHECK(rmdir(root_dir) == 0);
 }
 
-TEST_LIST = {{"prints loaded config", test_prints_loaded_config},
-             {"prints empty template arrays", test_prints_empty_template_arrays},
-             {"reports missing config", test_reports_missing_config},
-             {"reports missing required key", test_reports_missing_required_key},
-             {"reports unwritable stdout", test_reports_unwritable_stdout},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"prints loaded config", test_prints_loaded_config},
+    {"prints empty template arrays", test_prints_empty_template_arrays},
+    {"reports missing config", test_reports_missing_config},
+    {"reports missing required key", test_reports_missing_required_key},
+    {"reports unwritable stdout", test_reports_unwritable_stdout},
+    {NULL, NULL},
+};

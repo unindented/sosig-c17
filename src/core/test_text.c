@@ -141,4 +141,5 @@ TEST_LIST = {
     {"slugify folds non-ascii distinctly", test_slugify_folds_non_ascii_distinctly},
     {"slugify honors length", test_slugify_honors_length},
     {"slugify reports length", test_slugify_reports_length},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

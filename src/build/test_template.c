@@ -1027,4 +1027,5 @@ TEST_LIST = {
     {"rejects section name mismatch", test_rejects_section_name_mismatch},
     {"rejects malformed tags", test_rejects_malformed_tags},
     {"rejects syntax error in partial", test_rejects_syntax_error_in_partial},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

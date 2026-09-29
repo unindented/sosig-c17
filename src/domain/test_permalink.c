@@ -86,8 +86,10 @@ static void test_expand_leaves_unknown_token_literal(void) {
   arena_free(&arena);
 }
 
-TEST_LIST = {{"expand substitutes tokens", test_expand_substitutes_tokens},
-             {"expand collapses redundant separators", test_expand_collapses_redundant_separators},
-             {"expand appends directory index", test_expand_appends_directory_index},
-             {"expand leaves unknown token literal", test_expand_leaves_unknown_token_literal},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"expand substitutes tokens", test_expand_substitutes_tokens},
+    {"expand collapses redundant separators", test_expand_collapses_redundant_separators},
+    {"expand appends directory index", test_expand_appends_directory_index},
+    {"expand leaves unknown token literal", test_expand_leaves_unknown_token_literal},
+    {NULL, NULL},
+};

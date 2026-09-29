@@ -1063,4 +1063,5 @@ TEST_LIST = {
     {"reports bad template", test_reports_bad_template},
     {"reports one line per failing entry", test_reports_one_line_per_failing_entry},
     {"reports unwritable output", test_reports_unwritable_output},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

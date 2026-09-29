@@ -288,4 +288,5 @@ TEST_LIST = {
     {"detects prefix collision regardless of order",
      test_detects_prefix_collision_regardless_of_order},
     {"no prefix collision among distinct files", test_no_prefix_collision_among_distinct_files},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

@@ -364,4 +364,5 @@ TEST_LIST = {
     {"iterates content entries in content template",
      test_iterates_content_entries_in_content_template},
     {"reports missing template", test_reports_missing_template},
-    {NULL, NULL}};
+    {NULL, NULL},
+};

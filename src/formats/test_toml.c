@@ -259,14 +259,16 @@ static void test_rejects_non_datetime_values(void) {
   arena_free(&arena);
 }
 
-TEST_LIST = {{"is text rejects embedded nul", test_is_text_rejects_embedded_nul},
-             {"unix epoch anchor converts to zero", test_unix_epoch_anchor_converts_to_zero},
-             {"pre epoch dates convert to negative", test_pre_epoch_dates_convert_to_negative},
-             {"leap day converts in century year", test_leap_day_converts_in_century_year},
-             {"date only normalizes to midnight utc", test_date_only_normalizes_to_midnight_utc},
-             {"utc datetime round trips", test_utc_datetime_round_trips},
-             {"offsets convert to same utc instant", test_offsets_convert_to_same_utc_instant},
-             {"fractional seconds preserved", test_fractional_seconds_preserved},
-             {"timezoneless datetime treated as utc", test_timezoneless_datetime_treated_as_utc},
-             {"rejects non-datetime values", test_rejects_non_datetime_values},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"is text rejects embedded nul", test_is_text_rejects_embedded_nul},
+    {"unix epoch anchor converts to zero", test_unix_epoch_anchor_converts_to_zero},
+    {"pre epoch dates convert to negative", test_pre_epoch_dates_convert_to_negative},
+    {"leap day converts in century year", test_leap_day_converts_in_century_year},
+    {"date only normalizes to midnight utc", test_date_only_normalizes_to_midnight_utc},
+    {"utc datetime round trips", test_utc_datetime_round_trips},
+    {"offsets convert to same utc instant", test_offsets_convert_to_same_utc_instant},
+    {"fractional seconds preserved", test_fractional_seconds_preserved},
+    {"timezoneless datetime treated as utc", test_timezoneless_datetime_treated_as_utc},
+    {"rejects non-datetime values", test_rejects_non_datetime_values},
+    {NULL, NULL},
+};

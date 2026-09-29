@@ -55,8 +55,10 @@ static void test_parse_size_rejects_malformed(void) {
   TEST_CHECK(value == 7);
 }
 
-TEST_LIST = {{"parse size accepts digits", test_parse_size_accepts_digits},
-             {"parse size accepts max and rejects overflow",
-              test_parse_size_accepts_max_and_rejects_overflow},
-             {"parse size rejects malformed", test_parse_size_rejects_malformed},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"parse size accepts digits", test_parse_size_accepts_digits},
+    {"parse size accepts max and rejects overflow",
+     test_parse_size_accepts_max_and_rejects_overflow},
+    {"parse size rejects malformed", test_parse_size_rejects_malformed},
+    {NULL, NULL},
+};

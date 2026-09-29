@@ -704,4 +704,5 @@ TEST_LIST = {
     {"mkdir_p rejects uncreatable component", test_mkdir_p_rejects_uncreatable_component},
     {"identify distinguishes files and rejects missing",
      test_identify_distinguishes_files_and_rejects_missing},
-    {NULL, NULL}};
+    {NULL, NULL},
+};
