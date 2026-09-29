@@ -4,9 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "build/manifest_builder.h"
 #include "build/template.h"
 #include "core/error.h"
-#include "core/path.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
@@ -104,7 +104,7 @@ static int write_rendered_template(const char* templates_dir,
     goto cleanup;
   }
 
-  output_path = path_join(output_dir, template_name, &scratch);
+  output_path = manifest_builder_derive_template_output(output_dir, template_name, &scratch);
   if (output_path == NULL) {
     (void)error_report(err, err_len, "out of memory building output path for '%s'", template_name);
     goto cleanup;

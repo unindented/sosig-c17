@@ -367,6 +367,12 @@ int manifest_builder_populate(struct Manifest* manifest,
   return rc;
 }
 
+char* manifest_builder_derive_template_output(const char* output_dir,
+                                              const char* template_name,
+                                              struct Arena* arena) {
+  return path_join(output_dir, template_name, arena);
+}
+
 static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct SiteConfig* site_config,
                               const char* config_path,
@@ -523,7 +529,8 @@ static int register_template_output(struct Manifest* manifest,
                           metrics.segment);
   }
 
-  const char* output_path = path_join(output_dir, template_name, scratch);
+  const char* output_path =
+      manifest_builder_derive_template_output(output_dir, template_name, scratch);
   if (output_path == NULL) {
     return error_report(err, err_len, "out of memory building output path for '%s'", template_name);
   }

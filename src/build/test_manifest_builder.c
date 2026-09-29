@@ -781,10 +781,22 @@ static void test_rejects_oversize_template_segment(void) {
   site_config_free(&config);
 }
 
-// `manifest_builder_populate` is this module's one exported function, tested above. The writing it
-// guards lives in `site_writer`, whose `write_*` functions are exercised end-to-end by the golden
-// test suite rather than in a unit test. Entry ordering and `site.updated` derivation live in
-// `content_entry` and are tested in `src/domain/test_content_entry.c`.
+// A configured template's output path is its name joined below `output_dir`, nested directories
+// included. `site_writer` writes to this same path, so it is the one the manifest checked.
+static void test_derive_template_output_joins_output_dir(void) {
+  struct Arena arena;
+  arena_init(&arena);
+  const char* top = manifest_builder_derive_template_output("public", "index.html", &arena);
+  const char* nested = manifest_builder_derive_template_output("public", "feeds/atom.xml", &arena);
+  TEST_ASSERT(top != NULL && nested != NULL);
+  TEST_CHECK(strcmp(top, "public/index.html") == 0);
+  TEST_CHECK(strcmp(nested, "public/feeds/atom.xml") == 0);
+  arena_free(&arena);
+}
+
+// The writing this module guards lives in `site_writer`, whose `write_*` functions are exercised
+// end-to-end by the golden test suite rather than in a unit test. Entry ordering and `site.updated`
+// derivation live in `content_entry` and are tested in `src/domain/test_content_entry.c`.
 
 TEST_LIST = {
     {"accepts unique", test_accepts_unique},
@@ -802,5 +814,6 @@ TEST_LIST = {
     {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},
     {"rejects oversize template path", test_rejects_oversize_template_path},
     {"rejects oversize template segment", test_rejects_oversize_template_segment},
+    {"derive template output joins output dir", test_derive_template_output_joins_output_dir},
     {NULL, NULL},
 };

@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 
+struct Arena;
 struct ContentEntry;
 struct Manifest;
 struct PathList;
@@ -68,5 +69,21 @@ int manifest_builder_populate(struct Manifest* manifest,
                               size_t content_entry_count,
                               char* err,
                               size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
+
+/**
+ * @brief Derives the output path a configured aggregate or feed template is written to.
+ *
+ * `manifest_builder_populate` registers this path and `site_writer` writes to it, so the path the
+ * manifest checked is the path that is written.
+ *
+ * @param output_dir    Output directory the template name is rooted under. Must not be `NULL`.
+ * @param template_name Safe relative template name. Must not be `NULL`.
+ * @param arena         Arena that owns the returned path. Must not be `NULL`.
+ * @return Terminated output path owned by `arena`, or `NULL` on allocation failure.
+ */
+char* manifest_builder_derive_template_output(const char* output_dir,
+                                              const char* template_name,
+                                              struct Arena* arena)
+    __attribute__((nonnull(1, 2, 3)));
 
 #endif
