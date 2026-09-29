@@ -13,7 +13,7 @@ struct SiteConfig;
  *        output that would overwrite one of this build's own input files.
  *
  * Registers content entry and template output paths before writing any file, so it catches a
- * collision between two sources up front. It rejects three kinds of collision:
+ * collision between two producers up front. It rejects three kinds of collision:
  * - two producers that claim one output path, compared after folding ASCII case
  * - an output path that names a build input
  * - an output path that is a `/`-delimited directory prefix of another output path

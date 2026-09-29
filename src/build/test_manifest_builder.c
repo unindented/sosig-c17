@@ -22,7 +22,7 @@
 #include "test_support.h"
 
 // Distinct output paths are all registered without error.
-static void test_populate_manifest_accepts_unique(void) {
+static void test_accepts_unique(void) {
   struct SiteConfig config;
   site_config_init(&config);
   config.output_dir = "public";
@@ -50,7 +50,7 @@ static void test_populate_manifest_accepts_unique(void) {
 // A `templates_dir` that does not exist holds no file an output could overwrite, so it claims
 // nothing and the manifest still populates. The build reports the missing template later, from the
 // render that needed it, as `test_reports_bad_template` in `src/app/test_cmd_build.c` pins.
-static void test_populate_manifest_accepts_missing_templates_dir(void) {
+static void test_accepts_missing_templates_dir(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-missing-XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   TEST_ASSERT(root_dir != NULL);
@@ -90,7 +90,7 @@ static void test_populate_manifest_accepts_missing_templates_dir(void) {
 }
 
 // Two entries claiming the same output path are rejected with a diagnostic naming the path.
-static void test_populate_manifest_rejects_duplicate(void) {
+static void test_rejects_duplicate(void) {
   struct SiteConfig config;
   site_config_init(&config);
   config.output_dir = "public";
@@ -125,7 +125,7 @@ static void test_populate_manifest_rejects_duplicate(void) {
 // filesystem such as the macOS default, where the second write would silently replace the first.
 // They are rejected as a duplicate on every platform, so a site that builds on Linux does not
 // break on macOS. The trailing path is the second claim's own spelling.
-static void test_populate_manifest_rejects_case_folded_duplicate(void) {
+static void test_rejects_case_folded_duplicate(void) {
   struct SiteConfig config;
   site_config_init(&config);
   config.output_dir = "public";
@@ -156,10 +156,10 @@ static void test_populate_manifest_rejects_case_folded_duplicate(void) {
 }
 
 // Two entries whose output paths collide as a file and a directory, where one is a `/`-delimited
-// prefix of the other, are rejected even though neither is a duplicate. The two
-// producers lead the message ahead of the one unbounded path. The ancestor path is not repeated
-// because it is a prefix of the path that is printed.
-static void test_populate_manifest_rejects_prefix_collision(void) {
+// prefix of the other, are rejected even though neither is a duplicate. The two producers lead the
+// message ahead of the one unbounded path. The ancestor path is not repeated because it is a prefix
+// of the path that is printed.
+static void test_rejects_prefix_collision(void) {
   struct SiteConfig config;
   site_config_init(&config);
   config.output_dir = "public";
@@ -195,7 +195,7 @@ static void test_populate_manifest_rejects_prefix_collision(void) {
 // `for 'dup.html' and 'dup.html'`, which reads as a value colliding with itself and says nothing
 // about which key to edit. Both cases are asserted because a label carrying only the config key
 // would distinguish them in the second case but not the first.
-static void test_populate_manifest_rejects_duplicate_template(void) {
+static void test_rejects_duplicate_template(void) {
   static const char* const one_list[] = {"dup.html", "dup.html"};
   static const char* const shared[] = {"dup.html"};
 
@@ -247,7 +247,7 @@ static void test_populate_manifest_rejects_duplicate_template(void) {
 // is what makes the check meaningful. The function compares identity rather than path text, because
 // a real collision arrives as an output rooted at `output_dir` against a source rooted at
 // `content_dir`.
-static void test_populate_manifest_rejects_input_overwrite(void) {
+static void test_rejects_input_overwrite(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-XXXXXX";
   char* root_dir = mkdtemp(root_dir_template);
   TEST_ASSERT(root_dir != NULL);
@@ -300,7 +300,7 @@ static void test_populate_manifest_rejects_input_overwrite(void) {
 // the build overwrote the file that configured it and still reported success: `output_dir = "."`
 // plus a template named `sosig.toml` is all it takes. The loss is unrecoverable. Reached through
 // the template list rather than a content entry because that is the shape a real project hits.
-static void test_populate_manifest_rejects_config_overwrite(void) {
+static void test_rejects_config_overwrite(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-config-XXXXXX";
   char* root_dir = mkdtemp(root_dir_template);
   TEST_ASSERT(root_dir != NULL);
@@ -350,7 +350,7 @@ static void test_populate_manifest_rejects_config_overwrite(void) {
 // only by an entry's `template` override, and a partial that nothing configures at all, which
 // `template.c` resolves only during the render. Each is a separate case, since a claim built from
 // the configured names instead would pass the first two and miss the third.
-static void test_populate_manifest_rejects_template_overwrite(void) {
+static void test_rejects_template_overwrite(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-template-XXXXXX";
   char* root_dir = mkdtemp(root_dir_template);
   TEST_ASSERT(root_dir != NULL);
@@ -457,7 +457,7 @@ static void test_populate_manifest_rejects_template_overwrite(void) {
 // nothing, because a partial the walk could not see would stay overwritable. A regular file in
 // place of the directory is the portable way to make the walk fail. The reason names the path the
 // walk failed on, so the configured root is not repeated ahead of it.
-static void test_populate_manifest_rejects_unlistable_templates_dir(void) {
+static void test_rejects_unlistable_templates_dir(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-unlistable-XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   TEST_ASSERT(root_dir != NULL);
@@ -505,7 +505,7 @@ static void test_populate_manifest_rejects_unlistable_templates_dir(void) {
 // longer than `OUTPUT_PATH_RELATIVE_LEN_MAX`, which is larger than `ERROR_MESSAGE_SIZE`, so leading
 // with the name would make the limit clause unreachable at every triggering input. The message
 // would be 511 bytes of filename and nothing else. Asserting the head is what pins the ordering.
-static void test_populate_manifest_rejects_oversize_template_path(void) {
+static void test_rejects_oversize_template_path(void) {
   char name[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
   memset(name, 'a', sizeof(name) - 1);
   name[sizeof(name) - 1] = '\0';
@@ -550,7 +550,7 @@ static void test_populate_manifest_rejects_oversize_template_path(void) {
 // A configured template with one overlong path segment is rejected against the per-filename limit
 // rather than the whole-path one, so the two limits stay distinguishable. The whole message fits,
 // so it is asserted in full.
-static void test_populate_manifest_rejects_oversize_template_segment(void) {
+static void test_rejects_oversize_template_segment(void) {
   char name[FILENAME_LEN_MAX + 32];
   memset(name, 'b', sizeof(name) - 1);
   name[sizeof(name) - 1] = '\0';
@@ -590,23 +590,17 @@ static void test_populate_manifest_rejects_oversize_template_segment(void) {
 // `content_entry` and are tested in `src/domain/test_content_entry.c`.
 
 TEST_LIST = {
-    {"populate manifest accepts unique", test_populate_manifest_accepts_unique},
-    {"populate manifest accepts missing templates dir",
-     test_populate_manifest_accepts_missing_templates_dir},
-    {"populate manifest rejects duplicate", test_populate_manifest_rejects_duplicate},
-    {"populate manifest rejects case folded duplicate",
-     test_populate_manifest_rejects_case_folded_duplicate},
-    {"populate manifest rejects prefix collision", test_populate_manifest_rejects_prefix_collision},
-    {"populate manifest rejects duplicate template",
-     test_populate_manifest_rejects_duplicate_template},
-    {"populate manifest rejects input overwrite", test_populate_manifest_rejects_input_overwrite},
-    {"populate manifest rejects config overwrite", test_populate_manifest_rejects_config_overwrite},
-    {"populate manifest rejects template overwrite",
-     test_populate_manifest_rejects_template_overwrite},
-    {"populate manifest rejects unlistable templates dir",
-     test_populate_manifest_rejects_unlistable_templates_dir},
-    {"populate manifest rejects oversize template path",
-     test_populate_manifest_rejects_oversize_template_path},
-    {"populate manifest rejects oversize template segment",
-     test_populate_manifest_rejects_oversize_template_segment},
-    {NULL, NULL}};
+    {"accepts unique", test_accepts_unique},
+    {"accepts missing templates dir", test_accepts_missing_templates_dir},
+    {"rejects duplicate", test_rejects_duplicate},
+    {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
+    {"rejects prefix collision", test_rejects_prefix_collision},
+    {"rejects duplicate template", test_rejects_duplicate_template},
+    {"rejects input overwrite", test_rejects_input_overwrite},
+    {"rejects config overwrite", test_rejects_config_overwrite},
+    {"rejects template overwrite", test_rejects_template_overwrite},
+    {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},
+    {"rejects oversize template path", test_rejects_oversize_template_path},
+    {"rejects oversize template segment", test_rejects_oversize_template_segment},
+    {NULL, NULL},
+};
