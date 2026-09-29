@@ -1,3 +1,6 @@
+#define _DARWIN_C_SOURCE
+#define _DEFAULT_SOURCE
+
 #include "runtime/fs.h"
 
 #include <dirent.h>
@@ -11,76 +14,130 @@
 #include <sys/types.h>
 
 #include "core/error.h"
+#include "core/grow.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "core/text.h"
 #include "shared/arena.h"
 
-/**
- * One directory on the active recursion path, identified by device and inode so a symlinked
- * directory whose target is one of its own ancestors is detected as a cycle and not followed.
- */
-struct DirCrumb {
-  dev_t dev;
-  ino_t ino;
-  const struct DirCrumb* parent;
+/** First slot count allocated when a walk records its first directory. */
+enum { FS_WALK_VISITED_CAPACITY_MIN = 16 };
+
+_Static_assert(FS_WALK_VISITED_CAPACITY_MIN >= 1,
+               "grow_capacity requires a minimum capacity of at least 1");
+
+/** State that one directory walk carries from its root through every directory it reaches. */
+struct FsWalk {
+  /** Path list that receives the matching paths, unsorted until the walk ends. */
+  struct PathList* paths;
+
+  /** Literal filename suffix to match. */
+  const char* suffix;
+
+  /**
+   * Heap array of `visited_capacity` slots. The first `visited_count` hold the identity of every
+   * directory walked so far, sorted by device and then inode, so a directory reached a second time
+   * through a symlink is found by binary search and skipped.
+   */
+  struct FsIdentity* visited;
+
+  /** Number of populated entries in `visited`. */
+  size_t visited_count;
+
+  /** Allocated slots in `visited`. */
+  size_t visited_capacity;
+
+  /**
+   * Symlinked directories found so far, in the order the walk found them. The walk reaches them
+   * only after walking the root's own tree without following a symlink, so a directory with a path
+   * of its own in that tree is listed under that path rather than under an alias to it.
+   */
+  struct PathList links;
 };
 
 /**
- * @brief Walks a directory tree and appends matching files to `paths` without sorting.
+ * @brief Walks one directory, appending matching files to `walk->paths` without sorting.
  *
- * @param paths      Path list that receives the matching paths. Must not be `NULL`.
- * @param dir_path   Directory to walk. The tree root on the outermost call. The subdirectory
- *                   being scanned on every recursive one. Must not be `NULL`.
- * @param suffix     Literal filename suffix to match. Must not be `NULL`.
- * @param ancestors  Device/inode chain of the directories enclosing `dir_path`, including
- *                   `dir_path` itself, used to detect and skip symlink cycles.
+ * Skips a directory the walk has already visited. Otherwise lists the directory's entries, closes
+ * it, and visits the entries in byte order, recursing into each real subdirectory and deferring
+ * each symlinked one to `walk->links`. Closing before recursing holds one directory stream open at
+ * a time, whatever the depth of the tree.
+ *
+ * @param walk       Walk state. Must not be `NULL`.
+ * @param dir_path   Directory to walk. The tree root, a deferred symlink, or a real subdirectory
+ *                   being scanned. Must not be `NULL`.
  * @param reason     Receives the failure reason, naming the directory that failed. May be `NULL`
  *                   only when `reason_len` is 0.
  * @param reason_len Size of `reason` in bytes.
- * @return `0` on success, or `-1` on a directory or allocation failure.
+ * @return `0` on success, including a skipped directory, or `-1` on a directory or allocation
+ *         failure.
  */
-static int fs_list_files_with_suffix_inner(struct PathList* paths,
+static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
                                            const char* dir_path,
-                                           const char* suffix,
-                                           const struct DirCrumb* ancestors,
                                            char* reason,
-                                           size_t reason_len) __attribute__((nonnull(1, 2, 3)));
+                                           size_t reason_len) __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Appends one matching regular file to `paths` or descends into a subdirectory.
+ * @brief Records `dir_path` as visited, reporting whether an earlier step already walked it.
  *
- * @param paths      Path list that receives matching paths. Must not be `NULL`.
+ * @param walk        Walk state whose visited set is searched and extended. Must not be `NULL`.
+ * @param dir_path    Directory about to be walked. Symlinks are followed. Must not be `NULL`.
+ * @param is_new_out  Receives `true` when `dir_path` had not been visited and is now recorded, or
+ *                    `false` when it had. Written only on success. Must not be `NULL`.
+ * @param reason      Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ * @param reason_len  Size of `reason` in bytes.
+ * @return `0` on success, or `-1` when `dir_path` cannot be inspected or on allocation failure.
+ */
+static int fs_list_files_with_suffix_record(struct FsWalk* walk,
+                                            const char* dir_path,
+                                            bool* is_new_out,
+                                            char* reason,
+                                            size_t reason_len) __attribute__((nonnull(1, 2, 3)));
+
+/**
+ * @brief Reads every entry name in `dir_path` except `.` and `..`, sorted in byte order.
+ *
+ * @param names      Initialized path list that receives the bare entry names. Must not be `NULL`.
+ * @param dir_path   Directory to read. Must not be `NULL`.
+ * @param reason     Receives the failure reason, naming `dir_path`. May be `NULL` only when
+ *                   `reason_len` is 0.
+ * @param reason_len Size of `reason` in bytes.
+ * @return `0` on success, or `-1` on an open, read, close, or allocation failure.
+ */
+static int read_dir_names(struct PathList* names,
+                          const char* dir_path,
+                          char* reason,
+                          size_t reason_len) __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Appends one matching regular file, descends into a real subdirectory, or defers a
+ *        symlinked one.
+ *
+ * @param walk       Walk state. Must not be `NULL`.
  * @param dir_path   Directory containing `entry_name`. Must not be `NULL`.
- * @param suffix     Literal filename suffix to match. Must not be `NULL`.
  * @param entry_name Bare directory entry name to inspect. Must not be `NULL`.
- * @param ancestors  Device/inode chain of `dir_path` and its ancestors, used to skip a subdirectory
- *                   that would form a symlink cycle.
  * @param scratch    Arena owning the joined path for this entry. Owned by the enclosing directory's
  *                   walk, which outlives any recursion into this entry. Must not be `NULL`.
  * @param reason     Receives the failure reason. May be `NULL` only when `reason_len` is 0.
  * @param reason_len Size of `reason` in bytes.
- * @return `0` on success (including skipped entries and skipped cycles), or `-1` on failure.
+ * @return `0` on success (including skipped entries), or `-1` on failure.
  */
-static int visit_matching_entry(struct PathList* paths,
+static int visit_matching_entry(struct FsWalk* walk,
                                 const char* dir_path,
-                                const char* suffix,
                                 const char* entry_name,
-                                const struct DirCrumb* ancestors,
                                 struct Arena* scratch,
                                 char* reason,
-                                size_t reason_len) __attribute__((nonnull(1, 2, 3, 4, 6)));
+                                size_t reason_len) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
- * @brief Reports whether a directory identity already appears in the ancestor chain.
+ * @brief Compares two directory identities by device and then inode.
  *
- * @param ancestors Ancestor device/inode chain to search, innermost first. `NULL` is an empty
- *                  chain.
- * @param dev       Device id of the directory to look for.
- * @param ino       Inode number of the directory to look for.
- * @return `true` when `dev`/`ino` is already in `ancestors` (a directory cycle), `false` otherwise.
+ * @param a First identity. Must not be `NULL`.
+ * @param b Second identity. Must not be `NULL`.
+ * @return A negative, zero, or positive value as `a` sorts before, equal to, or after `b`.
  */
-static bool has_dir_crumb_id(const struct DirCrumb* ancestors, dev_t dev, ino_t ino);
+static int compare_identities(const struct FsIdentity* a, const struct FsIdentity* b)
+    __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Reports whether `text` ends with the literal `suffix`.
@@ -186,24 +243,22 @@ int fs_list_files_with_suffix(struct PathList* paths,
                               const char* suffix,
                               char* reason,
                               size_t reason_len) {
-  struct stat root_st;
-  // Seed the ancestor chain with the root's own identity. A symlink anywhere in the tree pointing
-  // back at `root_dir` is the shortest cycle there is. This `stat` does not validate the root.
-  // `opendir` in the walk below rejects a non-directory.
-  if (stat(root_dir, &root_st) != 0) {
-    return fs_reason_path_errno(reason, reason_len, "inspect directory", root_dir, errno);
+  struct FsWalk walk = {.paths = paths, .suffix = suffix};
+  path_list_init(&walk.links);
+  int rc = fs_list_files_with_suffix_inner(&walk, root_dir, reason, reason_len);
+  // A deferred link can defer more links of its own, so this reads `count` on every iteration
+  // rather than once.
+  for (size_t i = 0; rc == 0 && i < walk.links.count; i++) {
+    rc = fs_list_files_with_suffix_inner(&walk, walk.links.items[i], reason, reason_len);
   }
-  const struct DirCrumb root_crumb = {.dev = root_st.st_dev, .ino = root_st.st_ino, .parent = NULL};
-  if (fs_list_files_with_suffix_inner(paths, root_dir, suffix, &root_crumb, reason, reason_len) !=
-      0) {
-    return -1;
-  }
+  free(walk.visited);
+  path_list_free(&walk.links);
   // Skip the empty case rather than let `qsort` see it. `path_list_init` leaves `items` `NULL`, and
   // passing a null pointer to `qsort` is undefined even with a count of 0.
-  if (paths->count > 0) {
+  if (rc == 0 && paths->count > 0) {
     qsort(paths->items, paths->count, sizeof(*paths->items), compare_paths);
   }
-  return 0;
+  return rc;
 }
 
 int fs_read_file(const char* file_path,
@@ -347,16 +402,25 @@ int fs_identify(const char* file_path, struct FsIdentity* identity_out) {
   return 0;
 }
 
-static int fs_list_files_with_suffix_inner(struct PathList* paths,
+static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
                                            const char* dir_path,
-                                           const char* suffix,
-                                           const struct DirCrumb* ancestors,
                                            char* reason,
                                            size_t reason_len) {
-  DIR* dp = opendir(dir_path);
-  if (dp == NULL) {
-    return fs_reason_path_errno(reason, reason_len, "open directory", dir_path, errno);
+  bool is_new = false;
+  if (fs_list_files_with_suffix_record(walk, dir_path, &is_new, reason, reason_len) != 0) {
+    return -1;
   }
+  if (!is_new) {
+    // This silently skips a directory the walk already reached by another path: a symlink back
+    // into its own ancestry, or a second alias of one directory. Every file below it is already in
+    // `paths` under the first path, so nothing is missing. Walking it again would list each file
+    // once per path, and a chain of aliased directories multiplies that at every level.
+    return 0;
+  }
+
+  struct PathList names;
+  path_list_init(&names);
+  int rc = read_dir_names(&names, dir_path, reason, reason_len);
 
   // This uses one arena for the whole directory rather than one per entry. Every joined path here
   // is a few hundred bytes, while an arena's first chunk is 8 KB, so a per-entry arena would mean
@@ -365,40 +429,111 @@ static int fs_list_files_with_suffix_inner(struct PathList* paths,
   // valid while the recursion below uses it as a root.
   struct Arena scratch;
   arena_init(&scratch);
+  for (size_t i = 0; rc == 0 && i < names.count; i++) {
+    rc = visit_matching_entry(walk, dir_path, names.items[i], &scratch, reason, reason_len);
+  }
+  arena_free(&scratch);
+  path_list_free(&names);
+  return rc;
+}
 
+static int fs_list_files_with_suffix_record(struct FsWalk* walk,
+                                            const char* dir_path,
+                                            bool* is_new_out,
+                                            char* reason,
+                                            size_t reason_len) {
+  // This `stat` does not validate the type. `opendir` in `read_dir_names` rejects a non-directory,
+  // which only the root can be, because `visit_matching_entry` passes on only entries it found to
+  // be directories.
+  struct stat st;
+  if (stat(dir_path, &st) != 0) {
+    return fs_reason_path_errno(reason, reason_len, "inspect directory", dir_path, errno);
+  }
+  const struct FsIdentity identity = {.device = (uint64_t)st.st_dev, .inode = (uint64_t)st.st_ino};
+
+  // Binary search for the first slot not below `identity`, which is where it is or belongs.
+  size_t low = 0;
+  size_t high = walk->visited_count;
+  while (low < high) {
+    const size_t mid = low + (high - low) / 2;
+    if (compare_identities(&walk->visited[mid], &identity) < 0) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  if (low < walk->visited_count && compare_identities(&walk->visited[low], &identity) == 0) {
+    *is_new_out = false;
+    return 0;
+  }
+
+  if (walk->visited_count == walk->visited_capacity) {
+    size_t capacity_next = 0;
+    size_t capacity_bytes_next = 0;
+    if (grow_capacity(walk->visited_capacity, FS_WALK_VISITED_CAPACITY_MIN, sizeof(*walk->visited),
+                      &capacity_next, &capacity_bytes_next) != 0) {
+      return error_report(reason, reason_len, "out of memory");
+    }
+    struct FsIdentity* visited = realloc(walk->visited, capacity_bytes_next);
+    if (visited == NULL) {
+      return error_report(reason, reason_len, "out of memory");
+    }
+    walk->visited = visited;
+    walk->visited_capacity = capacity_next;
+  }
+  // Inserting in place keeps the array sorted. The shift is linear, but the walk records each
+  // directory once, and a content tree has far fewer directories than files.
+  memmove(&walk->visited[low + 1], &walk->visited[low],
+          (walk->visited_count - low) * sizeof(*walk->visited));
+  walk->visited[low] = identity;
+  walk->visited_count++;
+  *is_new_out = true;
+  return 0;
+}
+
+static int read_dir_names(struct PathList* names,
+                          const char* dir_path,
+                          char* reason,
+                          size_t reason_len) {
+  DIR* dp = opendir(dir_path);
+  if (dp == NULL) {
+    return fs_reason_path_errno(reason, reason_len, "open directory", dir_path, errno);
+  }
   int rc = 0;
   while (rc == 0) {
     // `readdir` returns `NULL` both at end-of-directory and on error, so reset `errno` first to
     // tell them apart. A `NULL` entry with `errno` unchanged is the end. Otherwise the walk
     // failed.
     errno = 0;
-    struct dirent* entry = readdir(dp);
+    const struct dirent* entry = readdir(dp);
     if (entry == NULL) {
       if (errno != 0) {
         rc = fs_reason_path_errno(reason, reason_len, "read directory", dir_path, errno);
       }
       break;
     }
-    if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-      rc = visit_matching_entry(paths, dir_path, suffix, entry->d_name, ancestors, &scratch, reason,
-                                reason_len);
+    if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0 &&
+        path_list_push(names, entry->d_name) != 0) {
+      rc = error_report(reason, reason_len, "out of memory");
     }
   }
-  arena_free(&scratch);
   if (closedir(dp) != 0) {
     if (rc == 0) {
       (void)fs_reason_path_errno(reason, reason_len, "close directory", dir_path, errno);
     }
     rc = -1;
   }
+  // `readdir` order is whatever the filesystem stores. Sorting makes the walk order, and with it
+  // which of two aliases of one directory is walked, the same on every machine.
+  if (rc == 0 && names->count > 0) {
+    qsort(names->items, names->count, sizeof(*names->items), compare_paths);
+  }
   return rc;
 }
 
-static int visit_matching_entry(struct PathList* paths,
+static int visit_matching_entry(struct FsWalk* walk,
                                 const char* dir_path,
-                                const char* suffix,
                                 const char* entry_name,
-                                const struct DirCrumb* ancestors,
                                 struct Arena* scratch,
                                 char* reason,
                                 size_t reason_len) {
@@ -406,8 +541,15 @@ static int visit_matching_entry(struct PathList* paths,
   if (file_path == NULL) {
     return error_report(reason, reason_len, "out of memory");
   }
+  // `lstat` first tells a symlink apart from what it names. A regular entry needs nothing more, so
+  // only a symlink costs a second call.
   struct stat st;
-  if (stat(file_path, &st) != 0) {
+  int stat_rc = lstat(file_path, &st);
+  const bool is_link = stat_rc == 0 && S_ISLNK(st.st_mode);
+  if (is_link) {
+    stat_rc = stat(file_path, &st);
+  }
+  if (stat_rc != 0) {
     if (errno == ENOENT || errno == ELOOP) {
       // This skips an entry that resolves to nothing rather than aborting the whole walk: a
       // dangling symlink or one removed since `readdir` (`ENOENT`), or a symlink that resolves in a
@@ -422,29 +564,31 @@ static int visit_matching_entry(struct PathList* paths,
     return fs_reason_path_errno(reason, reason_len, "inspect entry", file_path, errno);
   }
   if (S_ISDIR(st.st_mode)) {
-    if (has_dir_crumb_id(ancestors, st.st_dev, st.st_ino)) {
-      // This skips a symlinked directory pointing back into its own ancestry. The walk already
-      // reaches its contents through the real path, so nothing is lost.
-      return 0;
+    if (is_link) {
+      // A symlinked directory waits until every directory reachable without a symlink is walked,
+      // so the target's own path, when it has one in the tree, is the one that lists its files.
+      return path_list_push(&walk->links, file_path) == 0
+                 ? 0
+                 : error_report(reason, reason_len, "out of memory");
     }
-    const struct DirCrumb crumb = {.dev = st.st_dev, .ino = st.st_ino, .parent = ancestors};
-    return fs_list_files_with_suffix_inner(paths, file_path, suffix, &crumb, reason, reason_len);
+    return fs_list_files_with_suffix_inner(walk, file_path, reason, reason_len);
   }
-  if (S_ISREG(st.st_mode) && has_suffix(entry_name, suffix)) {
-    if (path_list_push(paths, file_path) != 0) {
+  if (S_ISREG(st.st_mode) && has_suffix(entry_name, walk->suffix)) {
+    if (path_list_push(walk->paths, file_path) != 0) {
       return error_report(reason, reason_len, "out of memory");
     }
   }
   return 0;
 }
 
-static bool has_dir_crumb_id(const struct DirCrumb* ancestors, dev_t dev, ino_t ino) {
-  for (const struct DirCrumb* crumb = ancestors; crumb != NULL; crumb = crumb->parent) {
-    if (crumb->dev == dev && crumb->ino == ino) {
-      return true;
-    }
+static int compare_identities(const struct FsIdentity* a, const struct FsIdentity* b) {
+  if (a->device != b->device) {
+    return a->device < b->device ? -1 : 1;
   }
-  return false;
+  if (a->inode != b->inode) {
+    return a->inode < b->inode ? -1 : 1;
+  }
+  return 0;
 }
 
 static bool has_suffix(const char* text, const char* suffix) {

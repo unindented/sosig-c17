@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -152,9 +153,7 @@ static void test_list_files_skips_symlink_cycle(void) {
 }
 
 // A symlinked directory whose target is an outer ancestor, rather than the directory holding it, is
-// skipped too. This is the case that distinguishes the ancestor chain from a single device/inode
-// pair. The matching crumb is the second in the chain, so it is found only by walking past the
-// innermost one.
+// skipped too, because the walk already visited that ancestor.
 static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
   char root_dir_template[] = "/tmp/sosig-fs-list-ancestor.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -183,6 +182,113 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
   (void)rmdir(path_join(root_dir, "sub", &arena));
   arena_free(&arena);
   (void)rmdir(root_dir);
+}
+
+// Two sibling symlinks to one directory list its files once, under the directory's own path, even
+// though both links sort before it. Walking each alias would publish a copy of every file per path.
+static void test_list_files_walks_aliased_dir_once(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-list-alias.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* page = path_join(root_dir, "real/page.md", &arena);
+  char* alias_a = path_join(root_dir, "a", &arena);
+  char* alias_b = path_join(root_dir, "b", &arena);
+  TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
+  TEST_ASSERT(symlink("real", alias_a) == 0);
+  TEST_ASSERT(symlink("real", alias_b) == 0);
+
+  struct PathList paths;
+  path_list_init(&paths);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(paths.count == 1);
+  TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
+  path_list_free(&paths);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
+// A chain of directories outside the root, each reached through two sibling symlinks, lists its one
+// file once rather than once per path, which doubles at every level. With no real path to the file
+// inside the root, the listed path is the first through the links in byte order.
+static void test_list_files_walks_alias_chain_once(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-list-chain.XXXXXX";
+  const char* base_dir = init_fixture_dir(root_dir_template);
+  if (base_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* root_dir = path_join(base_dir, "root", &arena);
+  char* level_page = path_join(base_dir, "l3/page.md", &arena);
+  TEST_CHECK(fs_mkdir_p(root_dir, NULL, 0) == 0);
+  TEST_CHECK(fs_mkdir_p(path_join(base_dir, "l1", &arena), NULL, 0) == 0);
+  TEST_CHECK(fs_mkdir_p(path_join(base_dir, "l2", &arena), NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(level_page, "x", 1, NULL, 0) == 0);
+  // `root/{a,b} -> l1`, `l1/{x,y} -> l2` and `l2/{x,y} -> l3` reach `page.md` by eight paths.
+  const char* const links[][2] = {
+      {"../l1", "root/a"}, {"../l1", "root/b"}, {"../l2", "l1/x"},
+      {"../l2", "l1/y"},   {"../l3", "l2/x"},   {"../l3", "l2/y"},
+  };
+  for (size_t i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
+    TEST_ASSERT(symlink(links[i][0], path_join(base_dir, links[i][1], &arena)) == 0);
+  }
+
+  struct PathList paths;
+  path_list_init(&paths);
+  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(paths.count == 1);
+  char* expected = path_join(root_dir, "a/x/x/page.md", &arena);
+  TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], expected) == 0);
+  path_list_free(&paths);
+
+  arena_free(&arena);
+  remove_fixture_tree(base_dir);
+}
+
+// A tree deeper than the open-file limit is walked, because the walk closes each directory before
+// descending into its subdirectories rather than holding one stream open per level.
+static void test_list_files_walks_tree_deeper_than_open_file_limit(void) {
+  enum { TREE_DEPTH = 64, OPEN_FILE_LIMIT = 32 };
+  char root_dir_template[] = "/tmp/sosig-fs-list-deep.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* leaf_dir = path_join(root_dir, "d", &arena);
+  for (size_t i = 1; i < TREE_DEPTH; i++) {
+    leaf_dir = path_join(leaf_dir, "d", &arena);
+  }
+  char* page = path_join(leaf_dir, "page.md", &arena);
+  TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
+
+  struct rlimit limit;
+  TEST_ASSERT(getrlimit(RLIMIT_NOFILE, &limit) == 0);
+  const struct rlimit lowered = {.rlim_cur = OPEN_FILE_LIMIT, .rlim_max = limit.rlim_max};
+  TEST_ASSERT(setrlimit(RLIMIT_NOFILE, &lowered) == 0);
+  struct PathList paths;
+  path_list_init(&paths);
+  char reason[FS_REASON_SIZE] = "";
+  const int rc = fs_list_files_with_suffix(&paths, root_dir, ".md", reason, sizeof(reason));
+  // Restore the limit before asserting, so a failure cannot starve later tests of descriptors.
+  (void)setrlimit(RLIMIT_NOFILE, &limit);
+
+  TEST_CHECK(rc == 0);
+  TEST_MSG("reason: %s", reason);
+  TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
+  path_list_free(&paths);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // A missing directory fails and names the root it could not reach, so the caller does not have to
@@ -756,6 +862,10 @@ TEST_LIST = {
     {"list files accepts empty dir", test_list_files_accepts_empty_dir},
     {"list files skips symlink cycle", test_list_files_skips_symlink_cycle},
     {"list files skips symlink cycle to ancestor", test_list_files_skips_symlink_cycle_to_ancestor},
+    {"list files walks aliased dir once", test_list_files_walks_aliased_dir_once},
+    {"list files walks alias chain once", test_list_files_walks_alias_chain_once},
+    {"list files walks tree deeper than open file limit",
+     test_list_files_walks_tree_deeper_than_open_file_limit},
     {"list files rejects missing dir", test_list_files_rejects_missing_dir},
     {"list files rejects file root", test_list_files_rejects_file_root},
     {"list files rejects unstatable entry", test_list_files_rejects_unstatable_entry},

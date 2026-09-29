@@ -44,11 +44,19 @@ enum { FS_REASON_SIZE = 256 };
  * Appends each matching file's path to `paths` and sorts the whole list so builds are reproducible.
  * An empty suffix matches every regular file.
  *
- * It follows symlinked directories, except where doing so would revisit an enclosing directory. It
- * skips such a cycle rather than treating it as an error. It likewise skips an entry that resolves
- * to nothing: a dangling symlink, one removed since it was read, or a symlink that resolves in a
- * cycle. An entry that exists but cannot be inspected fails the walk instead, so a file this
- * function could not look at is never silently missing from `paths`.
+ * It follows symlinked directories but walks each directory once, identified by device and inode,
+ * so a file below a directory reachable by several paths is listed once, not once per path. A
+ * symlink back into its own ancestry and a second alias of a directory are both skipped silently,
+ * because every file below them is already listed. The listed path is the one reached without
+ * following a symlink when the tree has one. Otherwise it is the first path through a symlink, in
+ * a walk that visits entries in byte order and each symlinked directory only after every real one.
+ * It likewise skips an entry that resolves to nothing: a dangling symlink, one removed since it was
+ * read, or a symlink that resolves in a cycle. An entry that exists but cannot be inspected fails
+ * the walk instead, so a file this function could not look at is never silently missing from
+ * `paths`.
+ *
+ * It holds one directory open at a time, so the depth of the tree is bounded by path length rather
+ * than by the open-file limit.
  *
  * @param paths      Initialized path list that receives the matching paths. Must not be `NULL`.
  * @param root_dir   Directory tree to walk. Must not be `NULL`.

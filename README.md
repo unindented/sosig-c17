@@ -52,6 +52,8 @@ The tool removes trailing `/` characters from `content_dir`, `output_dir`, and `
 
 The build searches all directories under `content_dir` for regular files that end in `.md`. It creates `output_dir` and all required output subdirectories. It overwrites each output file that the current build generates.
 
+The search follows symlinked directories but reads each directory only once. A directory that more than one path reaches publishes its entries once, not once per path. For example, with `blog` a symlink to `posts`, the entries publish only under `posts`. The build prefers the path that uses no symlink. For a directory that only symlinks reach, it uses the first such path in byte order. A symlink back into its own parent directories is skipped.
+
 The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
 
 Before the tool renders page templates or writes files, it rejects an output plan with one of these conflicts:
