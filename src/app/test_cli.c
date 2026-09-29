@@ -181,7 +181,8 @@ static void test_version_long_flag(void) {
 // `-V` resolves to a version action.
 static void test_version_short_flag(void) {
   char* argv[] = {"sosig", "-V", NULL};
-  TEST_CHECK(parse(argv).action == CLI_ACTION_VERSION);
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
 }
 
 // Version wins over help regardless of their order.
@@ -373,21 +374,21 @@ static void test_attached_value_rejected_on_valueless_flags(void) {
 // form would print the version while the long form failed. An informational flag clears
 // `error_message`, so the rejection must prevent `-V` from becoming a version request.
 static void test_attached_value_rejected_on_valueless_short_flags(void) {
-  char* version_argv[] = {"sosig", "-V=1", NULL};
-  struct CliOptions version_options = parse(version_argv);
-  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(version_options.error_message, "option does not take a value: '-V=1'") == 0);
+  char* verbose_argv[] = {"sosig", "build", "-v=0", NULL};
+  struct CliOptions verbose_options = parse(verbose_argv);
+  TEST_CHECK(verbose_options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(!verbose_options.is_verbose);
+  TEST_CHECK(strcmp(verbose_options.error_message, "option does not take a value: '-v=0'") == 0);
 
   char* help_argv[] = {"sosig", "-h=1", NULL};
   struct CliOptions help_options = parse(help_argv);
   TEST_CHECK(help_options.action == CLI_ACTION_ERROR);
   TEST_CHECK(strcmp(help_options.error_message, "option does not take a value: '-h=1'") == 0);
 
-  char* verbose_argv[] = {"sosig", "build", "-v=0", NULL};
-  struct CliOptions verbose_options = parse(verbose_argv);
-  TEST_CHECK(verbose_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(!verbose_options.is_verbose);
-  TEST_CHECK(strcmp(verbose_options.error_message, "option does not take a value: '-v=0'") == 0);
+  char* version_argv[] = {"sosig", "-V=1", NULL};
+  struct CliOptions version_options = parse(version_argv);
+  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(version_options.error_message, "option does not take a value: '-V=1'") == 0);
 }
 
 // A rejected attached value ends its short cluster, so the letters after the `=` are not read as
