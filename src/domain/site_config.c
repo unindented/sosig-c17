@@ -259,7 +259,7 @@ static size_t trimmed_slash_len(const char* value) __attribute__((nonnull(1)));
 /**
  * @brief Validates the `permalink` key, translating each verdict into its diagnostic.
  *
- * Splitting the translation from `check_permalink` keeps the grid pass free of message wording and
+ * Splitting the translation from `check_permalink` keeps the grid check free of message wording and
  * leaves this function as the only place that decides what a verdict tells the user.
  *
  * @param pattern Permalink pattern to validate. Must not be `NULL`.
@@ -275,7 +275,7 @@ static int require_valid_permalink(const char* pattern, char* err, size_t err_le
  *
  * Validating the pattern here keeps a bad `permalink` a single config error. If left to the render
  * phase, the render phase catches the same mistake per entry and reports it once for every content
- * file. Every question shares one grid pass because they share the expansions. Reasoning about the
+ * file. The pattern is expanded once and every question reads that one grid. Reasoning about the
  * pattern's bytes directly would be a second implementation of `path_is_safe_relative`'s policy and
  * of `permalink_expand`'s meaning, each free to drift. Both length limits come from
  * `path_check_output_limits` for the same reason.
@@ -300,6 +300,23 @@ static enum PermalinkVerdict check_permalink(const char* pattern,
                                              size_t* expanded_len_out,
                                              size_t* segment_len_out)
     __attribute__((nonnull(1, 2, 3)));
+
+/**
+ * @brief Judges the expanded sample grid, one question at a time over the whole grid.
+ *
+ * @param urls             Expansion of the pattern for each section and slug sample, each with its
+ *                         leading `/`. Must not be `NULL`.
+ * @param expanded_len_out Receives the offending expansion's relative length on
+ *                         `PERMALINK_TOO_LONG`. Untouched on every other path. Must not be `NULL`.
+ * @param segment_len_out  Receives the offending segment's length on `PERMALINK_SEGMENT_TOO_LONG`.
+ *                         Untouched on every other path. Must not be `NULL`.
+ * @return The first verdict that failed in `enum PermalinkVerdict` precedence, or
+ *         `PERMALINK_VALID` when every check passed.
+ */
+static enum PermalinkVerdict check_permalink_expansions(
+    const char* urls[SECTION_SAMPLE_COUNT][SLUG_SAMPLE_COUNT],
+    size_t* expanded_len_out,
+    size_t* segment_len_out) __attribute__((nonnull(1, 2, 3)));
 
 /**
  * @brief Validates and applies the optional `feed_count` key.
@@ -727,55 +744,71 @@ static int require_valid_permalink(const char* pattern, char* err, size_t err_le
 static enum PermalinkVerdict check_permalink(const char* pattern,
                                              size_t* expanded_len_out,
                                              size_t* segment_len_out) {
+  *expanded_len_out = 0;
+  *segment_len_out = 0;
   struct Arena scratch;
   arena_init(&scratch);
   enum PermalinkVerdict verdict = PERMALINK_VALID;
-  size_t failing_len = 0;
-  size_t failing_segment_len = 0;
-
+  const char* urls[SECTION_SAMPLE_COUNT][SLUG_SAMPLE_COUNT] = {{NULL}};
   for (size_t i = 0; verdict == PERMALINK_VALID && i < SECTION_SAMPLE_COUNT; i++) {
-    const char* first = NULL;
     for (size_t j = 0; verdict == PERMALINK_VALID && j < SLUG_SAMPLE_COUNT; j++) {
-      const char* url = permalink_expand(pattern, SECTION_SAMPLES[i], SLUG_SAMPLES[j], &scratch);
-      if (url == NULL) {
+      urls[i][j] = permalink_expand(pattern, SECTION_SAMPLES[i], SLUG_SAMPLES[j], &scratch);
+      if (urls[i][j] == NULL) {
         verdict = PERMALINK_OUT_OF_MEMORY;
-        break;
-      }
-      if (!path_is_safe_relative(url + 1)) {
-        verdict = PERMALINK_UNSAFE;
-        break;
-      }
-      if (j == 0) {
-        first = url;
-      } else if (strcmp(first, url) == 0) {
-        verdict = PERMALINK_NOT_DISTINCT;
-        break;
-      }
-      // Both limits come from `path_check_output_limits`, the single place that applies them,
-      // rather than being respelled here. The check runs on every expansion instead of only the
-      // shortest, which makes the whole-path limit a property of the pattern. One that fits with an
-      // empty `{section}` and overflows with a populated one is a config error, and leaving it to
-      // the render reports it once per content file. It is ordered after the distinctness check, so
-      // the verdict precedence this enum documents stays unchanged.
-      struct PathOutputMetrics metrics;
-      const enum PathOutputVerdict limits = path_check_output_limits(url + 1, &metrics);
-      if (limits == PATH_OUTPUT_TOO_LONG) {
-        failing_len = metrics.len;
-        verdict = PERMALINK_TOO_LONG;
-        break;
-      }
-      if (limits == PATH_OUTPUT_SEGMENT_TOO_LONG) {
-        failing_segment_len = metrics.segment_len;
-        verdict = PERMALINK_SEGMENT_TOO_LONG;
-        break;
       }
     }
   }
-
-  *expanded_len_out = failing_len;
-  *segment_len_out = failing_segment_len;
+  if (verdict == PERMALINK_VALID) {
+    verdict = check_permalink_expansions(urls, expanded_len_out, segment_len_out);
+  }
   arena_free(&scratch);
   return verdict;
+}
+
+static enum PermalinkVerdict check_permalink_expansions(
+    const char* urls[SECTION_SAMPLE_COUNT][SLUG_SAMPLE_COUNT],
+    size_t* expanded_len_out,
+    size_t* segment_len_out) {
+  // Each question runs over the whole grid before the next one starts, so the verdict follows the
+  // precedence `enum PermalinkVerdict` documents whichever expansion trips which check. Checking
+  // one expansion at a time would let an early expansion fail a later question before a later
+  // expansion failed an earlier one. A pattern with no `{slug}` whose literal is too long would
+  // then report its length, which a fix to the length alone would not resolve.
+  for (size_t i = 0; i < SECTION_SAMPLE_COUNT; i++) {
+    for (size_t j = 0; j < SLUG_SAMPLE_COUNT; j++) {
+      if (!path_is_safe_relative(urls[i][j] + 1)) {
+        return PERMALINK_UNSAFE;
+      }
+    }
+  }
+  for (size_t i = 0; i < SECTION_SAMPLE_COUNT; i++) {
+    for (size_t j = 1; j < SLUG_SAMPLE_COUNT; j++) {
+      if (strcmp(urls[i][0], urls[i][j]) == 0) {
+        return PERMALINK_NOT_DISTINCT;
+      }
+    }
+  }
+  // Both limits come from `path_check_output_limits`, the single place that applies them, rather
+  // than being respelled here. The check runs on every expansion instead of only the shortest,
+  // which makes the whole-path limit a property of the pattern. One that fits with an empty
+  // `{section}` and overflows with a populated one is a config error, and leaving it to the render
+  // reports it once per content file.
+  for (size_t i = 0; i < SECTION_SAMPLE_COUNT; i++) {
+    for (size_t j = 0; j < SLUG_SAMPLE_COUNT; j++) {
+      struct PathOutputMetrics metrics;
+      switch (path_check_output_limits(urls[i][j] + 1, &metrics)) {
+        case PATH_OUTPUT_OK:
+          break;
+        case PATH_OUTPUT_TOO_LONG:
+          *expanded_len_out = metrics.len;
+          return PERMALINK_TOO_LONG;
+        case PATH_OUTPUT_SEGMENT_TOO_LONG:
+          *segment_len_out = metrics.segment_len;
+          return PERMALINK_SEGMENT_TOO_LONG;
+      }
+    }
+  }
+  return PERMALINK_VALID;
 }
 
 static int populate_feed_count(struct SiteConfig* site_config,

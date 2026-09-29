@@ -59,6 +59,35 @@ static void write_temp_config(char config_path[static 1], const char* toml) {
   TEST_CHECK(close_rc == 0);
 }
 
+/**
+ * @brief Loads a config with the given permalink and checks it fails with one diagnostic.
+ *
+ * @param permalink Permalink pattern to load, embedded in an otherwise valid config.
+ * @param expected  Exact diagnostic `site_config_load` must report.
+ */
+static void check_load_rejects_permalink(const char* permalink, const char* expected) {
+  const char toml_format[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Example Site\"\n"
+      "author = \"Example Author\"\n"
+      "permalink = \"%s\"\n";
+  char toml[OUTPUT_PATH_RELATIVE_LEN_MAX + 512];
+  const int n = snprintf(toml, sizeof(toml), toml_format, permalink);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
+  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
+  write_temp_config(config_path, toml);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_MSG("actual: '%s'", err);
+
+  site_config_free(&config);
+  unlink(config_path);
+}
+
 // Loading a file with only the required keys fills the rest from `site_config_init`'s defaults.
 static void test_load_applies_required_and_defaults(void) {
   const char toml[] =
@@ -793,6 +822,67 @@ static void test_load_rejects_permalink_with_oversize_segment(void) {
   unlink(config_path);
 }
 
+// A permalink without `{slug}` whose literal also breaks a length limit reports the missing token,
+// which is the fix it needs whatever its length. The first sample expansion is judged on length
+// before the second is compared with it, so a check that ran per expansion reported the length.
+static void test_load_prefers_distinctness_over_length(void) {
+  // One pattern breaks the whole-path limit and one the per-segment limit, each with a single
+  // literal segment and no token.
+  char pattern_too_long[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
+  char pattern_segment_too_long[FILENAME_LEN_MAX + 46];
+  char* const patterns[] = {pattern_too_long, pattern_segment_too_long};
+  const size_t pattern_sizes[] = {sizeof(pattern_too_long), sizeof(pattern_segment_too_long)};
+  for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); i++) {
+    memset(patterns[i], 'a', pattern_sizes[i] - 1);
+    patterns[i][0] = '/';
+    patterns[i][pattern_sizes[i] - 1] = '\0';
+
+    // The trailing pattern outgrows the buffer, so the expected text goes through `error_report`
+    // to get the same truncation marker.
+    char expected[ERROR_MESSAGE_SIZE];
+    (void)error_report(expected, sizeof(expected),
+                       "config key 'permalink' must expand to a distinct path per content entry; "
+                       "include the '{slug}' token: '%s'",
+                       patterns[i]);
+    check_load_rejects_permalink(patterns[i], expected);
+  }
+}
+
+// A permalink that is unsafe only with an empty `{section}` reports the unsafe expansion ahead of
+// a length limit or a slug collision that the populated section already shows. The populated
+// section is judged first, so a check that ran per expansion reported the later verdict.
+static void test_load_prefers_safety_over_length_and_distinctness(void) {
+  // With an empty section, `{section}.` expands to a `.` segment, which is unsafe. With the
+  // populated sample it expands to `section.`, which is safe.
+  char pattern_too_long[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
+  char pattern_segment_too_long[FILENAME_LEN_MAX + 64];
+  char* const patterns_long[] = {pattern_too_long, pattern_segment_too_long};
+  const size_t pattern_sizes[] = {sizeof(pattern_too_long), sizeof(pattern_segment_too_long)};
+  static const char tail[] = "/{section}./{slug}";
+  for (size_t i = 0; i < sizeof(patterns_long) / sizeof(patterns_long[0]); i++) {
+    memset(patterns_long[i], 'a', pattern_sizes[i] - 1);
+    patterns_long[i][0] = '/';
+    memcpy(patterns_long[i] + pattern_sizes[i] - sizeof(tail), tail, sizeof(tail));
+  }
+  const char* const patterns[] = {
+      pattern_too_long,          // overflows the whole-path limit with a populated section
+      pattern_segment_too_long,  // holds an oversize literal segment
+      "/{section}./index.html",  // collides across slugs with a populated section
+  };
+
+  for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); i++) {
+    // A long pattern outgrows the buffer, so the expected text goes through `error_report` to get
+    // the same truncation marker.
+    char expected[ERROR_MESSAGE_SIZE];
+    (void)error_report(expected, sizeof(expected),
+                       "config key 'permalink' must expand to a safe relative path using only "
+                       "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
+                       "with no empty, '.' or '..' path segment: '%s'",
+                       patterns[i]);
+    check_load_rejects_permalink(patterns[i], expected);
+  }
+}
+
 // Printing emits every key, with the defaults `site_config_init` supplies for the optional ones.
 // `base_url`, `title` and `author` have no default and are set here only because
 // `site_config_print` requires them non-`NULL`.
@@ -1008,6 +1098,9 @@ TEST_LIST = {
      test_load_rejects_permalink_oversize_in_populated_section},
     {"load rejects permalink with oversize segment",
      test_load_rejects_permalink_with_oversize_segment},
+    {"load prefers distinctness over length", test_load_prefers_distinctness_over_length},
+    {"load prefers safety over length and distinctness",
+     test_load_prefers_safety_over_length_and_distinctness},
     {"print defaults", test_print_defaults},
     {"print escapes strings", test_print_escapes_strings},
     {"print load round trips", test_print_load_round_trips},
