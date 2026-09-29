@@ -1,9 +1,6 @@
 {
-  "id": 23086096,
   "name": "main",
   "target": "branch",
-  "source_type": "Repository",
-  "source": "unindented/sosig-c17",
   "enforcement": "active",
   "conditions": {
     "ref_name": {
