@@ -71,7 +71,7 @@ static void build_verbose(const struct BuildState* state, const char* fmt, ...)
 static void build_state_init(struct BuildState* state) __attribute__((nonnull(1)));
 
 /**
- * @brief Releases all allocations held by a build state.
+ * @brief Releases every allocation a build state owns and leaves the state zeroed.
  *
  * @param state Build state to release. Must not be `NULL`.
  */
@@ -257,14 +257,12 @@ static void build_verbose(const struct BuildState* state, const char* fmt, ...) 
 }
 
 static void build_state_init(struct BuildState* state) {
-  // This is one literal, so a field added to `BuildState` cannot be left out of its defaults.
-  // `path_list_init` and `manifest_init` only restate that zeroing. The code calls them for
-  // symmetry. `site_config_init` does more, though: it installs the optional-key defaults, which
-  // `site_config_load` leaves untouched when a key is absent.
+  // This is one literal, so a field added to `BuildState` cannot be left out of its defaults. The
+  // zeroed path list and manifest are already their initialized state. `site_config_init` does
+  // more: it installs the optional-key defaults, which `site_config_load` leaves untouched when a
+  // key is absent.
   *state = (struct BuildState){0};
   site_config_init(&state->site_config);
-  path_list_init(&state->source_paths);
-  manifest_init(&state->manifest);
 }
 
 // `content_entries` holds borrowed pointers into `render_jobs`, so only its array is freed here.
@@ -275,6 +273,7 @@ static void build_state_free(struct BuildState* state) {
   manifest_free(&state->manifest);
   path_list_free(&state->source_paths);
   site_config_free(&state->site_config);
+  *state = (struct BuildState){0};
 }
 
 static int load_build_inputs(struct BuildState* state, char* err, size_t err_len) {
