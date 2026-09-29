@@ -183,9 +183,9 @@ static void test_fractional_seconds_preserved(void) {
   TEST_CHECK(trailing_text != NULL && strcmp(trailing_text, "2026-07-01T12:00:00.12Z") == 0);
 
   // A fraction of all zeros yields no fractional part at all, not a bare `.`. That is a separate
-  // branch from the trimming above rather than its extreme: `toml_datum_format_rfc3339_fraction`
-  // returns early on a zero microsecond count and never formats or trims, so `.12` cannot reach it.
-  // A frontmatter date written with an explicit `.000000` is the reachable way in.
+  // path from the trimming above rather than its extreme: `toml_datum_format_rfc3339` prints no `.`
+  // and no digits for a zero microsecond count, so `.12` cannot reach it. A frontmatter date
+  // written with an explicit `.000000` is the reachable way in.
   toml_result_t zeros;
   toml_datum_t zeros_value = parse_value("2026-07-01T12:00:00.000000Z", &zeros);
   const char* zeros_text = toml_datum_format_rfc3339(zeros_value, &arena);
