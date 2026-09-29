@@ -3,16 +3,10 @@
 include_guard(GLOBAL)
 
 function(sosig_add_unit_test module)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "EXTRA_LIBRARIES")
   set(target "sosig_unit_${module}")
   add_executable(${target} "test_${module}.c")
   target_link_libraries(
-    ${target}
-    PRIVATE sosig_build_tests
-            sosig_vendor_acutest
-            sosig_test_support
-            ${arg_EXTRA_LIBRARIES}
-            sosig_app
+    ${target} PRIVATE sosig_build_tests sosig_vendor_acutest sosig_test_support sosig_app
   )
 
   add_test(NAME "sosig.${module}" COMMAND ${target} WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

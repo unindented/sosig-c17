@@ -3,7 +3,6 @@
 include_guard(GLOBAL)
 
 include(CheckCCompilerFlag)
-include(CMakePushCheckState)
 
 add_library(sosig_build_project INTERFACE)
 add_library(sosig_build_tests INTERFACE)
@@ -35,9 +34,7 @@ endforeach()
 # supported compilers can build the project.
 foreach(flag IN ITEMS -Wformat-signedness -Wjump-misses-init)
   string(MAKE_C_IDENTIFIER "sosig_have_warning${flag}" cache_var)
-  cmake_push_check_state()
   check_c_compiler_flag("${flag}" "${cache_var}")
-  cmake_pop_check_state()
   if(${cache_var})
     target_compile_options(sosig_build_project INTERFACE "${flag}")
     target_compile_options(sosig_build_tests INTERFACE "${flag}")
