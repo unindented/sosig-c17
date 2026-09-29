@@ -185,10 +185,10 @@ static void reject_unsupported_flags(struct CliOptions* options, unsigned flags_
  * Neither alone suffices, because `stdout` to a pipe or a file is fully buffered, so an earlier
  * `fprintf` can succeed while the write does not.
  *
- * The function always leaves `errno` describing the failure, which lets `main` report a reason
- * rather than only an exit code. A latched error's own `errno` may have been overwritten since, so
- * that case substitutes `EIO` rather than relay a stale value as the cause. `site_config_print`
- * documents and does the same.
+ * The function always leaves `errno` describing the failure, which lets `cli_dispatch` report a
+ * reason rather than only an exit code. A latched error's own `errno` may have been overwritten
+ * since, so that case substitutes `EIO` rather than relay a stale value as the cause.
+ * `site_config_print` documents and does the same.
  *
  * @param stream Stream to flush and inspect. Must not be `NULL`.
  * @return `0` when every write succeeded, or `-1` with `errno` set to the reason.

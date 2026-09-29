@@ -65,10 +65,12 @@ struct CliOptions {
  * first diagnostic. May permute `argv[1..argc-1]` in place (it reorders options ahead of positional
  * arguments). It leaves `argv[0]` untouched.
  *
- * `options` retains no pointer into `argv`. `error_message` is a fixed inline buffer holding a
- * formatted copy, so the result stays valid however the caller later reorders or overwrites `argv`.
- * That is also why it is an array rather than a `const char*`. A later change to avoid the 512-byte
- * copy would create exactly the dependency the in-place permutation above makes unsafe.
+ * `options` retains no pointer into `argv`, so the result stays valid however the caller later
+ * reorders or overwrites `argv`. `error_message` is a fixed inline buffer holding a formatted copy,
+ * so the diagnostic itself does not retain a pointer into copt's scratch storage. That is also why
+ * it is an array rather than a `const char*`. A short option's spelling lives in the parser that
+ * `cli_parse` keeps on its own stack, so a later change to avoid the copy would hand back a pointer
+ * that dangles as soon as `cli_parse` returns.
  *
  * @param options Receives the fully resolved parse result. Must not be `NULL`.
  * @param argc    Argument count.

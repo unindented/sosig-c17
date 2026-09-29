@@ -10,7 +10,7 @@ struct StringBuffer;
 
 /** Caller-selected knobs for one build invocation. */
 struct BuildOptions {
-  /** Worker threads used for parallel content rendering. `0` means detect a default. */
+  /** Worker threads used for parallel parsing and rendering. `0` means detect the CPU count. */
   size_t worker_count;
 
   /** Whether to print phase progress and status messages to `stderr`. */

@@ -46,7 +46,7 @@ struct BuildState {
    */
   const char* site_updated;
 
-  /** Resolved worker count for parallel content rendering. */
+  /** Worker threads for each parallel phase, already resolved to the detected count when unset. */
   size_t worker_count;
 
   /** Whether phase progress and status messages are printed to `stderr`. */
@@ -248,10 +248,10 @@ cleanup:
 }
 
 // The `vfprintf` and `fputc` calls run on the main thread between phases, so they do not need the
-// `flockfile`/`funlockfile` pair that `print_progress_dot` uses. That is temporal separation, not a
-// guarantee. `pool_run` joins every worker before the next status line prints, so a progress dot
-// cannot land between a line and its newline. Add the lock if anything ever writes `stderr` while a
-// pool is running.
+// `flockfile`/`funlockfile` pair that `render_job_progress_dot` in `render_job.c` uses. That is
+// temporal separation, not a guarantee. `pool_run` joins every worker before the next status line
+// prints, so a progress dot cannot land between a status line and its newline. Add the lock if
+// anything ever writes `stderr` while a pool is running.
 //
 // Both writes are unchecked, and nothing calls `ferror(stderr)`. These lines are status, not
 // diagnostics, and a build that otherwise succeeded should not fail because `stderr` was a closed

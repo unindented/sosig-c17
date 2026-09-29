@@ -104,7 +104,7 @@ static void test_workers_short_flag_in_cluster_equals_value(void) {
   TEST_CHECK(options.worker_count == 4);
 }
 
-// A global flag before the command and a command flag after it are both applied in one parse. The
+// A command flag before the command and another after it are both applied in one parse. The
 // all-flags-after-the-command placement is `test_options_after_build_command`.
 static void test_mixed_flag_order(void) {
   char* argv[] = {"sosig", "-v", "build", "--workers", "2", NULL};
@@ -115,10 +115,11 @@ static void test_mixed_flag_order(void) {
   TEST_CHECK(options.worker_count == 2);
 }
 
-// `argv[0]` survives a parse that permutes the rest of the vector, which is the clause `main.c`
-// depends on. It reads `argv[0]` after `cli_parse` returns to name the program in the usage text.
-// This command line reorders because the option follows the positional. The test fails if a copt
-// update rotates the complete vector. It also fails if `copt_init` stops preserving `argv[0]`.
+// `argv[0]` survives a parse that permutes the rest of the vector, which is the clause
+// `cli_dispatch` depends on. It reads `argv[0]` after `cli_parse` returns to name the program in
+// the usage text. This command line reorders because the option follows the positional. The test
+// fails if a copt update rotates the complete vector. It also fails if `copt_init` stops preserving
+// `argv[0]`.
 static void test_program_name_survives_permutation(void) {
   char* argv[] = {"sosig", "build", "--workers", "2", NULL};
   char* program_name = argv[0];
@@ -422,7 +423,7 @@ static void test_print_version_writes_version_line(void) {
     return;
   }
   TEST_CHECK(cli_print_version(stream) == 0);
-  int rc = fclose(stream);
+  const int rc = fclose(stream);
   TEST_ASSERT(rc == 0);
 
   char expected[64];
@@ -434,8 +435,8 @@ static void test_print_version_writes_version_line(void) {
 }
 
 // A stream that latched a write error makes `cli_print_version` report `-1` with `errno` set, which
-// lets `main` name a reason rather than exiting silently. The reason is `EIO` rather than the
-// underlying `EBADF`. A latched error's own `errno` may have been overwritten by the time it is
+// lets `cli_dispatch` name a reason rather than exiting silently. The reason is `EIO` rather than
+// the underlying `EBADF`. A latched error's own `errno` may have been overwritten by the time it is
 // noticed, so the contract substitutes a generic I/O failure instead of relaying a stale value. A
 // read-mode stream is the deterministic way to reach that branch, because the write fails at the
 // `fprintf` while `fflush` itself succeeds.
@@ -453,9 +454,9 @@ static void test_print_version_reports_write_failure(void) {
 }
 
 // When `fflush` itself fails, the write's own `errno` survives instead of being replaced by the
-// `EIO` the latched-error branch substitutes. That distinction is why `main` reports a reason
-// rather than only an exit code. A closed pipe and a full disk need different responses. The test
-// above reaches the `ferror` branch, where the write already failed at `fprintf` and `fflush`
+// `EIO` the latched-error branch substitutes. That distinction is why `cli_dispatch` reports a
+// reason rather than only an exit code. A closed pipe and a full disk need different responses. The
+// test above reaches the `ferror` branch, where the write already failed at `fprintf` and `fflush`
 // succeeds. This one reaches the other branch. A pipe with its read end closed is the deterministic
 // way there, with `SIGPIPE` ignored so the process survives to return.
 static void test_print_version_reports_flush_failure_errno(void) {
@@ -488,10 +489,10 @@ static void test_print_version_reports_flush_failure_errno(void) {
 // `cli_print_usage` substitutes the caller's program name into the usage line, in the right
 // position for the selected command, alongside command-specific option content. The name passed
 // here is deliberately *not* `"sosig"`. With the real program name the assertion passes just as
-// well against a hard-coded usage line, so it would prove nothing about substitution. `main` passes
-// `argv[0]`, so a user invoking `/usr/local/bin/sosig build --help` has to see that path back. The
-// full help text is prose and is deliberately not asserted whole. The usage line is the part
-// callers copy.
+// well against a hard-coded usage line, so it would prove nothing about substitution.
+// `cli_dispatch` passes `argv[0]`, so a user invoking `/usr/local/bin/sosig build --help` has to
+// see that path back. The full help text is prose and is deliberately not asserted whole. The usage
+// line is the part callers copy.
 static void test_print_usage_names_program_and_command(void) {
   static const char* const prog_name = "/opt/bin/mysosig";
   const struct {
@@ -512,7 +513,7 @@ static void test_print_usage_names_program_and_command(void) {
       return;
     }
     TEST_CHECK(cli_print_usage(stream, prog_name, cases[i].command) == 0);
-    int rc = fclose(stream);
+    const int rc = fclose(stream);
     TEST_ASSERT(rc == 0);
     TEST_CHECK(strstr(buf, cases[i].usage_line) != NULL);
     TEST_CHECK(strstr(buf, cases[i].needle) != NULL);

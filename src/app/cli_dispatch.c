@@ -14,8 +14,9 @@
 /**
  * @brief Maps a printer's result to an exit code, reporting the stream's own reason on failure.
  *
- * On failure, reports the stream's `errno` rather than only returning failure. `cli_dispatch` uses
- * the reason to distinguish output failures from command failures.
+ * On failure, reports the stream's `errno` rather than only returning failure. An output failure
+ * exits with `EXIT_CODE_FAILURE`, the same as a failed command, so the printed reason is what tells
+ * the user which one happened and why.
  *
  * A closed stdout pipe looks like a common path into this function, but it usually is not. With the
  * default `SIGPIPE` disposition, the process dies of signal 13 inside `fflush` and never reaches
