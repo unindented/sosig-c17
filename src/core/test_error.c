@@ -4,11 +4,12 @@
 #include "core/error.h"
 
 // Only two of `error`'s three exported functions are tested directly here, which reads as a
-// coverage hole and is not one. `record_error` in `src/app/test_cli.c` exercises `error_report_va`.
-// `expected_errno_reason` in `src/runtime/test_fs.c` derives its expectation from `strerror`, so
-// every `fs` reason assertion also pins `error_system_message`'s success branch against the running
-// libc, for `ENOENT`, `ENOTDIR`, `EACCES` and `EISDIR`. The `strerror_r`-failed branch is reachable
-// only from an `errno` the system cannot describe, so this file pins it below.
+// coverage hole and is not one. `record_error` in `src/app/cli.c` calls `error_report_va`, and
+// `src/app/test_cli.c` exercises it through `cli_parse`. `expected_errno_reason` in
+// `src/runtime/test_fs.c` derives its expectation from `strerror`, so every `fs` reason assertion
+// also pins `error_system_message`'s success branch against the running libc, for `ENOENT`,
+// `ENOTDIR`, `EACCES` and `EISDIR`. The `strerror_r`-failed branch is reachable only from an
+// `errno` the system cannot describe, so this file pins it below.
 
 // A reported error formats the message and returns the conventional failure value.
 static void test_report_error_formats_and_returns_failure(void) {
