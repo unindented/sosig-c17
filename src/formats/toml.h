@@ -7,7 +7,7 @@
 
 struct Arena;
 
-// Every function here. Every caller that threads a datum onward, takes `toml_datum_t` by value
+// Every function here, and every caller that threads a datum onward, takes `toml_datum_t` by value
 // rather than by pointer, against the general rule that a non-trivial struct is passed by pointer.
 // This is the tomlc17 boundary. `toml_get` returns a datum by value (see
 // `vendor/tomlc17/tomlc17.h`), so the alternative is a local copy per call whose only purpose is to
