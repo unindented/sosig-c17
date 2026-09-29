@@ -657,9 +657,14 @@ static void* node_get_child_by_name(void* node_ptr,
       return resolve_entry_field(provider_data, node->entry, name, name_len);
     case NODE_SITE:
       return resolve_site_field(provider_data, name, name_len);
-    default:
+    case NODE_LIST:
+    case NODE_TAG_LIST:
+    case NODE_SCALAR:
       return NULL;
   }
+  // Unreachable: the switch covers every `enum NodeKind`, and omits `default:` so that `-Wswitch`
+  // fails the build when a kind is added without a case here.
+  abort();
 }
 
 static void* node_get_child_by_index(void* node_ptr, unsigned index, void* provider_data_ptr) {
