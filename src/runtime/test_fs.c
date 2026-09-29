@@ -3,11 +3,16 @@
 
 #include <acutest.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "core/path.h"
@@ -32,6 +37,59 @@ static const char* expected_errno_reason(char buf[static FS_REASON_SIZE], int er
   const int reason_len = snprintf(buf, FS_REASON_SIZE, "%s", strerror(error_number));
   TEST_ASSERT(reason_len > 0 && (size_t)reason_len < FS_REASON_SIZE);
   return buf;
+}
+
+/** Signals `count_interrupt` has handled since a test last reset it. */
+static volatile sig_atomic_t interrupt_count = 0;
+
+/**
+ * @brief Counts one delivered signal and does nothing else.
+ *
+ * Installed without `SA_RESTART`, so each delivery interrupts a blocked system call.
+ *
+ * @param signal_number Signal delivered. Unused.
+ */
+static void count_interrupt(int signal_number) {
+  (void)signal_number;
+  interrupt_count++;
+}
+
+/**
+ * @brief Opens `fifo_path` for reading, waits, then reads it to end of file.
+ *
+ * The wait leaves a writer blocked on a full FIFO long enough for signals to interrupt it. This
+ * runs in a forked child, so it reports through its return value rather than test assertions.
+ *
+ * @param fifo_path    FIFO to read. Must not be `NULL`.
+ * @param expected     Bytes the writer sends. Must hold at least `expected_len` bytes. Must not be
+ *                     `NULL`.
+ * @param expected_len Number of bytes the writer sends.
+ * @return `0` when exactly `expected` arrived, or `-1` on an open or read failure or other bytes.
+ */
+static int drain_fifo(const char* fifo_path, const char* expected, size_t expected_len) {
+  const int fd = open(fifo_path, O_RDONLY);
+  if (fd < 0) {
+    return -1;
+  }
+  const struct timespec delay = {.tv_nsec = 100 * 1000 * 1000};
+  (void)nanosleep(&delay, NULL);
+  char buffer[4096];
+  size_t total = 0;
+  int rc = 0;
+  for (;;) {
+    const ssize_t nread = read(fd, buffer, sizeof(buffer));
+    if (nread == 0) {
+      break;
+    }
+    if (nread < 0 || total + (size_t)nread > expected_len ||
+        memcmp(buffer, expected + total, (size_t)nread) != 0) {
+      rc = -1;
+      break;
+    }
+    total += (size_t)nread;
+  }
+  (void)close(fd);
+  return rc == 0 && total == expected_len ? 0 : -1;
 }
 
 // The `NULL, 0` reason arguments throughout this file are the documented option, not forgotten
@@ -651,6 +709,64 @@ static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
   remove_fixture_tree(root_dir);
 }
 
+// `fs_write_file` finishes a write that signals interrupt instead of failing with `EINTR`. A FIFO
+// whose reader starts late stands in for a slow file, because a write to a local regular file is
+// not interrupted. The handler is installed without `SA_RESTART`, so each signal does interrupt the
+// blocked `write`.
+static void test_write_file_retries_interrupted_write(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-write-eintr.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* fifo = path_join(root_dir, "fifo.html", &arena);
+  TEST_ASSERT(mkfifo(fifo, 0600) == 0);
+  // A read end held open lets the write's `open` return at once, so only its `write` blocks.
+  const int hold_fd = open(fifo, O_RDONLY | O_NONBLOCK);
+  TEST_ASSERT(hold_fd >= 0);
+
+  // Larger than any pipe buffer, so the write blocks until the reader drains it.
+  static char data[1024 * 1024];
+  for (size_t i = 0; i < sizeof(data); i++) {
+    data[i] = (char)('a' + i % 26);
+  }
+
+  const pid_t reader = fork();
+  TEST_ASSERT(reader >= 0);
+  if (reader == 0) {
+    _exit(drain_fifo(fifo, data, sizeof(data)) == 0 ? 0 : 1);
+  }
+
+  struct sigaction action = {.sa_handler = count_interrupt};
+  (void)sigemptyset(&action.sa_mask);
+  struct sigaction previous_action;
+  TEST_ASSERT(sigaction(SIGALRM, &action, &previous_action) == 0);
+  interrupt_count = 0;
+  const struct itimerval every_millisecond = {.it_interval = {.tv_usec = 1000},
+                                              .it_value = {.tv_usec = 1000}};
+  TEST_ASSERT(setitimer(ITIMER_REAL, &every_millisecond, NULL) == 0);
+  char reason[FS_REASON_SIZE] = "untouched";
+  const int rc = fs_write_file(fifo, data, sizeof(data), reason, sizeof(reason));
+  // Stop the timer before restoring the previous action, so no signal reaches the default one.
+  const struct itimerval stopped = {0};
+  (void)setitimer(ITIMER_REAL, &stopped, NULL);
+  (void)sigaction(SIGALRM, &previous_action, NULL);
+  int status = 0;
+  TEST_CHECK(waitpid(reader, &status, 0) == reader);
+  (void)close(hold_fd);
+
+  TEST_CHECK(rc == 0);
+  TEST_CHECK(strcmp(reason, "untouched") == 0);
+  TEST_CHECK(interrupt_count > 0);
+  TEST_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // `fs_write_file` fails when the parent directory cannot be created and when the target is itself a
 // directory, and reports the two as different reasons. The first case is what pins that the
 // parent-directory failure is propagated rather than discarded. The return value alone cannot show
@@ -891,6 +1007,7 @@ TEST_LIST = {
     {"write file replaces contents", test_write_file_replaces_contents},
     {"write file applies umask and keeps existing mode",
      test_write_file_applies_umask_and_keeps_existing_mode},
+    {"write file retries interrupted write", test_write_file_retries_interrupted_write},
     {"write file rejects file parent and dir target",
      test_write_file_rejects_file_parent_and_dir_target},
     {"mkdir_p creates nested and is idempotent", test_mkdir_p_creates_nested_and_is_idempotent},

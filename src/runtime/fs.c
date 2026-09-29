@@ -205,6 +205,20 @@ static int ensure_dir(const char* dir_path, char* reason, size_t reason_len)
     __attribute__((nonnull(1)));
 
 /**
+ * @brief Writes every byte to an open descriptor, retrying interrupted and short writes.
+ *
+ * @param fd         Descriptor open for writing.
+ * @param data       Bytes to write. Must hold at least `data_len` bytes. Must not be `NULL`.
+ * @param data_len   Number of bytes to write.
+ * @param reason     Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ * @param reason_len Size of `reason` in bytes.
+ * @return `0` once all `data_len` bytes are written, or `-1` on a write error or a write that makes
+ *         no progress.
+ */
+static int write_all(int fd, const void* data, size_t data_len, char* reason, size_t reason_len)
+    __attribute__((nonnull(2)));
+
+/**
  * @brief Reports `error_number` alone as a failure reason.
  *
  * This is for a failure on the path the caller already names, where repeating it would only pad the
@@ -341,24 +355,15 @@ int fs_write_file(const char* file_path,
   if (ensure_parent_dir(file_path, reason, reason_len) != 0) {
     return -1;
   }
-  FILE* fp = fopen(file_path, "wb");
-  if (fp == NULL) {
+  // Mode `0666` is a ceiling the process umask trims, which is how every file this module creates
+  // gets its permissions. An existing destination keeps its own mode, because `O_TRUNC` writes
+  // through the file that is already there.
+  const int fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  if (fd < 0) {
     return fs_reason_errno(reason, reason_len, errno);
   }
-  // Reset `errno` so a value left by an earlier call cannot pass for the cause of this one. ISO C
-  // does not require `fwrite` to set it, so a stream error that left it at 0 is reported as `EIO`.
-  errno = 0;
-  const size_t written = fwrite(data, 1, data_len, fp);
-  // Capture `errno` before calling `ferror`, which is permitted to modify it even when it succeeds.
-  // Reading it afterwards could name a cause the write never had.
-  const int write_errno = errno;
-  int rc = 0;
-  if (written != data_len) {
-    rc = ferror(fp) != 0
-             ? fs_reason_errno(reason, reason_len, write_errno == 0 ? EIO : write_errno)
-             : error_report(reason, reason_len, "wrote only %zu of %zu bytes", written, data_len);
-  }
-  if (fclose(fp) != 0) {
+  int rc = write_all(fd, data, data_len, reason, reason_len);
+  if (close(fd) != 0) {
     if (rc == 0) {
       (void)fs_reason_errno(reason, reason_len, errno);
     }
@@ -704,6 +709,24 @@ static int ensure_dir(const char* dir_path, char* reason, size_t reason_len) {
     // a directory, and there the verb is what separates a failed parent directory from a failed
     // write. The path trails the cause either way, so a deep component cannot truncate it.
     return error_report(reason, reason_len, "exists and is not a directory ('%s')", dir_path);
+  }
+  return 0;
+}
+
+static int write_all(int fd, const void* data, size_t data_len, char* reason, size_t reason_len) {
+  const unsigned char* bytes = data;
+  size_t offset = 0;
+  while (offset < data_len) {
+    const ssize_t nwritten = write(fd, bytes + offset, data_len - offset);
+    if (nwritten > 0) {
+      offset += (size_t)nwritten;
+    } else if (nwritten < 0 && errno == EINTR) {
+      continue;
+    } else if (nwritten < 0) {
+      return fs_reason_errno(reason, reason_len, errno);
+    } else {
+      return error_report(reason, reason_len, "write made no progress");
+    }
   }
   return 0;
 }
