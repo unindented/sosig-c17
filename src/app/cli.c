@@ -389,8 +389,7 @@ static void cli_parse_workers_option(struct CliOptions* options,
   } else if (count > (size_t)WORKER_COUNT_MAX) {
     // The message prints both values as parsed numbers rather than as the raw argument, because a
     // `size_t` is bounded at twenty digits and so cannot truncate the limit off the end. This
-    // matches `config key 'feed_count' exceeds max feed count (...) at ...`, the closest
-    // sibling.
+    // matches `config key 'feed_count' exceeds max feed count (...) at ...`, the closest sibling.
     record_error(options, "option '--workers' exceeds max worker count (%zu) at %zu",
                  (size_t)WORKER_COUNT_MAX, count);
   } else {

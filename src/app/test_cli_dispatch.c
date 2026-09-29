@@ -212,10 +212,10 @@ static void test_parse_error_reports_usage_code(void) {
 }
 
 // A `stdout` that cannot be written turns a successful print into `EXIT_CODE_FAILURE` and names
-// both the subject and the stream's own reason. Nothing else in the suite reaches this arm: every
-// other path writes to a working descriptor, so nothing else pins the mapping from a printer's
-// non-zero result to an exit code. A read-only descriptor is the deterministic way there, since the
-// write fails inside the printer's `fflush` rather than at the `fprintf`.
+// both the subject and the stream's own reason. Nothing else in the suite reaches this arm. Other
+// tests make a printer fail, but none goes through `cli_dispatch`, so nothing else pins the mapping
+// from a printer's non-zero result to an exit code. A read-only descriptor is the deterministic way
+// there, since the write fails inside the printer's `fflush` rather than at the `fprintf`.
 static void test_version_write_failure_reports_failure(void) {
   char* argv[] = {"sosig", "--version", NULL};
   enum ExitCode rc = (enum ExitCode)TEST_PLUMBING_FAILED;

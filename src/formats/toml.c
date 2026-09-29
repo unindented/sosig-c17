@@ -47,9 +47,8 @@ static bool is_known_key(const char* key,
                          size_t known_key_count) __attribute__((nonnull(1)));
 
 bool toml_datum_is_text(toml_datum_t value) {
-  // Use `memchr` over exactly `len` bytes instead of testing `strlen(ptr) != len`. tomlc17
-  // terminates the string but excludes that terminator from `len`. This scan finds only a `NUL`
-  // that the parser decoded from an escape. It does not find the appended terminator.
+  // tomlc17 terminates the string but excludes that terminator from `len`, so scanning exactly
+  // `len` bytes finds only a `NUL` that the parser decoded from an escape.
   return value.type == TOML_STRING &&
          memchr(value.u.str.ptr, '\0', (size_t)value.u.str.len) == NULL;
 }

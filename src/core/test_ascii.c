@@ -53,12 +53,14 @@ static void test_is_alnum_accepts_only_letters_and_digits(void) {
   TEST_CHECK(!ascii_is_alphanumeric(0xFF));
 }
 
-// `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. The pass-through half has
-// no caller-level coverage. `skip_scheme` folds both the URL byte and the scheme byte before
-// comparing. A fold that set bit 0x20 unconditionally would make the control byte 0x1A compare
-// equal to ':' and 0x0F equal to '/'. A scheme-less base URL spelled with those control bytes would
-// then pass as absolute. The high-byte case is the header's locale-independence check: `tolower`
-// from `<ctype.h>` may fold such a byte under some locales, and this must not.
+// `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. Slugs, URL schemes, and
+// manifest keys all use this exact locale-independent fold, through `text_slugify`, `skip_scheme`,
+// and `manifest_equal_bytes` with `manifest_hash_bytes`. `skip_scheme` folds both the URL byte and
+// the scheme byte before comparing, and a fold that set bit 0x20 unconditionally would make the
+// control byte 0x1A compare equal to ':' and 0x0F equal to '/'. A scheme-less `base_url` spelled
+// with those control bytes would then pass as absolute. The high-byte case pins the rule that bytes
+// outside ASCII never fold, whatever the locale: `tolower` from `<ctype.h>` may fold such a byte
+// under some locales, and this must not.
 static void test_to_lower_folds_uppercase_and_passes_through(void) {
   TEST_CHECK(ascii_to_lower('A') == 'a');
   TEST_CHECK(ascii_to_lower('Z') == 'z');

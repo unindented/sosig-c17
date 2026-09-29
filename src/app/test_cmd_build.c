@@ -377,9 +377,9 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A caller-supplied `worker_count` reaches the pool instead of being replaced by the detected
+// A caller-supplied `worker_count` reaches every pool instead of being replaced by the detected
 // default. A build with it produces the same bytes as the default build. The resolved count is not
-// observable from the return value, so it is read off the verbose progress line, which is the only
+// observable from the return value, so it is read off the verbose phase lines, which are the only
 // place the module reports it.
 static void test_honors_requested_worker_count(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
