@@ -276,13 +276,16 @@ int fs_write_file(const char* file_path,
   if (fp == NULL) {
     return fs_reason_errno(reason, reason_len, errno);
   }
+  // Reset `errno` so a value left by an earlier call cannot pass for the cause of this one. ISO C
+  // does not require `fwrite` to set it, so a stream error that left it at 0 is reported as `EIO`.
+  errno = 0;
   const size_t written = fwrite(data, 1, data_len, fp);
   // Capture `errno` before `ferror`, which is permitted to modify it even when it succeeds.
   const int write_errno = errno;
   int rc = 0;
   if (written != data_len) {
     rc = ferror(fp) != 0
-             ? fs_reason_errno(reason, reason_len, write_errno)
+             ? fs_reason_errno(reason, reason_len, write_errno == 0 ? EIO : write_errno)
              : error_report(reason, reason_len, "wrote only %zu of %zu bytes", written, data_len);
   }
   if (fclose(fp) != 0) {
@@ -459,13 +462,16 @@ static int fs_read_file_bytes(char* data,
                               FILE* fp,
                               char* reason,
                               size_t reason_len) {
+  // Reset `errno` so a value left by an earlier call cannot pass for the cause of this one. ISO C
+  // does not require `fread` to set it, so a stream error that left it at 0 is reported as `EIO`.
+  errno = 0;
   const size_t nread = fread(data, 1, data_len, fp);
   // Capture `errno` before calling `ferror`, which is permitted to modify it even when it succeeds.
   // Reading it afterwards could name a cause the read never had.
   const int read_errno = errno;
   int rc = -1;
   if (ferror(fp) != 0) {
-    (void)fs_reason_errno(reason, reason_len, read_errno);
+    (void)fs_reason_errno(reason, reason_len, read_errno == 0 ? EIO : read_errno);
   } else if (nread != data_len) {
     // No stream error, so the bytes ran out. The file shrank after the caller's `stat`.
     (void)error_report(reason, reason_len, "shrank while being read");
@@ -477,10 +483,11 @@ static int fs_read_file_bytes(char* data,
     // read as a silently truncated copy. One more byte tells the two apart. Nothing left to read
     // means the size still matches, while any byte at all means the file changed underneath us.
     char extra = 0;
+    errno = 0;
     const size_t extra_read = fread(&extra, 1, 1, fp);
     const int extra_errno = errno;
     if (ferror(fp) != 0) {
-      (void)fs_reason_errno(reason, reason_len, extra_errno);
+      (void)fs_reason_errno(reason, reason_len, extra_errno == 0 ? EIO : extra_errno);
     } else if (extra_read == 0) {
       rc = 0;
     } else {
