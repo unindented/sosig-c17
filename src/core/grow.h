@@ -25,13 +25,14 @@
  * program looking like every other one.
  *
  * @param capacity           Current capacity in slots.
- * @param capacity_min       Capacity to jump to from zero. Must be at least `1`.
+ * @param capacity_min       Capacity to jump to from zero. `0` is rejected.
  * @param elem_size          Size of one slot in bytes. `0` is rejected. The returned capacity
  *                           times this cannot overflow.
  * @param capacity_out       Receives the next capacity on success. Must not be `NULL`.
  * @param capacity_bytes_out Receives that capacity in bytes on success, as
  *                           `*capacity_out * elem_size`. Must not be `NULL`.
- * @return `0` on success, or `-1` when `elem_size` is 0 or the next capacity would overflow.
+ * @return `0` on success, or `-1` when `capacity_min` or `elem_size` is 0 or the next capacity
+ *         would overflow.
  */
 int grow_capacity(size_t capacity,
                   size_t capacity_min,

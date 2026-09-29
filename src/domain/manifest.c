@@ -12,11 +12,6 @@
 /** First slot count allocated when an empty entry array first grows. */
 enum { MANIFEST_ENTRIES_CAPACITY_MIN = 16 };
 
-// `grow_capacity` documents `capacity_min >= 1` as a precondition but cannot enforce it. Passing
-// `0` returns success with a capacity of `0`, and the append below would then run out of bounds.
-_Static_assert(MANIFEST_ENTRIES_CAPACITY_MIN >= 1,
-               "grow_capacity requires a minimum capacity of at least 1");
-
 /**
  * First bucket count allocated when the hash index first grows. It must be a power of two, because
  * `manifest_bucket_place` selects a bucket by masking rather than by remainder. It is chosen as

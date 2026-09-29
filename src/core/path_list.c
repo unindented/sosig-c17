@@ -8,12 +8,6 @@
 /** First slot count allocated when an empty path list first grows. */
 enum { PATH_LIST_CAPACITY_MIN = 16 };
 
-// `grow_capacity` documents `capacity_min >= 1` as a precondition but cannot enforce it. Passing
-// `0` returns success with a capacity of `0`, and the store below would then run out of bounds. The
-// constant is a compile-time value, so the check costs nothing.
-_Static_assert(PATH_LIST_CAPACITY_MIN >= 1,
-               "grow_capacity requires a minimum capacity of at least 1");
-
 void path_list_init(struct PathList* paths) {
   *paths = (struct PathList){0};
 }

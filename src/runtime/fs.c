@@ -23,9 +23,6 @@
 /** First slot count allocated when a walk records its first directory. */
 enum { FS_WALK_VISITED_CAPACITY_MIN = 16 };
 
-_Static_assert(FS_WALK_VISITED_CAPACITY_MIN >= 1,
-               "grow_capacity requires a minimum capacity of at least 1");
-
 /** State that one directory walk carries from its root through every directory it reaches. */
 struct FsWalk {
   /** Path list that receives the matching paths, unsorted until the walk ends. */

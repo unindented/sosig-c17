@@ -76,6 +76,15 @@ static void test_rejects_zero_element_size(void) {
   TEST_CHECK(grow_capacity(8, 8, 0, &next, &capacity_bytes) == -1);
 }
 
+// A zero minimum is rejected, since an empty array jumping to it would report success with no slot
+// for the append that asked it to grow. The rejection does not depend on the current capacity.
+static void test_rejects_zero_minimum(void) {
+  size_t next = 0;
+  size_t capacity_bytes = 0;
+  TEST_CHECK(grow_capacity(0, 0, sizeof(int), &next, &capacity_bytes) == -1);
+  TEST_CHECK(grow_capacity(8, 0, sizeof(int), &next, &capacity_bytes) == -1);
+}
+
 TEST_LIST = {
     {"grows from zero to minimum", test_grows_from_zero_to_minimum},
     {"doubles existing capacity", test_doubles_existing_capacity},
@@ -84,5 +93,6 @@ TEST_LIST = {
     {"accepts largest byte total", test_accepts_largest_byte_total},
     {"rejects overflowing byte total", test_rejects_overflowing_byte_total},
     {"rejects zero element size", test_rejects_zero_element_size},
+    {"rejects zero minimum", test_rejects_zero_minimum},
     {NULL, NULL},
 };

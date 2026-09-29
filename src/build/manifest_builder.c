@@ -19,12 +19,6 @@
 /** Slots allocated when the input identity set first grows. */
 enum { INPUT_IDENTITIES_CAPACITY_MIN = 16 };
 
-// `grow_capacity` documents `capacity_min >= 1` as a precondition but cannot enforce it: passing
-// `0` returns success with a capacity of `0`, and `claim_input_identity`'s append would then run
-// out of bounds.
-_Static_assert(INPUT_IDENTITIES_CAPACITY_MIN >= 1,
-               "grow_capacity requires a minimum capacity of at least 1");
-
 /**
  * Size in bytes of the diagnostic label naming one configured template list entry, including the
  * `NUL` terminator. The `<config key>[<index>]` label tells two colliding template outputs apart. A

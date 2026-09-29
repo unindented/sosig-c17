@@ -11,10 +11,10 @@ int grow_capacity(size_t capacity,
     return -1;
   }
   const size_t next = capacity == 0 ? capacity_min : capacity * 2;
-  // The `elem_size == 0` half guards the division, not the product. Division by zero is undefined
-  // behavior. It matches `arena_calloc`'s idiom. A zero-size element has no meaningful capacity to
-  // report, so it fails rather than succeeding with a slot count nothing can be stored in.
-  if (elem_size == 0 || next > SIZE_MAX / elem_size) {
+  // A zero minimum or a zero element size would succeed with a capacity nothing can be stored in,
+  // and the caller's append would then run out of bounds. The `elem_size == 0` half also keeps the
+  // division defined. It matches `arena_calloc`'s idiom.
+  if (capacity_min == 0 || elem_size == 0 || next > SIZE_MAX / elem_size) {
     return -1;
   }
   *capacity_out = next;
