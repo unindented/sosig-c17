@@ -416,6 +416,39 @@ static void test_write_then_read_round_trips(void) {
   arena_free(&arena);
 }
 
+// `fs_write_file` creates a new file with `0666` reduced by the process umask, so a restrictive
+// umask is not discarded, and overwriting an existing file keeps that file's mode.
+static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-mode.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* created = path_join(root_dir, "created.html", &arena);
+  char* existing = path_join(root_dir, "existing.html", &arena);
+
+  // A restrictive umask is the case a hardcoded mode would discard. Restore it before asserting, so
+  // a failure cannot leak the tightened value into later tests.
+  const mode_t previous_umask = umask(077);
+  TEST_CHECK(fs_write_file(created, "x", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(existing, "x", 1, NULL, 0) == 0);
+  TEST_CHECK(chmod(existing, 0640) == 0);
+  TEST_CHECK(fs_write_file(existing, "y", 1, NULL, 0) == 0);
+  (void)umask(previous_umask);
+
+  struct stat st;
+  TEST_CHECK(stat(created, &st) == 0 && (st.st_mode & 0777) == (mode_t)(0666 & ~077));
+  TEST_CHECK(stat(existing, &st) == 0 && (st.st_mode & 0777) == 0640);
+
+  (void)unlink(created);
+  (void)unlink(existing);
+  (void)rmdir(root_dir);
+  arena_free(&arena);
+}
+
 // `fs_write_file` fails when the parent directory cannot be created and when the target is itself a
 // directory, and reports the two as different reasons. The first case is what pins that the
 // parent-directory failure is propagated rather than discarded, which the return value alone cannot
@@ -660,6 +693,8 @@ TEST_LIST = {
     {"read file rejects missing and non-regular", test_read_file_rejects_missing_and_non_regular},
     {"read file rejects embedded nul", test_read_file_rejects_embedded_nul},
     {"write then read round trips", test_write_then_read_round_trips},
+    {"write file applies umask and keeps existing mode",
+     test_write_file_applies_umask_and_keeps_existing_mode},
     {"write file rejects file parent and dir target",
      test_write_file_rejects_file_parent_and_dir_target},
     {"mkdir_p creates nested and is idempotent", test_mkdir_p_creates_nested_and_is_idempotent},

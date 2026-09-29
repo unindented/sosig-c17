@@ -28,12 +28,13 @@ struct FsIdentity {
  *
  * These actions report a reason fragment, not a whole diagnostic, because the caller owns the
  * operation and the attribution. One failed `fs_write_file` is `failed to write output` from the
- * content pass and `failed to write template output` from the aggregate and feed passes. The
- * fragment is lowercase and unquoted so it composes as `<caller's operation>: <reason>`, with any
- * unbounded path trailing the reason, never leading it. `ERROR_MESSAGE_SIZE` is smaller than a path
- * may be, so a leading path would truncate the cause off the end. This is sized for a system
- * message plus a directory path of ordinary depth, because the caller cannot name the failing
- * component. Only the walk knows how deep it got.
+ * content pass and `failed to write template output` from the aggregate and feed passes.
+ * First-party fragments are lowercase and unquoted. Operating-system messages keep their original
+ * spelling. Both compose as `<caller's operation>: <reason>`, with any unbounded path trailing the
+ * reason, never leading it. `ERROR_MESSAGE_SIZE` is smaller than a path may be, so a leading path
+ * would truncate the cause off the end. This is sized for a system message plus a directory path of
+ * ordinary depth, because the caller cannot name the failing component. Only the walk knows how
+ * deep it got.
  */
 enum { FS_REASON_SIZE = 256 };
 
@@ -41,6 +42,8 @@ enum { FS_REASON_SIZE = 256 };
  * @brief Recursively lists files under `root_dir` whose name ends with `suffix`.
  *
  * Appends each matching file's path to `paths` and sorts the whole list so builds are reproducible.
+ * An empty suffix matches every regular file.
+ *
  * It follows symlinked directories, except where doing so would revisit an enclosing directory. It
  * skips such a cycle rather than treating it as an error. It likewise skips an entry that resolves
  * to nothing: a dangling symlink, one removed since it was read, or a symlink that resolves in a
@@ -98,7 +101,20 @@ int fs_read_file(const char* file_path,
 /**
  * @brief Writes `data_len` bytes to `file_path`, creating parent directories as needed.
  *
- * Overwrites any existing file.
+ * Overwrites any existing file in place. The write is deliberately neither atomic nor `fsync`ed, so
+ * a reader can observe a partial file while a write is running and an interrupted build can leave
+ * one behind. That is acceptable because an `output_dir` is reproducible: deleting it and building
+ * again recovers a truncated file in one command, and recovers stale outputs and a half-finished
+ * phase at the same time, which a temp-write-plus-rename protocol would not. Do not add such a
+ * protocol without a caller that cannot recover by rebuilding. A caller that trusts an existing
+ * output instead of regenerating it, such as a freshness check, is that case, because it would take
+ * a truncated file for a finished one.
+ *
+ * A newly created file gets mode `0666` reduced by the process umask. An existing destination keeps
+ * its own mode, because the write goes through the file already there.
+ *
+ * This is the only writer and should stay the only one. A second writer covering a subset of the
+ * outputs gives a caller a choice to get wrong.
  *
  * @param file_path  Destination path. Must not be `NULL`.
  * @param data       Source bytes. Must hold at least `data_len` bytes. Must not be `NULL`.

@@ -85,7 +85,7 @@ The phase order follows the data dependencies. A content template can read `site
 ### Runtime (`src/runtime`)
 
 - [pool](src/runtime/pool.h): Runs indexed jobs through a bounded pthread pool. It completes all jobs, even if one job fails. It joins all workers before it returns. It also gets the default worker count from the number of online CPUs.
-- [fs](src/runtime/fs.h): Finds and sorts matching regular files in a directory tree. It reads `NUL`-free text files and rejects files that change size during a read. It also creates directories, writes files, and gets device and inode values. The directory walk follows symlinked directories but skips cycles. It also skips dangling links and entries removed during the scan.
+- [fs](src/runtime/fs.h): Finds and sorts matching regular files in a directory tree. It reads `NUL`-free text files and rejects files that change size during a read. It also creates directories, writes files, and gets device and inode values. Writes overwrite their destination in place and are neither atomic nor synced: a reproducible output directory makes deleting it and rebuilding a cheaper recovery than a temporary-file protocol. A new file gets mode `0666` reduced by the process umask. The directory walk follows symlinked directories but skips cycles. It also skips dangling links and entries removed during the scan.
 
 ### Core (`src/core`)
 
