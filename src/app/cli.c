@@ -431,9 +431,6 @@ static void cli_parse_command(struct CliOptions* options,
 
 static void reject_unsupported_flags(struct CliOptions* options, unsigned flags_seen) {
   const unsigned flags_unsupported = flags_seen & ~cli_commands[options->command].flags_accepted;
-  if (flags_unsupported == 0) {
-    return;
-  }
   for (size_t i = 0; i < sizeof(cli_flags) / sizeof(cli_flags[0]); i++) {
     if ((flags_unsupported & cli_flags[i].bit) != 0) {
       record_error(options, "command '%s' does not accept option '%s'",
