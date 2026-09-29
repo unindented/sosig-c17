@@ -95,9 +95,7 @@ Each source directory adds its local unit tests. The top-level `tests/` director
 
 A parent that enables `sosig` tests must call `enable_testing()` in its top-level `CMakeLists.txt`. CTest starts discovery at the build root. A child call cannot create the root test file. CMake prints this requirement when a child enables tests.
 
-The production render limit is 256 MiB. A failure test at this limit uses too much memory. `sosig_template_test_variant` builds `template.c` with a 64 KiB limit. It gets all other symbols from `sosig_app`.
-
-The test source uses the same limit. This arrangement checks the failure path without a change to the production limit. It also avoids a copy of the application library.
+Each unit test links the same `sosig_app` as the executable. No test target compiles an application source a second time with different definitions. The production render limit is 256 MiB, and a failure test at this limit uses too much memory. The template test passes a 64 KiB limit to `template_render_file_limited` instead.
 
 Each golden test uses a separate scratch tree. The CMake script collects expected and actual files after `sosig` runs. These runtime globs are not build inputs. Fixture site changes do not require CMake to configure the project again.
 

@@ -17,7 +17,6 @@ set(GRAPHVIZ_CUSTOM_TARGETS FALSE)
 
 set(GRAPHVIZ_IGNORE_TARGETS
     "sosig_build_tests"
-    "sosig_template_test_variant"
     "sosig_test_support"
     "sosig_unit_.*"
     "sosig_vendor_acutest"

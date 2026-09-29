@@ -501,6 +501,54 @@ static void test_comments_are_dropped(void) {
   site_config_free(&site_config);
 }
 
+// The output bound belongs to the call. `template_render_file_limited` accepts output exactly at
+// the bound it is given and rejects one byte more, while `template_render_file` keeps the
+// production bound and renders that same page.
+static void test_output_bound_applies_per_call(void) {
+  enum { OUTPUT_LEN_MAX = 64 * 1024 };
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  TEST_ASSERT(init_fixture_dir(root_dir) != NULL);
+  char* padding = malloc((size_t)OUTPUT_LEN_MAX + 2);
+  TEST_ASSERT(padding != NULL);
+  if (padding == NULL) {
+    return;
+  }
+  memset(padding, 'x', (size_t)OUTPUT_LEN_MAX + 1);
+  padding[OUTPUT_LEN_MAX + 1] = '\0';
+  TEST_ASSERT(write_fixture_file(root_dir, "past.html", padding) == 0);
+  padding[OUTPUT_LEN_MAX] = '\0';
+  TEST_ASSERT(write_fixture_file(root_dir, "at.html", padding) == 0);
+  free(padding);
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct TemplateContext context = {.site_config = &site_config, .site_updated = SITE_UPDATED};
+  char err[ERROR_MESSAGE_SIZE] = "";
+  char* rendered_html =
+      template_render_file_limited(root_dir, "at.html", &context, OUTPUT_LEN_MAX, err, sizeof(err));
+  TEST_ASSERT(rendered_html != NULL);
+  TEST_CHECK(strlen(rendered_html) == (size_t)OUTPUT_LEN_MAX);
+  free(rendered_html);
+
+  TEST_CHECK(template_render_file_limited(root_dir, "past.html", &context, OUTPUT_LEN_MAX, err,
+                                          sizeof(err)) == NULL);
+  char expected_err[ERROR_MESSAGE_SIZE];
+  const int expected_err_len =
+      snprintf(expected_err, sizeof(expected_err),
+               "render exceeds max rendered output (%d bytes) at %d bytes (in 'past.html')",
+               OUTPUT_LEN_MAX, OUTPUT_LEN_MAX + 1);
+  TEST_CHECK(expected_err_len > 0 && (size_t)expected_err_len < sizeof(expected_err));
+  TEST_CHECK(strcmp(err, expected_err) == 0);
+
+  rendered_html = template_render_file(root_dir, "past.html", &context, err, sizeof(err));
+  TEST_ASSERT(rendered_html != NULL);
+  TEST_CHECK(strlen(rendered_html) == (size_t)OUTPUT_LEN_MAX + 1);
+  free(rendered_html);
+
+  remove_fixture_tree(root_dir);
+  site_config_free(&site_config);
+}
+
 // A template name that could escape the root is rejected, naming the offending template. The first
 // call passes a real `err` buffer and asserts the whole message. The calls below pass `NULL, 0` and
 // assert only the `NULL` return. That is deliberate rather than an oversight. The message is pinned
@@ -846,15 +894,13 @@ static void test_rejects_mutual_partial_cycle(void) {
   site_config_free(&site_config);
 }
 
-// An oversize render is rejected once the accumulated output passes the configured byte bound.
+// An oversize render is rejected once the accumulated output passes the byte bound it was given.
 //
-// `template.c` enforces `RENDER_OUTPUT_LEN_MAX`, which this binary overrides down to
-// `SOSIG_RENDER_OUTPUT_LEN_MAX` (see `src/build/CMakeLists.txt`). Reaching a byte-count limit means
-// accumulating that many bytes. The production bound is sized for the largest real site, so
-// asserting it at that value would cost most of a gigabyte of peak RSS for one diagnostic.
+// Reaching a byte-count limit means accumulating that many bytes. The production bound is sized for
+// the largest real site, so asserting it at that value would cost most of a gigabyte of peak RSS
+// for one diagnostic. This case passes a 64 KiB bound to `template_render_file_limited` instead.
 static void test_rejects_oversize_render_output(void) {
-  _Static_assert(SOSIG_RENDER_OUTPUT_LEN_MAX <= 1024 * 1024,
-                 "this binary's render output bound must stay small enough to reach cheaply");
+  enum { OUTPUT_LEN_MAX = 64 * 1024 };
 
   char root_dir_template[] = "/tmp/sosig-template-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -877,8 +923,8 @@ static void test_rejects_oversize_render_output(void) {
   init_test_content_entry(&entry);
   struct TemplateContext context = {.site_config = &site_config, .content_entry_current = &entry};
   char err[ERROR_MESSAGE_SIZE] = "";
-  char* rendered_html =
-      template_render_file(root_dir, "content-entry.html", &context, err, sizeof(err));
+  char* rendered_html = template_render_file_limited(root_dir, "content-entry.html", &context,
+                                                     OUTPUT_LEN_MAX, err, sizeof(err));
   TEST_CHECK(rendered_html == NULL);
   // The measured length is whichever append first crossed the bound, so it depends on the chunking
   // mustache4c happens to use. The limit clause and the template attribution are deterministic and
@@ -886,7 +932,7 @@ static void test_rejects_oversize_render_output(void) {
   char expected_head[ERROR_MESSAGE_SIZE];
   const int expected_head_len =
       snprintf(expected_head, sizeof(expected_head),
-               "render exceeds max rendered output (%d bytes) at ", SOSIG_RENDER_OUTPUT_LEN_MAX);
+               "render exceeds max rendered output (%d bytes) at ", OUTPUT_LEN_MAX);
   TEST_CHECK(expected_head_len > 0 && (size_t)expected_head_len < sizeof(expected_head));
   TEST_CHECK(strncmp(err, expected_head, (size_t)expected_head_len) == 0);
   // Anchored at the end rather than searched for: the head above pins the start and the measured
@@ -1073,6 +1119,7 @@ TEST_LIST = {
     {"inverted section renders when list empty", test_inverted_section_renders_when_list_empty},
     {"empty field is falsey as section", test_empty_field_is_falsey_as_section},
     {"comments are dropped", test_comments_are_dropped},
+    {"output bound applies per call", test_output_bound_applies_per_call},
     {"rejects unsafe template name", test_rejects_unsafe_template_name},
     {"rejects unsafe partial name", test_rejects_unsafe_partial_name},
     {"rejects oversize partial name", test_rejects_oversize_partial_name},

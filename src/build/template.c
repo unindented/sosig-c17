@@ -54,18 +54,14 @@
 // this tool is meant for. The growable buffer doubles, so a render that reaches the bound allocates
 // near three times it before failing. Resident memory stays lower, because the doubled capacity is
 // never written. One that tripped the bound peaked at 261 MB. Reaching it costs that many bytes, so
-// `SOSIG_RENDER_OUTPUT_LEN_MAX` overrides the default for the test binary that asserts its
-// diagnostic. Nothing else defines it.
+// `template_render_file_limited` takes the bound as a parameter, and the test that asserts its
+// diagnostic passes a smaller one.
 //
 // Capacity: the compiled-partial cache is a fixed array, so its length bounds the distinct partial
 // count. This one limits real templates, not runaway ones. A cycle cannot inflate the distinct-name
 // count, because the cache returns hits.
-#ifndef SOSIG_RENDER_OUTPUT_LEN_MAX
-#define SOSIG_RENDER_OUTPUT_LEN_MAX (256 * 1024 * 1024)
-#endif
-
 enum { RENDER_EXPANSION_COUNT_MAX = 300000 };
-enum { RENDER_OUTPUT_LEN_MAX = SOSIG_RENDER_OUTPUT_LEN_MAX };
+enum { RENDER_OUTPUT_LEN_MAX = 256 * 1024 * 1024 };
 enum { RENDER_PARTIAL_COUNT_MAX = 64 };
 
 _Static_assert((size_t)RENDER_PARTIAL_COUNT_MAX <= (size_t)RENDER_EXPANSION_COUNT_MAX,
@@ -174,21 +170,24 @@ struct ProviderData {
   size_t err_len;
 
   /**
-   * `render_fail` sets this on the first failure in any callback, and `template_render_file` checks
-   * it once processing returns. That failure is an exceeded limit, an unsafe partial name, an
-   * unreadable or uncompilable partial, or an allocation failure.
+   * `render_fail` sets this on the first failure in any callback, and
+   * `template_render_file_limited` checks it once processing returns. That failure is an exceeded
+   * limit, an unsafe partial name, an unreadable or uncompilable partial, or an allocation failure.
    */
   bool has_failed;
 };
 
 /**
  * Destination for one render's output, passed to mustache4c as its renderer data. Pairs the buffer
- * with the provider state so an output callback that hits `RENDER_OUTPUT_LEN_MAX` can record the
+ * and its bound with the provider state so an output callback that passes the bound can record the
  * diagnostic itself.
  */
 struct RenderOutput {
   /** Buffer accumulating the rendered bytes. */
   struct StringBuffer* buffer;
+
+  /** Largest accumulated length `buffer` may reach, in bytes. */
+  size_t output_len_max;
 
   /** Provider state for this render, used to report a failed or oversize append. */
   struct ProviderData* provider_data;
@@ -219,7 +218,7 @@ static int out_verbatim(const char* output, size_t output_len, void* renderer_da
 static int out_escaped(const char* output, size_t output_len, void* renderer_data);
 
 /**
- * @brief Fails the render when its accumulated output has passed `RENDER_OUTPUT_LEN_MAX`.
+ * @brief Fails the render when its accumulated output has passed its `output_len_max`.
  *
  * This runs after each append rather than before. Escaping expands a byte into as much as a
  * six-byte entity, so the incoming chunk length alone does not bound the growth. The overshoot is
@@ -475,6 +474,16 @@ char* template_render_file(const char* templates_dir,
                            const struct TemplateContext* context,
                            char* err,
                            size_t err_len) {
+  return template_render_file_limited(templates_dir, template_name, context,
+                                      (size_t)RENDER_OUTPUT_LEN_MAX, err, err_len);
+}
+
+char* template_render_file_limited(const char* templates_dir,
+                                   const char* template_name,
+                                   const struct TemplateContext* context,
+                                   size_t output_len_max,
+                                   char* err,
+                                   size_t err_len) {
   if (!path_is_safe_relative(template_name)) {
     (void)error_report(err, err_len, "template must be a safe relative template name: '%s'",
                        template_name);
@@ -482,9 +491,8 @@ char* template_render_file(const char* templates_dir,
   }
 
   // Every allocation this render makes goes into `scratch`, which this call creates and destroys.
-  // `template_render_file` runs concurrently in pool jobs, so the per-call arena keeps two renders
-  // out of each other's memory. Nothing in this file may allocate into an arena reached through
-  // `context`.
+  // Renders run concurrently in pool jobs, so the per-call arena keeps two renders out of each
+  // other's memory. Nothing in this file may allocate into an arena reached through `context`.
   struct Arena scratch;
   arena_init(&scratch);
   struct StringBuffer buffer;
@@ -502,7 +510,8 @@ char* template_render_file(const char* templates_dir,
                                        .node_root = &node_root,
                                        .err = err,
                                        .err_len = err_len};
-  struct RenderOutput render_output = {.buffer = &buffer, .provider_data = &provider_data};
+  struct RenderOutput render_output = {
+      .buffer = &buffer, .output_len_max = output_len_max, .provider_data = &provider_data};
 
   char* template_data = NULL;
   size_t template_len = 0;
@@ -587,12 +596,12 @@ static int out_escaped(const char* output, size_t output_len, void* renderer_dat
 }
 
 static int check_output_size(const struct RenderOutput* render_output) {
-  if (render_output->buffer->len <= (size_t)RENDER_OUTPUT_LEN_MAX) {
+  if (render_output->buffer->len <= render_output->output_len_max) {
     return 0;
   }
   render_fail(render_output->provider_data,
-              "render exceeds max rendered output (%d bytes) at %zu bytes (in '%s')",
-              RENDER_OUTPUT_LEN_MAX, render_output->buffer->len,
+              "render exceeds max rendered output (%zu bytes) at %zu bytes (in '%s')",
+              render_output->output_len_max, render_output->buffer->len,
               render_output->provider_data->template_name);
   return -1;
 }

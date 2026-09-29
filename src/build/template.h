@@ -51,4 +51,28 @@ char* template_render_file(const char* templates_dir,
                            char* err,
                            size_t err_len) __attribute__((nonnull(1, 2, 3)));
 
+/**
+ * @brief Renders a template file into HTML under a caller-chosen output bound.
+ *
+ * Behaves as `template_render_file`, which calls it with the production bound. Reaching a byte
+ * bound costs that many bytes, so this lets a test assert the output-limit diagnostic cheaply.
+ *
+ * @param templates_dir  Template directory root. Must not be `NULL`.
+ * @param template_name  Safe relative template name within `templates_dir`. Must not be `NULL`.
+ * @param context        Borrowed data visible to the template during this render. Must not be
+ *                       `NULL`.
+ * @param output_len_max Largest rendered output accepted, in bytes. A render whose accumulated
+ *                       output passes it fails with a diagnostic naming it.
+ * @param err            Buffer receiving a diagnostic, as for `template_render_file`. May be `NULL`
+ *                       only when `err_len` is 0.
+ * @param err_len        Size of `err` in bytes.
+ * @return Terminated HTML the caller must `free`, or `NULL` on failure, with a diagnostic in `err`.
+ */
+char* template_render_file_limited(const char* templates_dir,
+                                   const char* template_name,
+                                   const struct TemplateContext* context,
+                                   size_t output_len_max,
+                                   char* err,
+                                   size_t err_len) __attribute__((nonnull(1, 2, 3)));
+
 #endif
