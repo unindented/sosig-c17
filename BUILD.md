@@ -73,6 +73,8 @@ Generator expressions select configuration options at build time. The same rules
 
 `SOSIG_SANITIZER` accepts `none`, `address`, or `thread`. The `address` option enables AddressSanitizer and UndefinedBehaviorSanitizer. The `thread` option enables ThreadSanitizer. It adds sanitizer options to standard CMake configurations. It does not create custom build types.
 
+The address-sanitizer profile instruments first-party and vendored code. Vendored code disables the unsupported `null` and `object-size` checks. First-party sources retain the full sanitizer set.
+
 ## Linting and formatting
 
 CMake sets `clang-tidy` and `cppcheck` as properties of first-party targets. Neither tool checks vendored code.
