@@ -39,7 +39,7 @@ struct FsIdentity {
 enum { FS_REASON_SIZE = 256 };
 
 /**
- * @brief Recursively lists files under `root_dir` whose name ends with `suffix`.
+ * @brief Recursively lists regular files under `root_dir` whose name ends with `suffix`.
  *
  * Appends each matching file's path to `paths` and sorts the whole list so builds are reproducible.
  * An empty suffix matches every regular file.

@@ -594,6 +594,32 @@ static void test_write_then_read_round_trips(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A second write truncates a prior file and replaces its contents.
+static void test_write_file_replaces_contents(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-replace.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* file_path = path_join(root_dir, "nested/output.html", &arena);
+  TEST_CHECK(fs_write_file(file_path, "old contents", strlen("old contents"), NULL, 0) == 0);
+  static const char replacement[] = {'n', 'e', 'w'};
+  TEST_CHECK(fs_write_file(file_path, replacement, sizeof(replacement), NULL, 0) == 0);
+
+  char* data = NULL;
+  size_t data_len = 0;
+  TEST_CHECK(fs_read_file(file_path, TEST_FILE_LEN_MAX, &data, &data_len, NULL, 0) == 0);
+  TEST_CHECK(data_len == sizeof(replacement));
+  TEST_CHECK(memcmp(data, replacement, sizeof(replacement)) == 0);
+  free(data);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // `fs_write_file` creates a new file with `0666` reduced by the process umask, so a restrictive
 // umask is not discarded, and overwriting an existing file keeps that file's mode.
 static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
@@ -862,6 +888,7 @@ TEST_LIST = {
     {"read file rejects embedded nul", test_read_file_rejects_embedded_nul},
     {"read file rejects oversize before reading", test_read_file_rejects_oversize_before_reading},
     {"write then read round trips", test_write_then_read_round_trips},
+    {"write file replaces contents", test_write_file_replaces_contents},
     {"write file applies umask and keeps existing mode",
      test_write_file_applies_umask_and_keeps_existing_mode},
     {"write file rejects file parent and dir target",
