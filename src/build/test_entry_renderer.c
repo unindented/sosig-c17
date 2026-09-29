@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include "core/path_list.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
+#include "formats/markdown.h"
 #include "runtime/fs.h"
 #include "shared/arena.h"
 #include "shared/string_buffer.h"
@@ -1016,6 +1018,59 @@ static void test_reports_unreadable_source(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A source larger than `MARKDOWN_INPUT_LEN_MAX` is rejected at the read, from its size, naming the
+// limit and the size, rather than read whole and turned away by the converter. The file is sparse,
+// so the fixture costs no disk and a read that loaded it would show only as the wrong diagnostic.
+static void test_rejects_oversize_source(void) {
+  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  const char config[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Site\"\n"
+      "author = \"Author\"\n"
+      "aggregate_templates = []\n"
+      "feed_templates = []\n";
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "+++\ntitle = \"Hello\"\n+++\n") ==
+             0);
+  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* source_path = path_join(root_dir, "content/hello.md", &arena);
+  const off_t source_len = (off_t)MARKDOWN_INPUT_LEN_MAX + 1;
+  TEST_CHECK(source_path != NULL && truncate(source_path, source_len) == 0);
+  arena_free(&arena);
+
+  struct SiteConfig site_config;
+  site_config_init(&site_config);
+  struct PathList source_paths;
+  path_list_init(&source_paths);
+  struct RenderJob* render_jobs = NULL;
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+
+  TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
+                                  &render_jobs, &error_buffer) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "failed to read content: exceeds max file size (%zu bytes) at %jd bytes "
+                         "('content/hello.md')",
+                         (size_t)MARKDOWN_INPUT_LEN_MAX, (intmax_t)source_len);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+
+  free_render_jobs(render_jobs, source_paths.count);
+  string_buffer_free(&error_buffer);
+  path_list_free(&source_paths);
+  site_config_free(&site_config);
+  remove_fixture_tree(root_dir);
+}
+
 // Two failing sources append one diagnostic line each, separated by exactly one newline, with none
 // leading or trailing the buffer. That separator placement is what the "one per line" contract in
 // `entry_renderer.h` means, and a single-source failure cannot observe it at all. The build-level
@@ -1095,6 +1150,7 @@ TEST_LIST = {
     {"reports frontmatter reason before long source path",
      test_reports_frontmatter_reason_before_long_source_path},
     {"reports unreadable source", test_reports_unreadable_source},
+    {"rejects oversize source", test_rejects_oversize_source},
     {"appends one error line per failing source", test_appends_one_error_line_per_failing_source},
     {NULL, NULL},
 };

@@ -4,6 +4,7 @@
 #include <acutest.h>
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -368,6 +369,31 @@ static void test_load_rejects_missing_file(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(err, expected) == 0);
   site_config_free(&config);
+}
+
+// A config larger than `CONFIG_FILE_LEN_MAX` is rejected at the read, from its size, naming the
+// limit and the size. The constant is file-local to `site_config.c`, so the 1 MiB below is spelled
+// out and must change with it. The file is sparse, so the fixture costs no disk.
+static void test_load_rejects_oversize_file(void) {
+  enum { CONFIG_FILE_LEN_MAX = 1024 * 1024 };
+  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
+  write_temp_config(config_path, "title = \"Site\"\n");
+  const off_t config_len = (off_t)CONFIG_FILE_LEN_MAX + 1;
+  TEST_ASSERT(truncate(config_path, config_len) == 0);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to read config: exceeds max file size (%d bytes) at %jd bytes ('%s')",
+               CONFIG_FILE_LEN_MAX, (intmax_t)config_len, config_path);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  site_config_free(&config);
+  unlink(config_path);
 }
 
 // `site_config_load` reports a syntactically malformed config as a parse failure naming the
@@ -1083,6 +1109,7 @@ TEST_LIST = {
     {"load rejects empty directory keys", test_load_rejects_empty_directory_keys},
     {"load rejects relative base url", test_load_rejects_relative_base_url},
     {"load rejects missing file", test_load_rejects_missing_file},
+    {"load rejects oversize file", test_load_rejects_oversize_file},
     {"load rejects malformed toml", test_load_rejects_malformed_toml},
     {"load rejects missing required key", test_load_rejects_missing_required_key},
     {"load rejects wrong key type", test_load_rejects_wrong_key_type},

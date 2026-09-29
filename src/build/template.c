@@ -72,6 +72,17 @@ _Static_assert((size_t)RENDER_PARTIAL_COUNT_MAX <= (size_t)RENDER_EXPANSION_COUN
                "a distinct partial costs at least one expansion, so its limit must be reachable");
 
 /**
+ * Largest template or partial file read, in bytes.
+ *
+ * A render reads its template and compiles up to `RENDER_PARTIAL_COUNT_MAX` distinct partials, and
+ * the compiled form keeps a copy of every literal run, so 4 MiB each bounds one render's compiled
+ * sources at 260 MiB, the same order as `RENDER_OUTPUT_LEN_MAX`. A hand-written template with
+ * inline styles, scripts and SVG is tens of kilobytes, so this sits two orders of magnitude above
+ * one. The read checks it before loading the file, so an oversize template is never resident.
+ */
+enum { TEMPLATE_FILE_LEN_MAX = 4 * 1024 * 1024 };
+
+/**
  * Size of the stack buffer `node_get_partial_path` formats `partials/<name>.html` into. This is a
  * buffer bound on one path rather than a limit on the render's behavior.
  *
@@ -505,7 +516,8 @@ char* template_render_file(const char* templates_dir,
     goto cleanup;
   }
   char reason[FS_REASON_SIZE];
-  if (fs_read_file(template_path, &template_data, &template_len, reason, sizeof(reason)) != 0) {
+  if (fs_read_file(template_path, TEMPLATE_FILE_LEN_MAX, &template_data, &template_len, reason,
+                   sizeof(reason)) != 0) {
     (void)error_report(err, err_len, "failed to read template: %s ('%s')", reason, template_path);
     goto cleanup;
   }
@@ -738,7 +750,8 @@ static MUSTACHE_TEMPLATE* node_get_partial_compile(struct ProviderData* provider
   char* partial_data = NULL;
   size_t partial_len = 0;
   char reason[FS_REASON_SIZE];
-  if (fs_read_file(partial_path, &partial_data, &partial_len, reason, sizeof(reason)) != 0) {
+  if (fs_read_file(partial_path, TEMPLATE_FILE_LEN_MAX, &partial_data, &partial_len, reason,
+                   sizeof(reason)) != 0) {
     render_fail(provider_data, "failed to read partial: %s ('%s')", reason, partial_path);
     return NULL;
   }

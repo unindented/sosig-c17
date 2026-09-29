@@ -74,6 +74,10 @@ int fs_list_files_with_suffix(struct PathList* paths,
  * on success. It rejects non-regular files and files that change size during a read. It never
  * reports a partial copy as a successful read.
  *
+ * It rejects a file larger than `data_len_max` from its `stat` size, before allocating or reading
+ * anything, so an oversize input never becomes resident. Each caller passes the limit for the kind
+ * of file it reads.
+ *
  * It also rejects a file containing an embedded `NUL` byte. This is the boundary that establishes
  * the codebase's text invariant. Every owned string is a `NUL`-free C string, which makes
  * recovering a length with `strlen` correct downstream. TOML string values are a separate boundary,
@@ -81,6 +85,8 @@ int fs_list_files_with_suffix(struct PathList* paths,
  * `toml_datum_is_text`.
  *
  * @param file_path    Path of the file to read. Must not be `NULL`.
+ * @param data_len_max Largest accepted file size in bytes, excluding the terminator this adds. Must
+ *                     be less than `SIZE_MAX`, which leaves room for the terminator.
  * @param data_out     Receives the malloc'd buffer holding the file bytes plus a terminator. Must
  *                     not be `NULL`.
  * @param data_len_out Receives the number of bytes read, excluding the terminator. Must not be
@@ -89,15 +95,16 @@ int fs_list_files_with_suffix(struct PathList* paths,
  *                     from the system ones. May be `NULL` only when `reason_len` is 0. Untouched on
  *                     success.
  * @param reason_len   Size of `reason` in bytes.
- * @return `0` on success, or `-1` when the file is missing, not regular, too large, changed size
- *         mid-read or contains an embedded `NUL`, and on an open, read, allocation or close
- *         failure.
+ * @return `0` on success, or `-1` when the file is missing, not regular, larger than
+ *         `data_len_max`, changed size mid-read or contains an embedded `NUL`, and on an open,
+ *         read, allocation or close failure.
  */
 int fs_read_file(const char* file_path,
+                 size_t data_len_max,
                  char** data_out,
                  size_t* data_len_out,
                  char* reason,
-                 size_t reason_len) __attribute__((nonnull(1, 2, 3)));
+                 size_t reason_len) __attribute__((nonnull(1, 3, 4)));
 
 /**
  * @brief Writes `data_len` bytes to `file_path`, creating parent directories as needed.

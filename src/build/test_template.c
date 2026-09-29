@@ -1,15 +1,25 @@
+#define _DARWIN_C_SOURCE
+#define _DEFAULT_SOURCE
+
 #include <acutest.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "build/template.h"
 #include "core/error.h"
+#include "core/path.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/arena.h"
 #include "test_support.h"
+
+/** Timestamp every render below passes as `site.updated`, which `TemplateContext` requires. */
+static const char* const SITE_UPDATED = "2026-07-01T00:00:00Z";
 
 /**
  * @brief Initializes shared site metadata for template tests.
@@ -642,6 +652,54 @@ static void test_rejects_unreadable_partial(void) {
   site_config_free(&site_config);
 }
 
+// A template or partial larger than `TEMPLATE_FILE_LEN_MAX` fails the render at the read, from its
+// size, naming the limit and the size. The constant is file-local to `template.c`, so the 4 MiB
+// below is spelled out and must change with it. The files are sparse, so the fixture costs no disk.
+static void test_rejects_oversize_template_and_partial(void) {
+  enum { TEMPLATE_FILE_LEN_MAX = 4 * 1024 * 1024 };
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  TEST_ASSERT(init_fixture_dir(root_dir) != NULL);
+
+  TEST_ASSERT(write_fixture_file(root_dir, "big.html", "") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "uses-big.html", "before {{>big}} after") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "partials/big.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+  const off_t file_len = (off_t)TEMPLATE_FILE_LEN_MAX + 1;
+  TEST_ASSERT(truncate(path_join(root_dir, "big.html", &arena), file_len) == 0);
+  TEST_ASSERT(truncate(path_join(root_dir, "partials/big.html", &arena), file_len) == 0);
+  arena_free(&arena);
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct ContentEntry entry;
+  init_test_content_entry(&entry);
+  struct TemplateContext context = {
+      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(template_render_file(root_dir, "big.html", &context, err, sizeof(err)) == NULL);
+  char expected[ERROR_MESSAGE_SIZE];
+  int n = snprintf(expected, sizeof(expected),
+                   "failed to read template: exceeds max file size (%d bytes) at %jd bytes "
+                   "('%s/big.html')",
+                   TEMPLATE_FILE_LEN_MAX, (intmax_t)file_len, root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  err[0] = '\0';
+  TEST_CHECK(template_render_file(root_dir, "uses-big.html", &context, err, sizeof(err)) == NULL);
+  n = snprintf(expected, sizeof(expected),
+               "failed to read partial: exceeds max file size (%d bytes) at %jd bytes "
+               "('%s/partials/big.html')",
+               TEMPLATE_FILE_LEN_MAX, (intmax_t)file_len, root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  remove_fixture_tree(root_dir);
+  content_entry_free(&entry);
+  site_config_free(&site_config);
+}
+
 // One distinct partial past the limit is rejected, naming the limit and the partial that reached
 // it. `test_repeated_partial_stays_under_distinct_limit` covers the cache-hit side, where
 // references beyond the limit cost nothing. This covers the miss side, where each distinct name
@@ -1019,6 +1077,7 @@ TEST_LIST = {
     {"rejects unsafe partial name", test_rejects_unsafe_partial_name},
     {"rejects oversize partial name", test_rejects_oversize_partial_name},
     {"rejects unreadable partial", test_rejects_unreadable_partial},
+    {"rejects oversize template and partial", test_rejects_oversize_template_and_partial},
     {"rejects partial count past limit", test_rejects_partial_count_past_limit},
     {"rejects recursive partial", test_rejects_recursive_partial},
     {"rejects mutual partial cycle", test_rejects_mutual_partial_cycle},

@@ -42,6 +42,20 @@ static const char* const FEED_TEMPLATES_DEFAULT[] = {"atom.xml"};
 enum { FEED_COUNT_DEFAULT = 10 };
 
 /**
+ * Largest config file read, in bytes.
+ *
+ * A config is a few dozen keys, well under a kilobyte, so 1 MiB is three orders of magnitude of
+ * headroom while keeping what tomlc17 copies and builds from it to a few MiB. The read checks it
+ * before loading the file, so an oversize config is never resident.
+ */
+enum { CONFIG_FILE_LEN_MAX = 1024 * 1024 };
+
+// `toml_parse_named` takes the document length as an `int`, and converting a `size_t` above
+// `INT_MAX` to `int` is implementation-defined. Every config the read accepts must convert exactly.
+_Static_assert(CONFIG_FILE_LEN_MAX <= INT_MAX,
+               "an accepted config must fit the int length tomlc17 takes");
+
+/**
  * Sample values a permalink pattern is expanded with during validation. They stand in for real
  * ones, which are always slugified and so always safe on their own.
  *
@@ -445,23 +459,14 @@ static int site_config_load_toml(const char* config_path,
   char* config_data = NULL;
   size_t config_len = 0;
   char reason[FS_REASON_SIZE];
-  if (fs_read_file(config_path, &config_data, &config_len, reason, sizeof(reason)) != 0) {
+  if (fs_read_file(config_path, CONFIG_FILE_LEN_MAX, &config_data, &config_len, reason,
+                   sizeof(reason)) != 0) {
     return error_report(err, err_len, "failed to read config: %s ('%s')", reason, config_path);
   }
 
   int rc = -1;
-  // Reject an oversize config before the cast below. `toml_parse_named` takes the length as an
-  // `int`, and converting a `size_t` greater than `INT_MAX` to `int` is implementation-defined and
-  // may raise a signal. `fs_read_file` bounds a read only at `SIZE_MAX - 1`, so this is reachable
-  // for a config over 2 GiB rather than dead code.
-  if (config_len > (size_t)INT_MAX) {
-    (void)error_report(err, err_len,
-                       "failed to read config: exceeds max config size (%d bytes) at %zu bytes "
-                       "('%s')",
-                       INT_MAX, config_len, config_path);
-    goto cleanup;
-  }
-  // tomlc17 copies the input, so cleanup frees the source buffer once.
+  // tomlc17 copies the input, so cleanup frees the source buffer once. The cast is exact because
+  // the read bounds `config_len` at `CONFIG_FILE_LEN_MAX`, which fits an `int`.
   *parsed_out = toml_parse_named(config_data, (int)config_len, config_path);
   if (!parsed_out->ok) {
     (void)error_report(err, err_len, "failed to parse config: %s ('%s')", parsed_out->errmsg,

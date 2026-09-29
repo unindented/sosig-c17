@@ -19,6 +19,17 @@
 #include "shared/arena.h"
 
 /**
+ * Largest content source file read, in bytes, frontmatter and fences included.
+ *
+ * The body alone is capped at `MARKDOWN_INPUT_LEN_MAX` by `markdown_to_html`, and a file is never
+ * smaller than its body, so a file over this could not render anyway. Checking the whole file at
+ * the read rejects it before it is resident, which matters because content jobs read in parallel:
+ * each worker would otherwise hold a full oversize file before the converter turned it away. It
+ * also bounds the frontmatter, which has no smaller cap of its own.
+ */
+enum { CONTENT_FILE_LEN_MAX = MARKDOWN_INPUT_LEN_MAX };
+
+/**
  * Slugified `/`-separated path segments and their lengths, sized and filled in one pass.
  *
  * `item_lens` and `joined_len` come from the same measurements, so `join_segments` sizes its
@@ -336,8 +347,8 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
                                             struct RenderJob* result) {
   size_t markdown_len = 0;
   char reason[FS_REASON_SIZE];
-  if (fs_read_file(source_path, &source_out->markdown, &markdown_len, reason, sizeof(reason)) !=
-      0) {
+  if (fs_read_file(source_path, CONTENT_FILE_LEN_MAX, &source_out->markdown, &markdown_len, reason,
+                   sizeof(reason)) != 0) {
     render_job_set_error(result, "failed to read content: %s ('%s')", reason, source_path);
     return -1;
   }

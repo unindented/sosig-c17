@@ -15,6 +15,9 @@
 #include "shared/arena.h"
 #include "test_support.h"
 
+/** Largest file a test here reads back, in bytes. Every fixture file is a few bytes. */
+enum { TEST_FILE_LEN_MAX = 1024 };
+
 /**
  * @brief Formats the system reason an `fs` action reports.
  *
@@ -310,12 +313,37 @@ static void test_read_file_accepts_empty(void) {
 
   char* file_data = NULL;
   size_t file_len = 123;
-  TEST_CHECK(fs_read_file(empty_path, &file_data, &file_len, NULL, 0) == 0);
+  TEST_CHECK(fs_read_file(empty_path, TEST_FILE_LEN_MAX, &file_data, &file_len, NULL, 0) == 0);
   TEST_CHECK(file_len == 0);
   TEST_CHECK(file_data != NULL && file_data[0] == '\0');
   free(file_data);
 
   (void)unlink(empty_path);
+  (void)rmdir(root_dir);
+  arena_free(&arena);
+}
+
+// A file exactly at `data_len_max` bytes reads in full. The limit is inclusive.
+static void test_read_file_accepts_file_at_limit(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-read-limit.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* file_path = path_join(root_dir, "limit.md", &arena);
+  TEST_CHECK(fs_write_file(file_path, "four", strlen("four"), NULL, 0) == 0);
+
+  char* file_data = NULL;
+  size_t file_len = 0;
+  TEST_CHECK(fs_read_file(file_path, strlen("four"), &file_data, &file_len, NULL, 0) == 0);
+  TEST_CHECK(file_len == strlen("four"));
+  TEST_CHECK(file_data != NULL && strcmp(file_data, "four") == 0);
+  free(file_data);
+
+  (void)unlink(file_path);
   (void)rmdir(root_dir);
   arena_free(&arena);
 }
@@ -337,7 +365,8 @@ static void test_read_file_rejects_missing_and_non_regular(void) {
   char* file_data = sentinel;
   size_t file_len = 999;
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_read_file(missing, &file_data, &file_len, reason, sizeof(reason)) == -1);
+  TEST_CHECK(fs_read_file(missing, TEST_FILE_LEN_MAX, &file_data, &file_len, reason,
+                          sizeof(reason)) == -1);
   TEST_CHECK(file_data == sentinel);
   TEST_CHECK(file_len == 999);
   char expected[FS_REASON_SIZE];
@@ -348,7 +377,8 @@ static void test_read_file_rejects_missing_and_non_regular(void) {
   file_data = sentinel;
   file_len = 999;
   reason[0] = '\0';
-  TEST_CHECK(fs_read_file(root_dir, &file_data, &file_len, reason, sizeof(reason)) == -1);
+  TEST_CHECK(fs_read_file(root_dir, TEST_FILE_LEN_MAX, &file_data, &file_len, reason,
+                          sizeof(reason)) == -1);
   TEST_CHECK(file_data == sentinel);
   TEST_CHECK(file_len == 999);
   TEST_CHECK(strcmp(reason, "not a regular file") == 0);
@@ -376,7 +406,8 @@ static void test_read_file_rejects_embedded_nul(void) {
   char* file_data = sentinel;
   size_t file_len = 999;
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_read_file(nul_path, &file_data, &file_len, reason, sizeof(reason)) == -1);
+  TEST_CHECK(fs_read_file(nul_path, TEST_FILE_LEN_MAX, &file_data, &file_len, reason,
+                          sizeof(reason)) == -1);
   TEST_CHECK(file_data == sentinel);
   TEST_CHECK(file_len == 999);
   // The reason names the policy. No system error occurred and the file reads fine otherwise.
@@ -385,6 +416,43 @@ static void test_read_file_rejects_embedded_nul(void) {
   (void)unlink(nul_path);
   arena_free(&arena);
   (void)rmdir(root_dir);
+}
+
+// A file over `data_len_max` is rejected from its `stat` size, naming the limit and the size, and
+// leaves outputs untouched. The file is unreadable, so a rejection that opened or read it first
+// would report `EACCES` instead: the size check must come before either.
+static void test_read_file_rejects_oversize_before_reading(void) {
+  // Root bypasses the permission bits, so the open would succeed and the test would not show that
+  // the check came first.
+  if (geteuid() == 0) {
+    return;
+  }
+
+  char root_dir_template[] = "/tmp/sosig-fs-read-oversize.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* file_path = path_join(root_dir, "big.md", &arena);
+  TEST_CHECK(fs_write_file(file_path, "five!", strlen("five!"), NULL, 0) == 0);
+  TEST_CHECK(chmod(file_path, 0200) == 0);
+
+  char sentinel[] = "unchanged";
+  char* file_data = sentinel;
+  size_t file_len = 999;
+  char reason[FS_REASON_SIZE] = "";
+  TEST_CHECK(
+      fs_read_file(file_path, strlen("five"), &file_data, &file_len, reason, sizeof(reason)) == -1);
+  TEST_CHECK(file_data == sentinel);
+  TEST_CHECK(file_len == 999);
+  TEST_CHECK(strcmp(reason, "exceeds max file size (4 bytes) at 5 bytes") == 0);
+
+  (void)unlink(file_path);
+  (void)rmdir(root_dir);
+  arena_free(&arena);
 }
 
 // A written file reads back byte-for-byte, and a successful write and a successful read each leave
@@ -405,7 +473,8 @@ static void test_write_then_read_round_trips(void) {
 
   char* file_data = NULL;
   size_t file_len = 0;
-  TEST_CHECK(fs_read_file(root_md, &file_data, &file_len, reason, sizeof(reason)) == 0);
+  TEST_CHECK(
+      fs_read_file(root_md, TEST_FILE_LEN_MAX, &file_data, &file_len, reason, sizeof(reason)) == 0);
   TEST_CHECK(file_len == strlen("root"));
   TEST_CHECK(strcmp(file_data, "root") == 0);
   TEST_CHECK(strcmp(reason, "untouched") == 0);
@@ -691,8 +760,10 @@ TEST_LIST = {
     {"list files rejects file root", test_list_files_rejects_file_root},
     {"list files rejects unstatable entry", test_list_files_rejects_unstatable_entry},
     {"read file accepts empty", test_read_file_accepts_empty},
+    {"read file accepts file at limit", test_read_file_accepts_file_at_limit},
     {"read file rejects missing and non-regular", test_read_file_rejects_missing_and_non_regular},
     {"read file rejects embedded nul", test_read_file_rejects_embedded_nul},
+    {"read file rejects oversize before reading", test_read_file_rejects_oversize_before_reading},
     {"write then read round trips", test_write_then_read_round_trips},
     {"write file applies umask and keeps existing mode",
      test_write_file_applies_umask_and_keeps_existing_mode},

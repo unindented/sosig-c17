@@ -52,6 +52,8 @@ The tool removes trailing `/` characters from `content_dir`, `output_dir`, and `
 
 The build searches all directories under `content_dir` for regular files that end in `.md`. It creates `output_dir` and all required output subdirectories. It overwrites each output file that the current build generates.
 
+The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
+
 Before the tool renders page templates or writes files, it rejects an output plan with one of these conflicts:
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.

@@ -13,6 +13,10 @@
  * already parsed and retained the HTML. The same 256 MiB cap rejects that body at the converter and
  * reports the limit. This prevents the body from dominating RSS before a generic render error.
  *
+ * `entry_renderer` reads each content file with this as its size limit, so a source too large to
+ * hold such a body is rejected from its size before it is loaded. The check in `markdown_to_html`
+ * still binds for any other caller.
+ *
  * The md4c API addresses input with `MD_SIZE` (`unsigned`). The 256 MiB cap is far below that
  * range. The API can address all accepted input.
  */

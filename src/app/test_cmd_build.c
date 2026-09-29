@@ -20,6 +20,9 @@
 #include "shared/string_buffer.h"
 #include "test_support.h"
 
+/** Largest generated file a test reads back, in bytes. Fixture outputs are a few kilobytes. */
+enum { TEST_FILE_LEN_MAX = 1024 * 1024 };
+
 /**
  * @brief Reads one generated file relative to a temporary site root.
  *
@@ -36,9 +39,10 @@ static int read_fixture_file(const char* root_dir,
   struct Arena arena;
   arena_init(&arena);
   char* fixture_path = path_join(root_dir, relative_path, &arena);
-  const int rc = fixture_path == NULL ? -1
-                                      : fs_read_file(fixture_path, generated_file_out,
-                                                     generated_file_len_out, NULL, 0);
+  const int rc = fixture_path == NULL
+                     ? -1
+                     : fs_read_file(fixture_path, TEST_FILE_LEN_MAX, generated_file_out,
+                                    generated_file_len_out, NULL, 0);
   arena_free(&arena);
   return rc;
 }
