@@ -1,7 +1,7 @@
 #ifndef SOSIG_EXIT_CODE_H
 #define SOSIG_EXIT_CODE_H
 
-/** Process exit codes returned by `main` and the `cmd_*_run` command entry points. */
+/** Process exit codes returned by `main`, `cli_dispatch`, and the `cmd_*_run` entry points. */
 enum ExitCode {
   /** The command completed successfully. */
   EXIT_CODE_OK = 0,
@@ -14,8 +14,10 @@ enum ExitCode {
 };
 
 /**
- * Highest value the range above allows. Nothing else in the build inspects these numbers, so a code
- * outside the range would compile and test clean.
+ * Highest exit status a code may use. Shells reserve 126 and above for their own meanings (command
+ * not executable, command not found, and 128 plus a signal number), so a code there would be
+ * misread as one of those. The `_Static_assert` below enforces this bound, and `test_exit_code.c`
+ * pins the individual values.
  */
 enum { EXIT_CODE_VALUE_MAX = 125 };
 
