@@ -1,6 +1,3 @@
-#define _DARWIN_C_SOURCE
-#define _DEFAULT_SOURCE
-
 #include <acutest.h>
 #include <stdatomic.h>
 #include <stddef.h>
