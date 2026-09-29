@@ -25,7 +25,6 @@ function(sosig_add_golden_test name)
     "${name}"
     PROPERTIES LABELS "sosig;golden"
                ENVIRONMENT_MODIFICATION "UBSAN_OPTIONS=string_prepend:print_stacktrace=1:"
-               ${arg_UNPARSED_ARGUMENTS}
   )
 endfunction()
 
