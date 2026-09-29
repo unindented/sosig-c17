@@ -172,7 +172,9 @@ static void test_config_command_help(void) {
 // `--version` resolves to a version action.
 static void test_version_long_flag(void) {
   char* argv[] = {"sosig", "--version", NULL};
-  TEST_CHECK(parse(argv).action == CLI_ACTION_VERSION);
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+  TEST_CHECK(options.error_message[0] == '\0');
 }
 
 // `-V` resolves to a version action.
@@ -181,10 +183,15 @@ static void test_version_short_flag(void) {
   TEST_CHECK(parse(argv).action == CLI_ACTION_VERSION);
 }
 
-// `--version` takes priority when both `--version` and `--help` are given.
+// Version wins over help regardless of their order.
 static void test_version_flag_wins_over_help(void) {
-  char* argv[] = {"sosig", "--version", "--help", NULL};
-  TEST_CHECK(parse(argv).action == CLI_ACTION_VERSION);
+  char* help_first[] = {"sosig", "--help", "--version", NULL};
+  struct CliOptions options = parse(help_first);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+
+  char* version_first[] = {"sosig", "--version", "--help", NULL};
+  options = parse(version_first);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
 }
 
 // An informational flag takes priority over a parse error, and discards the diagnostic that error
