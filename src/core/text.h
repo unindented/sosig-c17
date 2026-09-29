@@ -30,10 +30,10 @@ bool text_is_safe_identifier(const char* name);
 /**
  * @brief Converts arbitrary text to a lowercase, URL-safe slug in arena-owned storage.
  *
- * Runs of ASCII non-alphanumeric bytes collapse to single dashes. It trims leading and trailing
- * dashes. It folds a non-ASCII byte to two lowercase hex digits, so names that differ only outside
- * ASCII still yield distinct slugs. Text that yields no usable characters falls back to the literal
- * `untitled`.
+ * Runs of ASCII non-alphanumeric bytes collapse to single dashes. A leading dash is never emitted,
+ * and a trailing one is trimmed. It folds a non-ASCII byte to two lowercase hex digits, so names
+ * that differ only outside ASCII still yield distinct slugs. Text that yields no usable characters
+ * falls back to the literal `untitled`.
  *
  * Takes a length so a caller can slugify a borrowed slice of a larger buffer, such as one path
  * segment, without copying it out first. The returned slug is a terminated owned string either way.

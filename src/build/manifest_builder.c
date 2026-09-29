@@ -26,11 +26,11 @@ _Static_assert(INPUT_IDENTITIES_CAPACITY_MIN >= 1,
 
 /**
  * Size in bytes of the diagnostic label naming one configured template list entry, including the
- * `NUL` terminator. The `<config key>[<index>]` label distinguishes two colliding template outputs
- * apart. A bare template name cannot: the same name in `aggregate_templates` and in
- * `feed_templates`, and one name listed twice in a single list, are different mistakes with
- * different fixes. Both would otherwise report as a collision between a value and itself. The name
- * is left out of the label because it is already the tail of the output path these messages trail.
+ * `NUL` terminator. The `<config key>[<index>]` label tells two colliding template outputs apart. A
+ * bare template name cannot: the same name in `aggregate_templates` and in `feed_templates`, and
+ * one name listed twice in a single list, are different mistakes with different fixes. Both would
+ * otherwise report as a collision between a value and itself. The name is left out of the label
+ * because it is already the tail of the output path these messages trail.
  */
 enum { TEMPLATE_SOURCE_LABEL_SIZE = 64 };
 
@@ -49,8 +49,8 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * `./content/x.md` for the source `content/x.md`. That is one file with two spellings that are not
  * byte-equal. Byte-equal spellings are reachable too, when `output_dir` and `content_dir` name the
  * same directory, so neither comparison includes the other, and identity is what covers both.
- * Comparing A `(device, inode)` comparison also detects cases that text cannot. These include
- * symlinks, hard links, and case-insensitive path aliases.
+ * A `(device, inode)` comparison also detects cases that text cannot. These include symlinks, hard
+ * links, and case-insensitive path aliases.
  *
  * Lookup is a linear scan. At the largest tested build (3,000 sources, 3,002 outputs) that is nine
  * million integer comparisons, which measures as noise beside the reads and renders around it, so a
