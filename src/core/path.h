@@ -114,8 +114,9 @@ char* path_join(const char* base_path, const char* relative_path, struct Arena* 
  * whitelist, so it rejects any byte outside the allowed set. It decides on the bytes alone and
  * never touches the filesystem, so it does not stop a symlink inside the root from redirecting a
  * read or write outside it. It does not stop two accepted names from colliding on a
- * case-insensitive filesystem. Rejecting every byte above 0x7F also avoids Unicode normalization,
- * because no accepted name has a second spelling.
+ * case-insensitive filesystem; the manifest rejects output paths that differ only in ASCII case.
+ * Rejecting every byte above 0x7F also avoids Unicode normalization, because no accepted name has
+ * a second spelling.
  *
  * @param path Candidate relative path. `NULL` is treated as unsafe.
  * @return `true` when `path` is a safe relative path, `false` otherwise.

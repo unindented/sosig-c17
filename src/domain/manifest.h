@@ -23,8 +23,8 @@ struct Manifest {
   size_t capacity;
 
   /**
-   * Open-addressing index over `entries`. Each slot holds an entry index plus one, or zero when
-   * empty. Managed internally, not for caller use.
+   * Open-addressing index over `entries`, keyed by the ASCII-folded output path. Each slot holds an
+   * entry index plus one, or zero when empty. Managed internally, not for caller use.
    */
   size_t* buckets;
 
@@ -37,7 +37,10 @@ enum ManifestAdd {
   /** The output path was new and is now recorded. */
   MANIFEST_ADD_INSERTED,
 
-  /** The output path was already claimed. The manifest is unchanged. */
+  /**
+   * The output path, or one equal to it under ASCII case folding, was already claimed. The manifest
+   * is unchanged.
+   */
   MANIFEST_ADD_DUPLICATE,
 
   /** An allocation failed. No output path recorded. Internal capacity may already have grown. */
@@ -61,7 +64,8 @@ void manifest_init(struct Manifest* manifest) __attribute__((nonnull(1)));
 void manifest_free(struct Manifest* manifest) __attribute__((nonnull(1)));
 
 /**
- * @brief Records `output_path` and the source that produces it, rejecting an exact duplicate path.
+ * @brief Records `output_path` and the source that produces it, rejecting a path already claimed
+ *        under ASCII case folding.
  *
  * The manifest copies both strings, so the caller retains ownership of its arguments.
  * `manifest_add` reports a path already present as a duplicate and leaves the manifest unchanged.
@@ -70,7 +74,10 @@ void manifest_free(struct Manifest* manifest) __attribute__((nonnull(1)));
  * this module. `struct ManifestEntry` is incomplete and no accessor exposes it. Treat it as an
  * implementation property rather than part of this contract until one exists.
  *
- * Duplicate means byte-equal. A `MANIFEST_ADD_INSERTED` is therefore not proof that the path can be
+ * Duplicate means equal after folding ASCII `A-Z` to `a-z`, so `About/index.html` and
+ * `about/index.html` collide on every platform, as they would on a case-insensitive filesystem.
+ * Every other byte compares exactly: the manifest does not attempt locale-dependent folding or
+ * Unicode normalization. A `MANIFEST_ADD_INSERTED` is therefore not proof that the path can be
  * created: two outputs where one is a `/`-delimited prefix of the other, like a file `a/b` beside
  * `a/b/c`, are each recorded here yet still collide on disk. `manifest_find_prefix_collision`
  * catches that pair once every path is recorded.
@@ -95,8 +102,9 @@ enum ManifestAdd manifest_add(struct Manifest* manifest,
     __attribute__((nonnull(1, 2, 3)));
 
 /**
- * A pair of recorded output paths where one is a `/`-delimited prefix of the other, so both cannot
- * exist on disk: the shorter names a file. The longer needs that same name as a directory.
+ * A pair of recorded output paths where one is a `/`-delimited prefix of the other under ASCII case
+ * folding, so both cannot exist on disk: the shorter names a file. The longer needs that same name
+ * as a directory.
  */
 struct ManifestPrefixCollision {
   /** The shorter path, recorded as a file output. */
@@ -115,10 +123,11 @@ struct ManifestPrefixCollision {
 /**
  * @brief Finds a recorded output path that is a `/`-delimited prefix of another.
  *
- * `manifest_add` rejects only byte-equal duplicates. This catches the other way two outputs collide
- * on disk: a file path that is also a directory prefix of a second output, like `a/b` beside
- * `a/b/c`. Run it once after every output path is recorded. It examines each path's ancestor
- * prefixes, so it reports such a pair whichever order the two were added in.
+ * `manifest_add` rejects only paths equal under ASCII case folding. This catches the other way two
+ * outputs collide on disk: a file path that is also a directory prefix of a second output, like
+ * `a/b` beside `a/b/c`. The prefix match folds ASCII case the same way, so `Blog/Feed` collides
+ * with `blog/feed/index.html`. Run it once after every output path is recorded. It examines each
+ * path's ancestor prefixes, so it reports such a pair whichever order the two were added in.
  *
  * The reported pointers are borrowed from the manifest and stay valid until `manifest_free`.
  *

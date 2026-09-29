@@ -54,8 +54,8 @@ The build searches all directories under `content_dir` for regular files that en
 
 Before the tool renders page templates or writes files, it rejects an output plan with one of these conflicts:
 
-- Two producers use the same output path.
-- One output path must be both a file and a directory.
+- Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
+- One output path must be both a file and a directory. This check also ignores ASCII letter case.
 - An output overwrites the config, a content source, or a template named in config or frontmatter.
 
 The build does not remove stale files from an earlier build. If the write phase fails, some outputs can be new while others remain unchanged.

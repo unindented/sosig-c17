@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/ascii.h"
 #include "core/grow.h"
 #include "core/text.h"
 
@@ -35,7 +36,7 @@ static const uint64_t FNV_PRIME = 1099511628211ULL;
 
 /** One recorded output path and the source that claims it. */
 struct ManifestEntry {
-  /** Filesystem output path owned by the manifest. */
+  /** Filesystem output path owned by the manifest, in its original case. */
   char* output_path;
 
   /** Diagnostic source label owned by the manifest. */
@@ -43,21 +44,22 @@ struct ManifestEntry {
 };
 
 /**
- * @brief Looks up the entry recorded for an output path through the hash index.
+ * @brief Looks up the entry recorded for an output path under ASCII case folding.
  *
  * @param manifest    Manifest to query. Must not be `NULL`.
  * @param output_path Output path to look up. Must not be `NULL`.
- * @return The matching entry, or `NULL` when the path is not present. The pointer points into
- *         `manifest->entries`, which `manifest_reserve_entries` may `realloc`, so reading it after
- *         any growth is a use-after-free. Consume it before reserving. `manifest_add` is correct
- *         only because it does exactly that.
+ * @return The entry whose path equals `output_path` after folding ASCII case, or `NULL` when none
+ *         does. The pointer points into `manifest->entries`, which `manifest_reserve_entries` may
+ *         `realloc`, so reading it after any growth is a use-after-free. Consume it before
+ *         reserving. `manifest_add` is correct only because it does exactly that.
  */
 static const struct ManifestEntry* manifest_lookup(const struct Manifest* manifest,
                                                    const char* output_path)
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Looks up the entry whose output path is exactly the first `len` bytes of `output_path`.
+ * @brief Looks up the entry whose output path equals the first `len` bytes of `output_path` under
+ *        ASCII case folding.
  *
  * The length-aware core of `manifest_lookup`, also used by `manifest_find_prefix_collision` to look
  * up an ancestor prefix without copying it out of the longer path. Matches only a recorded path of
@@ -71,6 +73,18 @@ static const struct ManifestEntry* manifest_lookup(const struct Manifest* manife
 static const struct ManifestEntry* manifest_lookup_bytes(const struct Manifest* manifest,
                                                          const char* output_path,
                                                          size_t output_path_len)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Reports whether a terminated candidate equals a byte range under ASCII case folding.
+ *
+ * @param candidate Terminated recorded path to compare. Must not be `NULL`.
+ * @param bytes     Buffer holding the path bytes to match. Must not be `NULL`.
+ * @param bytes_len Number of leading bytes of `bytes` to compare.
+ * @return `true` when `candidate` is exactly `bytes_len` bytes long and each byte folds to the same
+ *         value as its counterpart in `bytes`, `false` otherwise.
+ */
+static bool manifest_equal_bytes(const char* candidate, const char* bytes, size_t bytes_len)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -100,7 +114,8 @@ static int manifest_reserve_buckets(struct Manifest* manifest) __attribute__((no
  *
  * @param buckets     Bucket table to insert into. Must not be `NULL`.
  * @param bucket_mask Power-of-two table length minus one, used to wrap the linear probe.
- * @param output_path Output path whose hash selects the starting bucket. Must not be `NULL`.
+ * @param output_path Output path whose folded hash selects the starting bucket. Must not be
+ *                    `NULL`.
  * @param index       Zero-based entry index. Stored as `index + 1` so zero stays the empty marker.
  */
 static void manifest_bucket_place(size_t* buckets,
@@ -109,19 +124,20 @@ static void manifest_bucket_place(size_t* buckets,
                                   size_t index) __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Hashes a terminated string with the 64-bit FNV-1a function.
+ * @brief Hashes a terminated string with the 64-bit FNV-1a function under ASCII case folding.
  *
  * @param output_path Output path to hash. Must not be `NULL`.
- * @return The 64-bit hash of `output_path`.
+ * @return The 64-bit hash of `output_path` with ASCII `A-Z` folded to `a-z`.
  */
 static uint64_t manifest_hash(const char* output_path) __attribute__((nonnull(1)));
 
 /**
- * @brief Hashes the first `bytes_len` bytes of `bytes` with the 64-bit FNV-1a function.
+ * @brief Hashes the first `bytes_len` bytes of `bytes` with the 64-bit FNV-1a function under ASCII
+ *        case folding.
  *
  * @param bytes     Buffer to hash. Must not be `NULL`.
  * @param bytes_len Number of bytes to hash.
- * @return The 64-bit hash of the byte range.
+ * @return The 64-bit hash of the byte range with ASCII `A-Z` folded to `a-z`.
  */
 static uint64_t manifest_hash_bytes(const char* bytes, size_t bytes_len)
     __attribute__((nonnull(1)));
@@ -227,14 +243,23 @@ static const struct ManifestEntry* manifest_lookup_bytes(const struct Manifest* 
     // range and terminated right after, so a longer recorded path that merely starts with them is
     // not a hit. That exact-length test is what lets `manifest_find_prefix_collision` reuse this to
     // look up an ancestor prefix rather than any path sharing a leading run.
-    const char* candidate = manifest->entries[entry - 1].output_path;
-    if (strncmp(candidate, output_path, output_path_len) == 0 &&
-        candidate[output_path_len] == '\0') {
-      return &manifest->entries[entry - 1];
+    const struct ManifestEntry* candidate = &manifest->entries[entry - 1];
+    if (manifest_equal_bytes(candidate->output_path, output_path, output_path_len)) {
+      return candidate;
     }
     slot = (slot + 1) & bucket_mask;
   }
   return NULL;
+}
+
+static bool manifest_equal_bytes(const char* candidate, const char* bytes, size_t bytes_len) {
+  for (size_t i = 0; i < bytes_len; i++) {
+    if (candidate[i] == '\0' ||
+        ascii_to_lower((unsigned char)candidate[i]) != ascii_to_lower((unsigned char)bytes[i])) {
+      return false;
+    }
+  }
+  return candidate[bytes_len] == '\0';
 }
 
 static int manifest_reserve_entries(struct Manifest* manifest) {
@@ -331,11 +356,13 @@ static uint64_t manifest_hash_bytes(const char* bytes, size_t bytes_len) {
   uint64_t hash = FNV_OFFSET_BASIS;
   // This reads through `unsigned char` because plain `char` may be signed, in which case a byte
   // above `0x7f` would sign-extend and make the hash depend on the platform's `char` signedness.
-  // The multiply relies on wrapping modulo 2^64, which is defined for unsigned types only. The same
-  // expression on a signed type would be undefined on overflow, so `uint64_t` here is a correctness
+  // Folding here, with the same `ascii_to_lower` that `manifest_equal_bytes` compares under, is
+  // what lets two paths that differ only in ASCII case land on the same probe chain. The multiply
+  // relies on wrapping modulo 2^64, which is defined for unsigned types only. The same expression
+  // on a signed type would be undefined on overflow, so `uint64_t` here is a correctness
   // requirement, not a width preference.
   for (size_t i = 0; i < bytes_len; i++) {
-    hash ^= (uint64_t)(unsigned char)bytes[i];
+    hash ^= (uint64_t)ascii_to_lower((unsigned char)bytes[i]);
     hash *= FNV_PRIME;
   }
   return hash;

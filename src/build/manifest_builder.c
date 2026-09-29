@@ -396,7 +396,9 @@ static int register_output_path(struct Manifest* manifest,
     case MANIFEST_ADD_DUPLICATE:
       // The two colliding producers are the actionable part and the path trails them. It is bounded
       // only by `OUTPUT_PATH_RELATIVE_LEN_MAX` plus the output directory, which is twice
-      // `ERROR_MESSAGE_SIZE`, and leading with it would truncate both labels away.
+      // `ERROR_MESSAGE_SIZE`, and leading with it would truncate both labels away. The path is this
+      // claim's spelling, which may differ from the earlier claim's in ASCII case alone, because
+      // `manifest_add` folds case to catch outputs a case-insensitive filesystem would merge.
       return error_report(err, err_len, "duplicate output path for '%s' and '%s': '%s'",
                           source_label_existing, source_label, output_path);
     case MANIFEST_ADD_ERROR:

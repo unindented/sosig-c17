@@ -76,8 +76,42 @@ static void test_populate_manifest_rejects_duplicate(void) {
   site_config_free(&config);
 }
 
+// Two entries whose permalinks differ only in ASCII case claim one file on a case-insensitive
+// filesystem such as the macOS default, where the second write would silently replace the first.
+// They are rejected as a duplicate on every platform, so a site that builds on Linux does not
+// break on macOS. The trailing path is the second claim's own spelling.
+static void test_populate_manifest_rejects_case_folded_duplicate(void) {
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.output_dir = "public";
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+
+  struct ContentEntry a = {.output_path = "public/About/index.html", .source_path = "content/a.md"};
+  struct ContentEntry b = {.output_path = "public/about/index.html", .source_path = "content/b.md"};
+  const struct ContentEntry* entries[] = {&a, &b};
+
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, entries, 2, err,
+                                       sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n =
+      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
+               "content/a.md", "content/b.md", "public/about/index.html");
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  manifest_free(&manifest);
+  path_list_free(&sources);
+  site_config_free(&config);
+}
+
 // Two entries whose output paths collide as a file and a directory, where one is a `/`-delimited
-// prefix of the other, are rejected even though neither is a byte-equal duplicate. The two
+// prefix of the other, are rejected even though neither is a duplicate. The two
 // producers lead the message ahead of the one unbounded path. The ancestor path is not repeated
 // because it is a prefix of the path that is printed.
 static void test_populate_manifest_rejects_prefix_collision(void) {
@@ -447,6 +481,8 @@ static void test_populate_manifest_rejects_oversize_template_segment(void) {
 TEST_LIST = {
     {"populate manifest accepts unique", test_populate_manifest_accepts_unique},
     {"populate manifest rejects duplicate", test_populate_manifest_rejects_duplicate},
+    {"populate manifest rejects case folded duplicate",
+     test_populate_manifest_rejects_case_folded_duplicate},
     {"populate manifest rejects prefix collision", test_populate_manifest_rejects_prefix_collision},
     {"populate manifest rejects duplicate template",
      test_populate_manifest_rejects_duplicate_template},

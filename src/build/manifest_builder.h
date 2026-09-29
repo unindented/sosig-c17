@@ -14,12 +14,15 @@ struct SiteConfig;
  *
  * Registers content entry and template output paths before writing any file, so it catches a
  * collision between two sources up front. It rejects three kinds of collision:
- * - two producers that claim one output path
+ * - two producers that claim one output path, compared after folding ASCII case
  * - an output path that names a build input
  * - an output path that is a `/`-delimited directory prefix of another output path
  *
  * The last case requires one path to be both a file and a directory.
- * `manifest_find_prefix_collision` checks for it after all paths are recorded.
+ * `manifest_find_prefix_collision` checks for it after all paths are recorded. Both path checks
+ * fold ASCII `A-Z` to `a-z`, so `About/index.html` and `about/index.html` are one output, as they
+ * are on a case-insensitive filesystem such as the macOS default. Every other byte compares
+ * exactly.
  *
  * The identity check compares filesystem identity, not path text, because the two spellings need
  * not match. An output path is rooted at `output_dir` and a source path at `content_dir`, so
