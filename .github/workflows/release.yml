@@ -159,13 +159,22 @@ jobs:
           }
           run_sosig --version
           # Every fixture site in the golden test suite, built by the installed binary rather than
-          # a build-tree binary.
+          # a build-tree binary. It mirrors `cmake/sosig_run_golden_site.cmake`.
           for fixture in tests/fixtures/*; do
             site=$(basename "$fixture")
-            mkdir -p "$tmp/$site"
-            cp -R "$fixture/." "$tmp/$site/"
-            (cd "$tmp/$site" && run_sosig build)
-            diff -ru "tests/expected/$site" "$tmp/$site/public"
+            scratch="$tmp/$site"
+            mkdir -p "$scratch"
+            cp -R "$fixture/." "$scratch/"
+            (cd "$scratch" && run_sosig build --workers 2)
+            cp -R "$scratch/public" "$scratch/first"
+            (cd "$scratch" && run_sosig build --workers 2)
+            (cd "$scratch/first" && find . -type f) | while IFS= read -r file; do
+              if ! cmp -s "$scratch/first/$file" "$scratch/public/$file"; then
+                echo "second build changed generated output: '$file'" >&2
+                exit 1
+              fi
+            done
+            diff -ru "tests/expected/$site" "$scratch/public"
           done
 
       - name: Verify archive contents

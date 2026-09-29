@@ -1,4 +1,5 @@
-# This script builds one copied fixture site. It compares the result with the expected output.
+# This script builds one copied fixture site twice. It checks that the second build leaves the
+# generated output unchanged, then compares the result with the expected output.
 
 foreach(required IN ITEMS SOSIG_EXECUTABLE SOSIG_SITE_DIR SOSIG_EXPECTED_DIR SOSIG_SCRATCH_DIR)
   if(NOT DEFINED ${required})
@@ -10,8 +11,11 @@ file(REMOVE_RECURSE "${SOSIG_SCRATCH_DIR}")
 file(MAKE_DIRECTORY "${SOSIG_SCRATCH_DIR}")
 file(COPY "${SOSIG_SITE_DIR}/" DESTINATION "${SOSIG_SCRATCH_DIR}")
 
+set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
+set(first_dir "${SOSIG_SCRATCH_DIR}/first/public")
+
 execute_process(
-  COMMAND "${SOSIG_EXECUTABLE}" build ${SOSIG_BUILD_ARGS}
+  COMMAND "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
   OUTPUT_VARIABLE build_stdout
@@ -19,12 +23,37 @@ execute_process(
 )
 if(NOT build_result EQUAL 0)
   message(
-    FATAL_ERROR
-      "fixture site build failed with exit status ${build_result}:\n${build_stdout}${build_stderr}"
+    FATAL_ERROR "first fixture site build failed with exit status ${build_result}:\n"
+                "${build_stdout}${build_stderr}"
+  )
+endif()
+file(COPY "${actual_dir}" DESTINATION "${SOSIG_SCRATCH_DIR}/first")
+
+execute_process(
+  COMMAND "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
+  WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
+  RESULT_VARIABLE build_result
+  OUTPUT_VARIABLE build_stdout
+  ERROR_VARIABLE build_stderr
+)
+if(NOT build_result EQUAL 0)
+  message(
+    FATAL_ERROR "second fixture site build failed with exit status ${build_result}:\n"
+                "${build_stdout}${build_stderr}"
   )
 endif()
 
-set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
+file(GLOB_RECURSE first_files RELATIVE "${first_dir}" "${first_dir}/*")
+foreach(file IN LISTS first_files)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files "${first_dir}/${file}" "${actual_dir}/${file}"
+    RESULT_VARIABLE compare_result
+    OUTPUT_QUIET ERROR_QUIET
+  )
+  if(NOT compare_result EQUAL 0)
+    message(FATAL_ERROR "second build changed generated output: '${file}'")
+  endif()
+endforeach()
 
 # Collect both file lists after `sosig` runs. Runtime lists are not build inputs. Fixture site
 # changes do not require CMake to run again.
