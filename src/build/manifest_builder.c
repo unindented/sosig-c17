@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "core/error.h"
-#include "core/grow.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "domain/content_entry.h"
@@ -15,9 +14,6 @@
 #include "domain/site_config.h"
 #include "runtime/fs.h"
 #include "shared/arena.h"
-
-/** Slots allocated when the input identity set first grows. */
-enum { INPUT_IDENTITIES_CAPACITY_MIN = 16 };
 
 /**
  * Size in bytes of the diagnostic label naming one configured template list entry, including the
@@ -54,14 +50,11 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * sorted index to make it logarithmic would buy nothing measurable.
  */
 struct InputIdentities {
-  /** Identities owned by this set. */
+  /** Identities owned by this set, allocated once with a slot for every candidate input. */
   struct FsIdentity* items;
 
   /** Number of recorded identities. */
   size_t count;
-
-  /** Allocated slots in `items`. */
-  size_t capacity;
 };
 
 /** Number of input directory trees no output may enter: `content_dir` and `templates_dir`. */
@@ -130,8 +123,10 @@ struct InputRoots {
  * The render reports a missing template with a template-specific diagnostic, so failing here would
  * only report the same absence earlier and with less context.
  *
- * @param inputs       Identity set that receives one entry per readable input file. Must not be
- *                     `NULL`.
+ * The template tree is listed first, so the set is allocated once with a slot for every candidate.
+ *
+ * @param inputs       Empty identity set that receives one entry per readable input file. Must
+ *                     not be `NULL`.
  * @param site_config  Configuration supplying `templates_dir`. Must not be `NULL`.
  * @param config_path  Path the configuration was loaded from. Must not be `NULL`.
  * @param source_paths Every discovered content source path, drafts included. Must not be `NULL`.
@@ -148,29 +143,28 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
- * @brief Claims the identity of every file below `templates_dir`, partials included.
+ * @brief Lists every file below `templates_dir`, partials included.
  *
- * @param inputs        Identity set to append to. Must not be `NULL`.
- * @param templates_dir Template directory root to walk. A path with no identity claims nothing.
- *                      Must not be `NULL`.
- * @param err           Destination buffer for a failure diagnostic.
- * @param err_len       Size of `err` in bytes.
- * @return `0` when every file in the tree was claimed or `templates_dir` has no identity, or `-1`
- *         when the walk fails or on allocation failure.
+ * @param template_paths Initialized, empty path list that receives the files. Must not be `NULL`.
+ * @param templates_dir  Template directory root to walk. A path with no identity lists nothing.
+ *                       Must not be `NULL`.
+ * @param err            Destination buffer for a failure diagnostic.
+ * @param err_len        Size of `err` in bytes.
+ * @return `0` when every file in the tree was listed or `templates_dir` has no identity, or `-1`
+ *         when the walk fails.
  */
-static int claim_build_inputs_template_tree(struct InputIdentities* inputs,
-                                            const char* templates_dir,
-                                            char* err,
-                                            size_t err_len) __attribute__((nonnull(1, 2)));
+static int claim_build_inputs_list_templates(struct PathList* template_paths,
+                                             const char* templates_dir,
+                                             char* err,
+                                             size_t err_len) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Claims one path's identity, ignoring a path that has none.
  *
- * @param inputs    Identity set to append to. Must not be `NULL`.
+ * @param inputs    Identity set to append to, with a free slot. Must not be `NULL`.
  * @param file_path Path whose identity is claimed. Must not be `NULL`.
- * @return `0` when the identity was recorded or the path had none, or `-1` on allocation failure.
  */
-static int claim_input_identity(struct InputIdentities* inputs, const char* file_path)
+static void claim_input_identity(struct InputIdentities* inputs, const char* file_path)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -379,21 +373,34 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct PathList* source_paths,
                               char* err,
                               size_t err_len) {
-  if (claim_input_identity(inputs, config_path) != 0) {
-    return error_report(err, err_len, "out of memory recording build input files");
-  }
-  for (size_t i = 0; i < source_paths->count; i++) {
-    if (claim_input_identity(inputs, source_paths->items[i]) != 0) {
-      return error_report(err, err_len, "out of memory recording build input files");
+  struct PathList template_paths;
+  path_list_init(&template_paths);
+  int rc =
+      claim_build_inputs_list_templates(&template_paths, site_config->templates_dir, err, err_len);
+  if (rc == 0) {
+    // One slot for the configuration file, then one per source and per template file. `calloc`
+    // fails on product overflow rather than wrapping.
+    inputs->items = calloc(1 + source_paths->count + template_paths.count, sizeof(*inputs->items));
+    if (inputs->items == NULL) {
+      rc = error_report(err, err_len, "out of memory recording build input files");
+    } else {
+      claim_input_identity(inputs, config_path);
+      for (size_t i = 0; i < source_paths->count; i++) {
+        claim_input_identity(inputs, source_paths->items[i]);
+      }
+      for (size_t i = 0; i < template_paths.count; i++) {
+        claim_input_identity(inputs, template_paths.items[i]);
+      }
     }
   }
-  return claim_build_inputs_template_tree(inputs, site_config->templates_dir, err, err_len);
+  path_list_free(&template_paths);
+  return rc;
 }
 
-static int claim_build_inputs_template_tree(struct InputIdentities* inputs,
-                                            const char* templates_dir,
-                                            char* err,
-                                            size_t err_len) {
+static int claim_build_inputs_list_templates(struct PathList* template_paths,
+                                             const char* templates_dir,
+                                             char* err,
+                                             size_t err_len) {
   // A `templates_dir` with no identity holds no file to overwrite, so there is nothing to claim.
   // This is the same skip `claim_input_identity` applies to a single missing path. The walk below
   // would otherwise fail on it, and report a missing template directory ahead of the render's
@@ -403,48 +410,21 @@ static int claim_build_inputs_template_tree(struct InputIdentities* inputs,
   if (fs_identify(templates_dir, &templates_dir_identity) != 0) {
     return 0;
   }
-
-  struct PathList template_paths;
-  path_list_init(&template_paths);
-  int rc = 0;
   // An empty suffix matches every filename, so the walk lists the whole tree.
   char reason[FS_REASON_SIZE];
-  if (fs_list_files_with_suffix(&template_paths, templates_dir, "", reason, sizeof(reason)) != 0) {
+  if (fs_list_files_with_suffix(template_paths, templates_dir, "", reason, sizeof(reason)) != 0) {
     // The reason names the directory or entry that failed, which is more precise than the
     // configured root, so the root is not repeated here.
-    rc = error_report(err, err_len, "failed to list template files: %s", reason);
+    return error_report(err, err_len, "failed to list template files: %s", reason);
   }
-  for (size_t i = 0; rc == 0 && i < template_paths.count; i++) {
-    if (claim_input_identity(inputs, template_paths.items[i]) != 0) {
-      rc = error_report(err, err_len, "out of memory recording build input files");
-    }
-  }
-  path_list_free(&template_paths);
-  return rc;
+  return 0;
 }
 
-static int claim_input_identity(struct InputIdentities* inputs, const char* file_path) {
+static void claim_input_identity(struct InputIdentities* inputs, const char* file_path) {
   struct FsIdentity identity;
-  if (fs_identify(file_path, &identity) != 0) {
-    return 0;
+  if (fs_identify(file_path, &identity) == 0) {
+    inputs->items[inputs->count++] = identity;
   }
-  if (inputs->count == inputs->capacity) {
-    size_t capacity_next = 0;
-    size_t capacity_bytes_next = 0;
-    if (grow_capacity(inputs->capacity, INPUT_IDENTITIES_CAPACITY_MIN, sizeof(*inputs->items),
-                      &capacity_next, &capacity_bytes_next) != 0) {
-      return -1;
-    }
-    // Reallocating into a temporary keeps `inputs->items` valid when `realloc` returns `NULL`.
-    struct FsIdentity* items = realloc(inputs->items, capacity_bytes_next);
-    if (items == NULL) {
-      return -1;
-    }
-    inputs->items = items;
-    inputs->capacity = capacity_next;
-  }
-  inputs->items[inputs->count++] = identity;
-  return 0;
 }
 
 static void free_input_identities(struct InputIdentities* inputs) {
