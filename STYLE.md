@@ -56,13 +56,13 @@ This guide is an amalgamation of ideas and conventions from the following resour
 - The `<module>_<verb>` scheme names the exported surface only. A file-local (`static`) helper takes a short, readable name chosen to read well at its call site and does not carry the module prefix, which is reserved for exported functions.
 - Directories classify modules by responsibility. Do not repeat a directory name in the symbol.
 - When a function breaks an operation into steps and delegates each step to a lower-level helper that only it calls, prefix each such helper with the higher-level function's name to make the delegation chain visible (`frontmatter_parse_metadata` calls `frontmatter_parse_metadata_slug`). This applies only to step helpers dedicated to a single caller. A generic helper reused by several callers, or a self-contained routine that merely happens to have one caller today, takes a plain readable name instead.
-- Name predicates and boolean fields, variables, and parameters using `is_*`, or `has_*` to describe what they answer, such as `is_valid` or `has_failed`.
+- Name predicates and boolean fields, variables, and parameters using `is_*`, or `has_*` to describe what they answer, such as `is_verbose` or `has_failed`.
 - Use `snake_case` for functions, variables, fields, directories, and file-local helpers. Source files are named after the module or primary type (`site_config.c`), and live in the responsibility directory documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 - Use `PascalCase` for `struct` and `enum` tags, such as `SiteConfig`.
 - Use `PascalCase` with an `Fn` suffix for callback typedefs, such as `PoolJobFn`.
 - Use `UPPER_SNAKE` for `enum` constants, prefixed by the concept they belong to, such as `CLI_COMMAND_BUILD`.
 - Use `UPPER_SNAKE` for a file-local constant that names a fixed literal value: a scalar, a fixed string, or a small list of default literals that stands in for a magic value, such as `SLUG_FALLBACK`, `FRONTMATTER_FENCE`, and `PERMALINK_DEFAULT`. Declare a constant string pointer as `static const char* const NAME` so neither the pointer nor the text can be rebound. Keep `snake_case` for read-only aggregate data that reads as a data structure rather than a named literal, such as a lookup or dispatch table of specs (`cli_commands`) or a singleton struct instance (`renderer`).
-- Treat acronyms as words: `HtmlDocument` in `PascalCase`, `body_html` in `snake_case`.
+- Treat acronyms as words: `CliOptions` in `PascalCase`, `rendered_html` in `snake_case`.
 - Avoid camelCase, Hungarian notation, and type-prefix naming.
 
 ## Types

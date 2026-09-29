@@ -23,7 +23,7 @@ First-party dependencies point inward:
 - `formats` and `runtime` can depend on `core`.
 - `core` cannot depend on another first-party directory.
 
-A module can skip layers. Modules in the same directory can depend on each other. First-party include directives start at the `src/` root. For example, a module includes `"core/error.h"`. This convention makes each dependency visible at the call site.
+A module can skip layers. Modules in the same directory can depend on each other. First-party include directives start at the `src/` root. For example, a module includes `"core/error.h"`. This convention makes each dependency visible at the call site. Vendored support is outside the first-party hierarchy.
 
 ## Entry point and commands
 
@@ -32,7 +32,7 @@ A module can skip layers. Modules in the same directory can depend on each other
 - `cmd_build_run` ([src/app/cmd_build.h](src/app/cmd_build.h)): generates the site.
 - `cmd_config_run` ([src/app/cmd_config.h](src/app/cmd_config.h)): loads `sosig.toml` and prints the resolved config.
 
-Every command returns `enum ExitCode` ([src/app/exit_code.h](src/app/exit_code.h)): `EXIT_CODE_OK` (0), `EXIT_CODE_FAILURE` (1), or `EXIT_CODE_USAGE` (2).
+`cli.c` is the one translation unit that defines `COPT_IMPL`. `cli_parse` never prints or exits. Every command returns `enum ExitCode` ([src/app/exit_code.h](src/app/exit_code.h)): `EXIT_CODE_OK` (0), `EXIT_CODE_FAILURE` (1), or `EXIT_CODE_USAGE` (2).
 
 ## Build pipeline
 
@@ -69,7 +69,7 @@ The phase order follows the data dependencies. A content template can read `site
 
 ### Build (`src/build`)
 
-- [template](src/build/template.h): `template_render_file` uses mustache4c to render a template with a `TemplateContext`. Template names must be safe relative paths. Each render has three limits. The partial-expansion limit guarantees termination. The output-byte limit bounds memory use. The distinct-partial limit matches the cache capacity.
+- [template](src/build/template.h): `template_render_file` uses mustache4c to render a template with a `TemplateContext`. Template names must be safe relative paths, and partial names use a restricted identifier grammar. Each render has three limits. The partial-expansion limit guarantees termination. The output-byte limit bounds memory use. The distinct-partial limit matches the cache capacity.
 - [entry_renderer](src/build/entry_renderer.h): The first parallel pass. `entry_renderer_render_entries` parses each source into a per-path result slot. For a non-draft entry, it converts the Markdown body and creates the URL and output path. A draft leaves the slot empty. The module owns this per-job pipeline.
 - [page_renderer](src/build/page_renderer.h): The second parallel pass. `page_renderer_render_pages` renders each parsed entry through its content template. Each render reads the complete sorted entry set and `site.updated`.
 - [render_job](src/build/render_job.h): Defines `RenderJob`, `RenderJobSet`, and `render_job_run`. Both render passes fill `RenderJob` slots. Each slot contains a parsed entry, rendered HTML, and a diagnostic. `RenderJobSet` pairs a slot array with its length. `render_job_run` runs one worker-pool pass and collects its diagnostics. This module connects both render passes to the writer.
@@ -95,11 +95,11 @@ The phase order follows the data dependencies. A content template can read `site
 - [parse](src/core/parse.h): Parsing of terminated text into scalar values.
 - [path](src/core/path.h): Path construction and validation. `path_relative_below` returns the part of a path below a root by textual comparison. `entry_renderer` derives each entry's `{section}` from the source path below `content_dir`.
 - [path_list](src/core/path_list.h): Growable list of path strings.
-- [text](src/core/text.h): Text normalization and validation.
+- [text](src/core/text.h): Text copying, normalization, and validation.
 
 ## Cross-cutting conventions
 
-- **Ownership**: Arenas own groups of allocations. Some producer functions return a separate buffer. These functions are `markdown_to_html`, `template_render_file`, and `string_buffer_steal`. They transfer buffer ownership to the caller. The caller must free the buffer.
+- **Ownership**: Arenas own groups of allocations. Some producer functions return a separate buffer. These functions include `markdown_to_html`, `template_render_file`, `string_buffer_steal`, and `fs_read_file`. They transfer buffer ownership to the caller. The caller must free the buffer.
 - **Text representation**: An owned string is a `NUL`-free C string. Only a borrowed slice carries a separate length. Examples include `FrontmatterSplit` and callback data from md4c and mustache4c. This representation makes `strlen` accurate for owned strings.
 - **Text input checks**: `fs_read_file` rejects a file that contains a `NUL`. `toml_datum_is_text` rejects a TOML string that contains a decoded `NUL`. These checks prevent silent truncation of generated output. `fs_read_file` reports this policy failure separately from system errors.
 - **Return values**: A producer returns a pointer or `NULL`. An action returns `0` or `-1`. A predicate returns `bool`.

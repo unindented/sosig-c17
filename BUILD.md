@@ -71,7 +71,7 @@ Presets use `CMAKE_COMPILE_WARNING_AS_ERROR` to treat warnings as errors. The pr
 
 Generator expressions select configuration options at build time. The same rules work with single-config and multi-config generators.
 
-`SOSIG_SANITIZER` accepts `none`, `address`, or `thread`. It adds sanitizer options to standard CMake configurations. It does not create custom build types.
+`SOSIG_SANITIZER` accepts `none`, `address`, or `thread`. The `address` option enables AddressSanitizer and UndefinedBehaviorSanitizer. The `thread` option enables ThreadSanitizer. It adds sanitizer options to standard CMake configurations. It does not create custom build types.
 
 ## Linting and formatting
 
