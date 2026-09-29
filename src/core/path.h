@@ -104,6 +104,23 @@ char* path_join(const char* base_path, const char* relative_path, struct Arena* 
     __attribute__((nonnull(1, 2, 3)));
 
 /**
+ * @brief Returns the part of a path that lies below a root directory.
+ *
+ * The comparison is textual and never touches the filesystem, so `path` and `root_dir` have to
+ * spell the root the same way. It holds when `path` was produced by walking `root_dir`, since each
+ * such path carries that spelling of the root as its prefix. It does not hold for an alternate
+ * spelling such as a trailing `/`, a `./` component, or a symlink, which yields `NULL`.
+ *
+ * @param path     Path expected to name an entry below `root_dir`. Must not be `NULL`.
+ * @param root_dir Directory the result is made relative to, without a trailing slash. Must not be
+ *                 `NULL`.
+ * @return Pointer into `path` just past `root_dir` and its separator, borrowing `path`'s storage,
+ *         or `NULL` when `path` does not start with `root_dir` followed by a separator.
+ */
+const char* path_relative_below(const char* path, const char* root_dir)
+    __attribute__((nonnull(1, 2)));
+
+/**
  * @brief Reports whether `path` is a safe non-absolute relative path.
  *
  * A safe path is non-empty, does not start with `/`, contains only ASCII alphanumerics, `_`, `-`,

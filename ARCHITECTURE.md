@@ -93,7 +93,7 @@ The phase order follows the data dependencies. A content template can read `site
 - [error](src/core/error.h): Uniform diagnostic reporting for fallible actions.
 - [grow](src/core/grow.h): Doubling-capacity arithmetic shared by the growable containers.
 - [parse](src/core/parse.h): Parsing of terminated text into scalar values.
-- [path](src/core/path.h): Path construction and validation.
+- [path](src/core/path.h): Path construction and validation. `path_relative_below` returns the part of a path below a root by textual comparison. `entry_renderer` derives each entry's `{section}` from the source path below `content_dir`.
 - [path_list](src/core/path_list.h): Growable list of path strings.
 - [text](src/core/text.h): Text normalization and validation.
 

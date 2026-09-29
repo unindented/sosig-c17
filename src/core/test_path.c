@@ -93,9 +93,8 @@ static void test_check_output_limits_reports_both_limits_and_metrics(void) {
 
 // An extensionless name and a dotfile keep their whole name, since `.gitignore` is a name rather
 // than an extension. The function removes only the *last* extension, taking the final path
-// component first and then looking for the extension inside it. `path_join` inserts exactly one `/`
-// whether or not the directory already ends in one.
-static void test_basename_strips_dirs_and_join_inserts_separator(void) {
+// component first and then looking for the extension inside it.
+static void test_basename_strips_dirs_and_extension(void) {
   struct Arena arena;
   arena_init(&arena);
   TEST_CHECK(strcmp(path_basename_without_extension("content/content_entries/hello.md", &arena),
@@ -110,10 +109,38 @@ static void test_basename_strips_dirs_and_join_inserts_separator(void) {
   // searches: the component is taken first, then the extension is looked for inside it.
   TEST_CHECK(strcmp(path_basename_without_extension("content/v1.2/README", &arena), "README") == 0);
   TEST_CHECK(strcmp(path_basename_without_extension("content/v1.2/a.md", &arena), "a") == 0);
-  TEST_CHECK(strcmp(path_join("out", "content-entry.html", &arena), "out/content-entry.html") == 0);
-  TEST_CHECK(strcmp(path_join("out/", "content-entry.html", &arena), "out/content-entry.html") ==
-             0);
   arena_free(&arena);
+}
+
+// `path_join` inserts exactly one `/` whether or not the directory already ends in one.
+static void test_join_inserts_separator(void) {
+  struct Arena arena;
+  arena_init(&arena);
+  TEST_CHECK(strcmp(path_join("out", "a/index.html", &arena), "out/a/index.html") == 0);
+  TEST_CHECK(strcmp(path_join("out/", "a/index.html", &arena), "out/a/index.html") == 0);
+  arena_free(&arena);
+}
+
+// A path below the root yields the remainder after the root and its separator, borrowed in place.
+static void test_relative_below_returns_remainder_below_root(void) {
+  const char* path = "site/assets/icons/a.svg";
+  const char* relative = path_relative_below(path, "site/assets");
+  TEST_ASSERT(relative != NULL);
+  TEST_CHECK(strcmp(relative, "icons/a.svg") == 0);
+  TEST_CHECK(relative == path + strlen("site/assets/"));
+}
+
+// A sibling directory sharing the root as a text prefix is not below it, because the byte after the
+// root must be a separator.
+static void test_relative_below_rejects_sibling_sharing_prefix(void) {
+  TEST_CHECK(path_relative_below("site/assets-old/a.svg", "site/assets") == NULL);
+}
+
+// A path outside the root, or the root itself, has no part below the root.
+static void test_relative_below_rejects_path_not_below_root(void) {
+  TEST_CHECK(path_relative_below("other/a.svg", "site/assets") == NULL);
+  TEST_CHECK(path_relative_below("site/assets", "site/assets") == NULL);
+  TEST_CHECK(path_relative_below("site", "site/assets") == NULL);
 }
 
 // The safe-relative-path check accepts valid output and template names and rejects escapes.
@@ -147,10 +174,17 @@ static void test_safe_relative_path_accepts_valid_rejects_escapes(void) {
   TEST_CHECK(!path_is_safe_relative("\xff"));
 }
 
-TEST_LIST = {{"check output limits reports both limits and metrics",
-              test_check_output_limits_reports_both_limits_and_metrics},
-             {"basename strips dirs and join inserts separator",
-              test_basename_strips_dirs_and_join_inserts_separator},
-             {"safe relative path accepts valid rejects escapes",
-              test_safe_relative_path_accepts_valid_rejects_escapes},
-             {NULL, NULL}};
+TEST_LIST = {
+    {"check output limits reports both limits and metrics",
+     test_check_output_limits_reports_both_limits_and_metrics},
+    {"basename strips dirs and extension", test_basename_strips_dirs_and_extension},
+    {"join inserts separator", test_join_inserts_separator},
+    {"relative below returns remainder below root",
+     test_relative_below_returns_remainder_below_root},
+    {"relative below rejects sibling sharing prefix",
+     test_relative_below_rejects_sibling_sharing_prefix},
+    {"relative below rejects path not below root", test_relative_below_rejects_path_not_below_root},
+    {"safe relative path accepts valid rejects escapes",
+     test_safe_relative_path_accepts_valid_rejects_escapes},
+    {NULL, NULL},
+};

@@ -420,11 +420,9 @@ static const char* render_content_entry_finalize_paths_relative(const char* sour
   // `content_dir` and builds each path down from there, and `site_config_load` has already trimmed
   // any trailing `/`. The function refuses a source from outside that root. Otherwise, the whole
   // path would become the section, so the content directory's own name would land in the entry's
-  // URL. The build would still report success. The `&&` short circuit keeps the byte read in
-  // bounds, because a matching `strncmp` proves `content_dir_len` bytes are there.
-  const size_t content_dir_len = strlen(content_dir);
-  if (strncmp(source_path, content_dir, content_dir_len) != 0 ||
-      source_path[content_dir_len] != '/') {
+  // URL. The build would still report success.
+  const char* source_relative_path = path_relative_below(source_path, content_dir);
+  if (source_relative_path == NULL) {
     // This deliberately does not name the configured root as well. It is unbounded, so a second
     // value could truncate away the reason, and `load_build_inputs` omits it from its own
     // diagnostics for the same reason. `sosig config` prints the resolved value.
@@ -432,7 +430,7 @@ static const char* render_content_entry_finalize_paths_relative(const char* sour
                          source_path);
     return NULL;
   }
-  return source_path + content_dir_len + 1;
+  return source_relative_path;
 }
 
 static char* render_content_entry_finalize_paths_section(const char* source_relative_path,

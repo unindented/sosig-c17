@@ -92,6 +92,14 @@ char* path_join(const char* base_path, const char* relative_path, struct Arena* 
   return joined;
 }
 
+const char* path_relative_below(const char* path, const char* root_dir) {
+  const size_t root_dir_len = strlen(root_dir);
+  if (strncmp(root_dir, path, root_dir_len) != 0 || path[root_dir_len] != '/') {
+    return NULL;
+  }
+  return path + root_dir_len + 1;
+}
+
 bool path_is_safe_relative(const char* path) {
   if (path == NULL || *path == '\0' || *path == '/') {
     return false;
