@@ -11,4 +11,7 @@ if(SOSIG_BUILD_TESTING)
   foreach(module IN ITEMS entry_renderer manifest_builder page_renderer template)
     sosig_add_unit_test(${module})
   endforeach()
+  # The entry- and page-renderer tests share the helpers that drive both render passes.
+  target_sources(sosig_unit_entry_renderer PRIVATE test_render_support.c)
+  target_sources(sosig_unit_page_renderer PRIVATE test_render_support.c)
 endif()

@@ -3,40 +3,15 @@
 
 #include <acutest.h>
 #include <errno.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "app/cmd_config.h"
 #include "app/exit_code.h"
 #include "core/error.h"
 #include "runtime/fs.h"
 #include "test_support.h"
-
-/**
- * @brief Writes text to a fixture file.
- *
- * @param file_path Path of the file to write.
- * @param contents  Terminated text to write.
- * @return `0` on success, or `-1` on test-plumbing failure.
- */
-static int write_text_file(const char* file_path, const char* contents) {
-  FILE* stream = fopen(file_path, "wb");
-  TEST_ASSERT(stream != NULL);
-  if (stream == NULL) {
-    return -1;
-  }
-  int rc = fputs(contents, stream) == EOF ? -1 : 0;
-  const int close_rc = fclose(stream);
-  TEST_CHECK(close_rc == 0);
-  if (close_rc != 0) {
-    rc = -1;
-  }
-  return rc;
-}
 
 /**
  * @brief Runs the config command in a fixture while capturing both standard streams.
@@ -115,18 +90,14 @@ static enum ExitCode run_config_with_unwritable_stdout(const char* root_dir,
 // A valid `sosig.toml` loads and prints, and the command reports success.
 static void test_prints_loaded_config(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config.XXXXXX";
-  char* root_dir = mkdtemp(root_dir_template);
-  TEST_ASSERT(root_dir != NULL);
+  const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  char toml_path[PATH_MAX];
-  const int n = snprintf(toml_path, sizeof(toml_path), "%s/sosig.toml", root_dir_template);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_path));
-  TEST_ASSERT(write_text_file(toml_path,
-                              "base_url = \"https://example.com\"\n"
-                              "title = \"Test Site\"\n"
-                              "author = \"Author Name\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
+                                 "base_url = \"https://example.com\"\n"
+                                 "title = \"Test Site\"\n"
+                                 "author = \"Author Name\"\n") == 0);
 
   char stdout_out[8192];
   char stderr_out[8192];
@@ -150,8 +121,7 @@ static void test_prints_loaded_config(void) {
                     "feed_templates = [\"atom.xml\"]\n"
                     "feed_count = 10\n") == 0);
 
-  TEST_CHECK(unlink(toml_path) == 0);
-  TEST_CHECK(rmdir(root_dir) == 0);
+  remove_fixture_tree(root_dir);
 }
 
 // A config whose template arrays are empty prints and reports success. A loader that accepted `[]`
@@ -160,20 +130,16 @@ static void test_prints_loaded_config(void) {
 // at the module boundary.
 static void test_prints_empty_template_arrays(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config-empty.XXXXXX";
-  char* root_dir = mkdtemp(root_dir_template);
-  TEST_ASSERT(root_dir != NULL);
+  const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  char toml_path[PATH_MAX];
-  const int n = snprintf(toml_path, sizeof(toml_path), "%s/sosig.toml", root_dir_template);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_path));
-  TEST_ASSERT(write_text_file(toml_path,
-                              "base_url = \"https://example.com\"\n"
-                              "title = \"Test Site\"\n"
-                              "author = \"Author Name\"\n"
-                              "aggregate_templates = []\n"
-                              "feed_templates = []\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
+                                 "base_url = \"https://example.com\"\n"
+                                 "title = \"Test Site\"\n"
+                                 "author = \"Author Name\"\n"
+                                 "aggregate_templates = []\n"
+                                 "feed_templates = []\n") == 0);
 
   char stdout_out[8192];
   char stderr_out[8192];
@@ -195,8 +161,7 @@ static void test_prints_empty_template_arrays(void) {
                     "feed_templates = []\n"
                     "feed_count = 10\n") == 0);
 
-  TEST_CHECK(unlink(toml_path) == 0);
-  TEST_CHECK(rmdir(root_dir) == 0);
+  remove_fixture_tree(root_dir);
 }
 
 // A missing `sosig.toml` is reported with the read failure that caused it, naming the path, so this
@@ -205,8 +170,7 @@ static void test_prints_empty_template_arrays(void) {
 // portable.
 static void test_reports_missing_config(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config-missing.XXXXXX";
-  char* root_dir = mkdtemp(root_dir_template);
-  TEST_ASSERT(root_dir != NULL);
+  const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
@@ -227,25 +191,21 @@ static void test_reports_missing_config(void) {
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
   TEST_CHECK(stdout_out[0] == '\0');
 
-  TEST_CHECK(rmdir(root_dir) == 0);
+  remove_fixture_tree(root_dir);
 }
 
 // A well-formed `sosig.toml` that omits a required key fails, and fails with the missing-key
 // message rather than the wrong-type one. An exact line assertion preserves that distinction.
 static void test_reports_missing_required_key(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config-invalid.XXXXXX";
-  char* root_dir = mkdtemp(root_dir_template);
-  TEST_ASSERT(root_dir != NULL);
+  const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  char toml_path[PATH_MAX];
-  const int n = snprintf(toml_path, sizeof(toml_path), "%s/sosig.toml", root_dir_template);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_path));
   // Missing the required `author` key.
-  TEST_ASSERT(write_text_file(toml_path,
-                              "base_url = \"https://example.com\"\n"
-                              "title = \"Test Site\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
+                                 "base_url = \"https://example.com\"\n"
+                                 "title = \"Test Site\"\n") == 0);
 
   char stdout_out[8192];
   char stderr_out[8192];
@@ -255,8 +215,7 @@ static void test_reports_missing_required_key(void) {
   TEST_CHECK(strcmp(stderr_out, "missing required config key 'author'\n") == 0);
   TEST_CHECK(stdout_out[0] == '\0');
 
-  TEST_CHECK(unlink(toml_path) == 0);
-  TEST_CHECK(rmdir(root_dir) == 0);
+  remove_fixture_tree(root_dir);
 }
 
 // A `sosig.toml` that loads fine but cannot be written out fails with the stream's own reason,
@@ -268,18 +227,14 @@ static void test_reports_missing_required_key(void) {
 // `stdout` to capture.
 static void test_reports_unwritable_stdout(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config-unwritable.XXXXXX";
-  char* root_dir = mkdtemp(root_dir_template);
-  TEST_ASSERT(root_dir != NULL);
+  const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  char toml_path[PATH_MAX];
-  const int n = snprintf(toml_path, sizeof(toml_path), "%s/sosig.toml", root_dir_template);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_path));
-  TEST_ASSERT(write_text_file(toml_path,
-                              "base_url = \"https://example.com\"\n"
-                              "title = \"Test Site\"\n"
-                              "author = \"Author Name\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
+                                 "base_url = \"https://example.com\"\n"
+                                 "title = \"Test Site\"\n"
+                                 "author = \"Author Name\"\n") == 0);
 
   char stderr_out[8192];
   const enum ExitCode rc =
@@ -296,8 +251,7 @@ static void test_reports_unwritable_stdout(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
 
-  TEST_CHECK(unlink(toml_path) == 0);
-  TEST_CHECK(rmdir(root_dir) == 0);
+  remove_fixture_tree(root_dir);
 }
 
 TEST_LIST = {

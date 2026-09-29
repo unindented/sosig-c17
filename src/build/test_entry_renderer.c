@@ -3,7 +3,6 @@
 
 #include <acutest.h>
 #include <errno.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,163 +23,8 @@
 #include "runtime/fs.h"
 #include "shared/arena.h"
 #include "shared/string_buffer.h"
+#include "test_render_support.h"
 #include "test_support.h"
-
-/**
- * @brief Runs the page-render pass over filled render-job slots.
- *
- * @param site_config Configuration used for rendering.
- * @param render_jobs Render-job slots filled by the entry pass.
- * @param error_out   Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_pages(const struct SiteConfig* site_config,
-                        struct RenderJobSet* render_jobs,
-                        struct StringBuffer* error_out) {
-  const size_t count = render_jobs->count;
-  struct ContentEntry** entries = calloc(count > 0 ? count : 1, sizeof(*entries));
-  TEST_ASSERT(entries != NULL);
-  if (entries == NULL) {
-    return 1;
-  }
-  size_t entry_count = 0;
-  for (size_t i = 0; i < count; i++) {
-    if (render_jobs->items[i].entry != NULL) {
-      entries[entry_count++] = render_jobs->items[i].entry;
-    }
-  }
-  content_entry_sort(entries, entry_count);
-  const char* site_updated =
-      content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
-  const int rc = page_renderer_render_pages(render_jobs, site_config,
-                                            (const struct ContentEntry* const*)entries, entry_count,
-                                            site_updated, 1, false, error_out);
-  free(entries);
-  return rc;
-}
-
-/**
- * @brief Renders one fixture source through both worker-pool passes.
- *
- * @param root_dir             Fixture root used as the working directory.
- * @param source_relative_path Source path relative to `root_dir`.
- * @param permalink_override   Replacement permalink, or `NULL` to keep the configured value.
- * @param site_config          Configuration populated from the fixture.
- * @param source_paths         Path list populated with the source.
- * @param render_jobs_out      Receives the allocated render-job slots. Must be zero-initialized, so
- *                             `render_job_set_free` is safe whether or not it is written.
- * @param error_out            Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_single_source(const char* root_dir,
-                                const char* source_relative_path,
-                                const char* permalink_override,
-                                struct SiteConfig* site_config,
-                                struct PathList* source_paths,
-                                struct RenderJobSet* render_jobs_out,
-                                struct StringBuffer* error_out) {
-  char working_dir[PATH_MAX];
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
-    TEST_CHECK(false);
-    return 1;
-  }
-
-  char config_err[ERROR_MESSAGE_SIZE];
-  config_err[0] = '\0';
-  int rc = 1;
-  if (site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0 &&
-      path_list_push(source_paths, source_relative_path) == 0) {
-    if (permalink_override != NULL) {
-      site_config->permalink = permalink_override;
-    }
-    rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
-                                       error_out);
-    if (rc == 0) {
-      rc = render_pages(site_config, render_jobs_out, error_out);
-    }
-  }
-
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
-  return rc;
-}
-
-/**
- * @brief Renders named fixture sources through both worker-pool passes.
- *
- * @param root_dir            Fixture root used as the working directory.
- * @param site_config         Configuration populated from the fixture.
- * @param relative_paths      Source paths relative to `root_dir`.
- * @param relative_path_count Number of entries in `relative_paths`.
- * @param source_paths        Path list populated with the sources.
- * @param render_jobs_out     Receives the allocated render-job slots. Must be zero-initialized, so
- *                            `render_job_set_free` is safe whether or not it is written.
- * @param error_out           Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_sources(const char* root_dir,
-                          struct SiteConfig* site_config,
-                          const char* const* relative_paths,
-                          size_t relative_path_count,
-                          struct PathList* source_paths,
-                          struct RenderJobSet* render_jobs_out,
-                          struct StringBuffer* error_out) {
-  char working_dir[PATH_MAX];
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
-    TEST_CHECK(false);
-    return 1;
-  }
-
-  char config_err[ERROR_MESSAGE_SIZE];
-  config_err[0] = '\0';
-  int rc = 1;
-  if (site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0) {
-    rc = 0;
-    for (size_t i = 0; rc == 0 && i < relative_path_count; i++) {
-      rc = path_list_push(source_paths, relative_paths[i]);
-    }
-    if (rc == 0) {
-      rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
-                                         error_out);
-    }
-    if (rc == 0) {
-      rc = render_pages(site_config, render_jobs_out, error_out);
-    }
-  }
-
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
-  return rc;
-}
-
-/**
- * @brief Reads a page the render pass wrote below a fixture root.
- *
- * Pages in these tests are short, so a fixed-size read holds any of them whole.
- *
- * @param root_dir      Fixture root the output path is relative to.
- * @param relative_path Output path relative to `root_dir`.
- * @return Terminated file contents the caller must `free`, or `NULL` when the file cannot be read.
- */
-static char* read_output(const char* root_dir, const char* relative_path) {
-  enum { OUTPUT_LEN_MAX = 4096 };
-  struct Arena arena;
-  arena_init(&arena);
-  const char* path = path_join(root_dir, relative_path, &arena);
-  FILE* fp = path != NULL ? fopen(path, "rb") : NULL;
-  arena_free(&arena);
-  if (fp == NULL) {
-    return NULL;
-  }
-  char* data = calloc(OUTPUT_LEN_MAX + 1, 1);
-  const size_t data_len = data != NULL ? fread(data, 1, OUTPUT_LEN_MAX, fp) : 0;
-  if (data != NULL && (ferror(fp) != 0 || data_len == OUTPUT_LEN_MAX)) {
-    free(data);
-    data = NULL;
-  }
-  (void)fclose(fp);
-  return data;
-}
 
 /**
  * @brief Runs the entry-render pass while capturing standard error.
@@ -387,11 +231,6 @@ static void test_verbose_prints_one_dot_per_job(void) {
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
-  struct Arena arena;
-  arena_init(&arena);
-  (void)unlink(path_join(root_dir, "content/second.md", &arena));
-  (void)unlink(path_join(root_dir, "content/draft.md", &arena));
-  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -448,12 +287,6 @@ static void test_nests_output_under_slugified_sections(void) {
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
-  struct Arena nested_arena;
-  arena_init(&nested_arena);
-  (void)unlink(path_join(root_dir, source_relative_path, &nested_arena));
-  (void)rmdir(path_join(root_dir, "content/My Section/Sub Dir", &nested_arena));
-  (void)rmdir(path_join(root_dir, "content/My Section", &nested_arena));
-  arena_free(&nested_arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -523,8 +356,8 @@ static void test_rejects_source_outside_content_dir(void) {
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"hello.md", "contentx/hello.md"};
-  TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
-                            &source_paths, &render_jobs, &error_buffer) == -1);
+  TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
+                            &site_config, &source_paths, &render_jobs, &error_buffer) == -1);
   // Compared whole, so a message that merely mentions the source path cannot pass for this one.
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
@@ -541,12 +374,6 @@ static void test_rejects_source_outside_content_dir(void) {
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
-  struct Arena arena;
-  arena_init(&arena);
-  (void)unlink(path_join(root_dir, "hello.md", &arena));
-  (void)unlink(path_join(root_dir, "contentx/hello.md", &arena));
-  (void)rmdir(path_join(root_dir, "contentx", &arena));
-  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -883,10 +710,6 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
-  struct Arena arena;
-  arena_init(&arena);
-  (void)unlink(path_join(root_dir, source_relative_path, &arena));
-  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -1058,8 +881,8 @@ static void test_appends_one_error_line_per_failing_source(void) {
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"content/a.md", "content/b.md"};
-  TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
-                            &source_paths, &render_jobs, &error_buffer) == -1);
+  TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
+                            &site_config, &source_paths, &render_jobs, &error_buffer) == -1);
   // Compared whole, with the separator in the middle: a dropped separator, a lost line, or a
   // leading or trailing newline each change these bytes.
   TEST_CHECK(error_buffer.data != NULL &&
@@ -1071,11 +894,6 @@ static void test_appends_one_error_line_per_failing_source(void) {
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
-  struct Arena arena;
-  arena_init(&arena);
-  (void)unlink(path_join(root_dir, "content/a.md", &arena));
-  (void)unlink(path_join(root_dir, "content/b.md", &arena));
-  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 

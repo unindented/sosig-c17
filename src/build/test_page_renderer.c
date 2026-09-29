@@ -4,7 +4,6 @@
 #include <acutest.h>
 #include <errno.h>
 #include <ftw.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,165 +21,8 @@
 #include "runtime/fs.h"
 #include "shared/arena.h"
 #include "shared/string_buffer.h"
+#include "test_render_support.h"
 #include "test_support.h"
-
-/**
- * @brief Runs the page-render pass over filled render-job slots.
- *
- * @param site_config  Configuration used for rendering.
- * @param render_jobs  Render-job slots filled by the entry pass.
- * @param worker_count Worker threads the page pass runs on.
- * @param error_out    Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_pages(const struct SiteConfig* site_config,
-                        struct RenderJobSet* render_jobs,
-                        size_t worker_count,
-                        struct StringBuffer* error_out) {
-  const size_t count = render_jobs->count;
-  struct ContentEntry** entries = calloc(count > 0 ? count : 1, sizeof(*entries));
-  TEST_ASSERT(entries != NULL);
-  if (entries == NULL) {
-    return 1;
-  }
-  size_t entry_count = 0;
-  for (size_t i = 0; i < count; i++) {
-    if (render_jobs->items[i].entry != NULL) {
-      entries[entry_count++] = render_jobs->items[i].entry;
-    }
-  }
-  content_entry_sort(entries, entry_count);
-  const char* site_updated =
-      content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
-  const int rc = page_renderer_render_pages(render_jobs, site_config,
-                                            (const struct ContentEntry* const*)entries, entry_count,
-                                            site_updated, worker_count, false, error_out);
-  free(entries);
-  return rc;
-}
-
-/**
- * @brief Renders one fixture source through both worker-pool passes.
- *
- * @param root_dir             Fixture root used as the working directory.
- * @param source_relative_path Source path relative to `root_dir`.
- * @param permalink_override   Replacement permalink, or `NULL` to keep the configured value.
- * @param site_config          Configuration populated from the fixture.
- * @param source_paths         Path list populated with the source.
- * @param render_jobs_out      Receives the allocated render-job slots. Must be zero-initialized, so
- *                             `render_job_set_free` is safe whether or not it is written.
- * @param error_out            Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_single_source(const char* root_dir,
-                                const char* source_relative_path,
-                                const char* permalink_override,
-                                struct SiteConfig* site_config,
-                                struct PathList* source_paths,
-                                struct RenderJobSet* render_jobs_out,
-                                struct StringBuffer* error_out) {
-  char working_dir[PATH_MAX];
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
-    TEST_CHECK(false);
-    return 1;
-  }
-
-  char config_err[ERROR_MESSAGE_SIZE];
-  config_err[0] = '\0';
-  int rc = 1;
-  if (site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0 &&
-      path_list_push(source_paths, source_relative_path) == 0) {
-    if (permalink_override != NULL) {
-      site_config->permalink = permalink_override;
-    }
-    rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
-                                       error_out);
-    if (rc == 0) {
-      rc = render_pages(site_config, render_jobs_out, 1, error_out);
-    }
-  }
-
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
-  return rc;
-}
-
-/**
- * @brief Renders named fixture sources through both worker-pool passes.
- *
- * @param root_dir            Fixture root used as the working directory.
- * @param site_config         Configuration populated from the fixture.
- * @param relative_paths      Source paths relative to `root_dir`.
- * @param relative_path_count Number of entries in `relative_paths`.
- * @param source_paths        Path list populated with the sources.
- * @param render_jobs_out     Receives the allocated render-job slots. Must be zero-initialized, so
- *                            `render_job_set_free` is safe whether or not it is written.
- * @param error_out           Buffer that receives any render diagnostic.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
- */
-static int render_sources(const char* root_dir,
-                          struct SiteConfig* site_config,
-                          const char* const* relative_paths,
-                          size_t relative_path_count,
-                          struct PathList* source_paths,
-                          struct RenderJobSet* render_jobs_out,
-                          struct StringBuffer* error_out) {
-  char working_dir[PATH_MAX];
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
-    TEST_CHECK(false);
-    return 1;
-  }
-
-  char config_err[ERROR_MESSAGE_SIZE];
-  config_err[0] = '\0';
-  int rc = 1;
-  if (site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0) {
-    rc = 0;
-    for (size_t i = 0; rc == 0 && i < relative_path_count; i++) {
-      rc = path_list_push(source_paths, relative_paths[i]);
-    }
-    if (rc == 0) {
-      rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
-                                         error_out);
-    }
-    if (rc == 0) {
-      rc = render_pages(site_config, render_jobs_out, 1, error_out);
-    }
-  }
-
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
-  return rc;
-}
-
-/**
- * @brief Reads a page the render pass wrote below a fixture root.
- *
- * Pages in these tests are short, so a fixed-size read holds any of them whole.
- *
- * @param root_dir      Fixture root the output path is relative to.
- * @param relative_path Output path relative to `root_dir`.
- * @return Terminated file contents the caller must `free`, or `NULL` when the file cannot be read.
- */
-static char* read_output(const char* root_dir, const char* relative_path) {
-  enum { OUTPUT_LEN_MAX = 4096 };
-  struct Arena arena;
-  arena_init(&arena);
-  const char* path = path_join(root_dir, relative_path, &arena);
-  FILE* fp = path != NULL ? fopen(path, "rb") : NULL;
-  arena_free(&arena);
-  if (fp == NULL) {
-    return NULL;
-  }
-  char* data = calloc(OUTPUT_LEN_MAX + 1, 1);
-  const size_t data_len = data != NULL ? fread(data, 1, OUTPUT_LEN_MAX, fp) : 0;
-  if (data != NULL && (ferror(fp) != 0 || data_len == OUTPUT_LEN_MAX)) {
-    free(data);
-    data = NULL;
-  }
-  (void)fclose(fp);
-  return data;
-}
 
 /**
  * @brief Checks that a page the render pass wrote holds exactly the expected text.
@@ -257,8 +99,8 @@ static void test_renders_site_updated_in_content_template(void) {
 
   // The draft is listed last, so the newest date belongs to an entry that is never published.
   static const char* const sources[] = {"content/older.md", "content/newer.md", "content/draft.md"};
-  TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
-                            &source_paths, &render_jobs, &error_buffer) == 0);
+  TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
+                            &site_config, &source_paths, &render_jobs, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   check_output(root_dir, "public/older.html", "[2026-07-02T00:00:00Z]\n");
   check_output(root_dir, "public/newer.html", "[2026-07-02T00:00:00Z]\n");
@@ -296,8 +138,8 @@ static void test_iterates_content_entries_in_content_template(void) {
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"content/older.md", "content/newer.md", "content/draft.md"};
-  TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
-                            &source_paths, &render_jobs, &error_buffer) == 0);
+  TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
+                            &site_config, &source_paths, &render_jobs, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   check_output(root_dir, "public/older.html", "[Newer][Older]\n");
 
@@ -455,8 +297,8 @@ static void test_reports_write_failure_per_entry(void) {
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"content/older.md", "content/newer.md", "content/third.md"};
-  TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
-                            &source_paths, &render_jobs, &error_buffer) == -1);
+  TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
+                            &site_config, &source_paths, &render_jobs, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   error_system_message(reason, sizeof(reason), EISDIR);
   char expected[ERROR_MESSAGE_SIZE * 2];

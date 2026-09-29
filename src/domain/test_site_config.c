@@ -14,6 +14,19 @@
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "test_support.h"
+
+/** Fixture root template for a config written by `write_temp_config`. */
+#define TEMP_CONFIG_ROOT_TEMPLATE "/tmp/sosig-site-config-test.XXXXXX"
+
+/** A `sosig.toml` written alone into a fresh fixture root. */
+struct TempConfig {
+  /** Fixture root, which `remove_fixture_tree` removes together with the config. */
+  char root_dir[sizeof(TEMP_CONFIG_ROOT_TEMPLATE)];
+
+  /** Path of the written config. */
+  char path[sizeof(TEMP_CONFIG_ROOT_TEMPLATE) + sizeof("/sosig.toml") - 1];
+};
 
 /**
  * @brief Renders a site configuration into a terminated text buffer.
@@ -29,35 +42,28 @@ static void render(const struct SiteConfig* site_config, char* text_out, size_t 
     return;
   }
   TEST_CHECK(site_config_print(stream, site_config) == 0);
-  const int seek_rc = fseek(stream, 0, SEEK_SET);
-  TEST_CHECK(seek_rc == 0);
-  if (seek_rc == 0) {
-    const size_t text_len = fread(text_out, 1, text_out_len - 1, stream);
-    text_out[text_len] = '\0';
-    TEST_CHECK(ferror(stream) == 0);
-  }
+  (void)read_capture(stream, text_out, text_out_len);
   const int close_rc = fclose(stream);
   TEST_CHECK(close_rc == 0);
 }
 
 /**
- * @brief Writes TOML to a fresh temporary configuration file.
+ * @brief Writes TOML to `sosig.toml` in a fresh fixture root.
  *
- * The caller owns the resulting file and must unlink it.
+ * The caller removes the root with `remove_fixture_tree(temp_config_out->root_dir)`.
  *
- * @param config_path Writable `mkstemp` template. Receives the created path.
- * @param toml        Terminated TOML text to write.
+ * @param temp_config_out Receives the fixture root and the config path.
+ * @param toml            Terminated TOML text to write.
+ * @return The config path, which aliases `temp_config_out->path`.
  */
-static void write_temp_config(char config_path[static 1], const char* toml) {
-  const int fd = mkstemp(config_path);
-  TEST_ASSERT(fd >= 0);
-  if (fd < 0) {
-    return;
-  }
-  const size_t len = strlen(toml);
-  TEST_CHECK(write(fd, toml, len) == (ssize_t)len);
-  const int close_rc = close(fd);
-  TEST_CHECK(close_rc == 0);
+static const char* write_temp_config(struct TempConfig* temp_config_out, const char* toml) {
+  memcpy(temp_config_out->root_dir, TEMP_CONFIG_ROOT_TEMPLATE, sizeof(TEMP_CONFIG_ROOT_TEMPLATE));
+  TEST_ASSERT(init_fixture_dir(temp_config_out->root_dir) != NULL);
+  TEST_ASSERT(write_fixture_file(temp_config_out->root_dir, "sosig.toml", toml) == 0);
+  const int n = snprintf(temp_config_out->path, sizeof(temp_config_out->path), "%s/sosig.toml",
+                         temp_config_out->root_dir);
+  TEST_ASSERT(n > 0 && (size_t)n < sizeof(temp_config_out->path));
+  return temp_config_out->path;
 }
 
 /**
@@ -75,8 +81,8 @@ static void check_load_rejects_permalink(const char* permalink, const char* expe
   char toml[OUTPUT_PATH_RELATIVE_LEN_MAX + 512];
   const int n = snprintf(toml, sizeof(toml), toml_format, permalink);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -86,7 +92,7 @@ static void check_load_rejects_permalink(const char* permalink, const char* expe
   TEST_MSG("actual: '%s'", err);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // Loading a file with only the required keys fills the rest from `site_config_init`'s defaults.
@@ -95,8 +101,8 @@ static void test_load_applies_required_and_defaults(void) {
       "base_url = \"https://example.com\"\n"
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -118,7 +124,7 @@ static void test_load_applies_required_and_defaults(void) {
   TEST_CHECK(config.feed_count == 10);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // Loading a file that sets every optional key overrides each corresponding default.
@@ -135,8 +141,8 @@ static void test_load_overrides_optional_keys(void) {
       "aggregate_templates = [\"index.html\", \"archive.html\"]\n"
       "feed_templates = []\n"
       "feed_count = 5\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -155,7 +161,7 @@ static void test_load_overrides_optional_keys(void) {
   TEST_CHECK(config.feed_count == 5);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // Directory keys have trailing separators trimmed at load. Left in place, a trailing slash defeats
@@ -170,8 +176,8 @@ static void test_load_normalizes_directory_keys(void) {
       "content_dir = \"content/\"\n"
       "output_dir = \"/srv/www///\"\n"
       "templates_dir = \"../shared/templates/\"\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -183,7 +189,7 @@ static void test_load_normalizes_directory_keys(void) {
   TEST_CHECK(strcmp(config.templates_dir, "../shared/templates") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // An absolute `base_url` keeps its scheme, host, port, path and query, and loses only a trailing
@@ -206,8 +212,8 @@ static void test_load_normalizes_base_url(void) {
                            "author = \"Example Author\"\n",
                            cases[i][0]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -217,7 +223,7 @@ static void test_load_normalizes_base_url(void) {
     TEST_CHECK(strcmp(config.base_url, cases[i][1]) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -238,8 +244,8 @@ static void test_load_accepts_valid_permalinks(void) {
                            "permalink = \"%s\"\n",
                            permalinks_valid[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -249,7 +255,7 @@ static void test_load_accepts_valid_permalinks(void) {
     TEST_CHECK(strcmp(config.permalink, permalinks_valid[i]) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -263,8 +269,8 @@ static void test_load_accepts_zero_feed_count(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n"
       "feed_count = 0\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -274,7 +280,7 @@ static void test_load_accepts_zero_feed_count(void) {
   TEST_CHECK(config.feed_count == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A directory key that is empty, or that trims to empty, is rejected by name.
@@ -294,8 +300,8 @@ static void test_load_rejects_empty_directory_keys(void) {
                            "%s",
                            cases[i][0]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -304,7 +310,7 @@ static void test_load_rejects_empty_directory_keys(void) {
     TEST_CHECK(strcmp(err, cases[i][1]) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -314,7 +320,7 @@ static void test_load_rejects_empty_directory_keys(void) {
 static void test_load_rejects_relative_base_url(void) {
   static const char* const base_urls_invalid[] = {
       "example.com",         // no scheme
-      "/relative",           // a config_path, not a URL
+      "/relative",           // a path, not a URL
       "",                    // present and a string, but empty
       "ftp://example.com",   // a scheme, but not one a browser follows from a feed
       "https:/example.com",  // one slash short of a scheme
@@ -331,8 +337,8 @@ static void test_load_rejects_relative_base_url(void) {
                            "author = \"Example Author\"\n",
                            base_urls_invalid[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -348,7 +354,7 @@ static void test_load_rejects_relative_base_url(void) {
     TEST_CHECK(strcmp(err, expected) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -376,8 +382,8 @@ static void test_load_rejects_missing_file(void) {
 // out and must change with it. The file is sparse, so the fixture costs no disk.
 static void test_load_rejects_oversize_file(void) {
   enum { CONFIG_FILE_LEN_MAX = 1024 * 1024 };
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, "title = \"Site\"\n");
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, "title = \"Site\"\n");
   const off_t config_len = (off_t)CONFIG_FILE_LEN_MAX + 1;
   TEST_ASSERT(truncate(config_path, config_len) == 0);
 
@@ -393,16 +399,16 @@ static void test_load_rejects_oversize_file(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(err, expected) == 0);
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // `site_config_load` reports a syntactically malformed config as a parse failure naming the
-// config_path, rather than reaching the field pass with an empty table and reporting a false
+// config path, rather than reaching the field pass with an empty table and reporting a false
 // missing-key error.
 static void test_load_rejects_malformed_toml(void) {
   const char toml[] = "base_url = \n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -423,7 +429,7 @@ static void test_load_rejects_malformed_toml(void) {
   TEST_CHECK(strcmp(err + err_len - (size_t)n, suffix) == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // Omitting a required key is reported as missing rather than as a type error.
@@ -431,8 +437,8 @@ static void test_load_rejects_missing_required_key(void) {
   const char toml[] =
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -441,7 +447,7 @@ static void test_load_rejects_missing_required_key(void) {
   TEST_CHECK(strcmp(err, "missing required config key 'base_url'") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A required key of the wrong TOML type is reported as a type error, not a missing key.
@@ -450,8 +456,8 @@ static void test_load_rejects_wrong_key_type(void) {
       "base_url = 123\n"
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -460,7 +466,7 @@ static void test_load_rejects_wrong_key_type(void) {
   TEST_CHECK(strcmp(err, "config key 'base_url' must be a string") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // An unsafe `content_template` is rejected at load, in the singular wording that names the key,
@@ -478,8 +484,8 @@ static void test_load_rejects_unsafe_content_template(void) {
     const int n =
         snprintf(toml, sizeof(toml), "%scontent_template = \"%s\"\n", base, unsafe_names[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -494,7 +500,7 @@ static void test_load_rejects_unsafe_content_template(void) {
     TEST_CHECK(strcmp(err, expected) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -507,37 +513,37 @@ static void test_load_rejects_invalid_template_arrays(void) {
       "author = \"Example Author\"\n";
   char err[ERROR_MESSAGE_SIZE];
 
-  char not_array_path[] = "/tmp/sosig-site-config-test.XXXXXX";
+  struct TempConfig not_array_temp;
   char not_array_toml[512];
   int n = snprintf(not_array_toml, sizeof(not_array_toml),
                    "%saggregate_templates = \"index.html\"\n", base);
   TEST_ASSERT(n > 0 && (size_t)n < sizeof(not_array_toml));
-  write_temp_config(not_array_path, not_array_toml);
+  const char* not_array_path = write_temp_config(&not_array_temp, not_array_toml);
   struct SiteConfig not_array_config;
   site_config_init(&not_array_config);
   TEST_CHECK(site_config_load(&not_array_config, not_array_path, err, sizeof(err)) == -1);
   TEST_CHECK(strcmp(err, "config key 'aggregate_templates' must be an array") == 0);
   site_config_free(&not_array_config);
-  unlink(not_array_path);
+  remove_fixture_tree(not_array_temp.root_dir);
 
-  char non_string_path[] = "/tmp/sosig-site-config-test.XXXXXX";
+  struct TempConfig non_string_temp;
   char non_string_toml[512];
   n = snprintf(non_string_toml, sizeof(non_string_toml), "%saggregate_templates = [1]\n", base);
   TEST_ASSERT(n > 0 && (size_t)n < sizeof(non_string_toml));
-  write_temp_config(non_string_path, non_string_toml);
+  const char* non_string_path = write_temp_config(&non_string_temp, non_string_toml);
   struct SiteConfig non_string_config;
   site_config_init(&non_string_config);
   TEST_CHECK(site_config_load(&non_string_config, non_string_path, err, sizeof(err)) == -1);
   TEST_CHECK(strcmp(err, "config key 'aggregate_templates' must contain only strings") == 0);
   site_config_free(&non_string_config);
-  unlink(non_string_path);
+  remove_fixture_tree(non_string_temp.root_dir);
 
-  char unsafe_name_path[] = "/tmp/sosig-site-config-test.XXXXXX";
+  struct TempConfig unsafe_name_temp;
   char unsafe_name_toml[512];
   n = snprintf(unsafe_name_toml, sizeof(unsafe_name_toml),
                "%saggregate_templates = [\"../evil.html\"]\n", base);
   TEST_ASSERT(n > 0 && (size_t)n < sizeof(unsafe_name_toml));
-  write_temp_config(unsafe_name_path, unsafe_name_toml);
+  const char* unsafe_name_path = write_temp_config(&unsafe_name_temp, unsafe_name_toml);
   struct SiteConfig unsafe_name_config;
   site_config_init(&unsafe_name_config);
   TEST_CHECK(site_config_load(&unsafe_name_config, unsafe_name_path, err, sizeof(err)) == -1);
@@ -548,7 +554,7 @@ static void test_load_rejects_invalid_template_arrays(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected_unsafe_name));
   TEST_CHECK(strcmp(err, expected_unsafe_name) == 0);
   site_config_free(&unsafe_name_config);
-  unlink(unsafe_name_path);
+  remove_fixture_tree(unsafe_name_temp.root_dir);
 }
 
 // A negative `feed_count` is rejected, and says the value is out of range rather than mistyped.
@@ -558,8 +564,8 @@ static void test_load_rejects_negative_feed_count(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n"
       "feed_count = -1\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -568,7 +574,7 @@ static void test_load_rejects_negative_feed_count(void) {
   TEST_CHECK(strcmp(err, "config key 'feed_count' must not be negative") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A non-integer `feed_count` is rejected, and fails a different assertion from a negative one: the
@@ -579,8 +585,8 @@ static void test_load_rejects_non_integer_feed_count(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n"
       "feed_count = \"ten\"\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -589,7 +595,7 @@ static void test_load_rejects_non_integer_feed_count(void) {
   TEST_CHECK(strcmp(err, "config key 'feed_count' must be an integer") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A TOML escape decoding to `U+0000` is rejected per key. tomlc17 accepts the escape and returns a
@@ -610,8 +616,8 @@ static void test_load_rejects_nul_in_string_values(void) {
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, cases[i][0]);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -620,7 +626,7 @@ static void test_load_rejects_nul_in_string_values(void) {
     TEST_CHECK(strcmp(err, cases[i][1]) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -644,8 +650,8 @@ static void test_load_rejects_unsafe_permalink(void) {
                            "permalink = \"%s\"\n",
                            permalinks_unsafe[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -662,7 +668,7 @@ static void test_load_rejects_unsafe_permalink(void) {
     TEST_CHECK(strcmp(err, expected) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -671,7 +677,7 @@ static void test_load_rejects_unsafe_permalink(void) {
 // message describing the symptom. A single entry publishes a wrong site with no diagnostic.
 static void test_load_rejects_permalink_without_slug(void) {
   static const char* const permalinks_indistinct[] = {
-      "/about.html",            // a fixed config_path, the same for every entry
+      "/about.html",            // a fixed path, the same for every entry
       "",                       // expands to `/index.html`
       "/{section}/",            // varies by section, but not within one
       "/{section}/index.html",  // the same, spelled out
@@ -686,8 +692,8 @@ static void test_load_rejects_permalink_without_slug(void) {
                            "permalink = \"%s\"\n",
                            permalinks_indistinct[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-    write_temp_config(config_path, toml);
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -703,7 +709,7 @@ static void test_load_rejects_permalink_without_slug(void) {
     TEST_CHECK(strcmp(err, expected) == 0);
 
     site_config_free(&config);
-    unlink(config_path);
+    remove_fixture_tree(temp_config.root_dir);
   }
 }
 
@@ -726,8 +732,8 @@ static void test_load_rejects_oversize_permalink(void) {
                    "permalink = \"%s\"\n",
                    pattern);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -744,7 +750,7 @@ static void test_load_rejects_oversize_permalink(void) {
   TEST_CHECK(strcmp(err, expected) == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A permalink that fits with an empty `{section}` but overflows with a populated one is rejected at
@@ -773,7 +779,7 @@ static void test_load_rejects_permalink_oversize_in_populated_section(void) {
   }
   filler[FILLER_LEN] = '\0';
   // A trailing separator would make the joined pattern contain `//`, which is not a safe relative
-  // config_path, so the failure under test would be pre-empted by the safety check.
+  // path, so the failure under test would be pre-empted by the safety check.
   TEST_CHECK(filler[FILLER_LEN - 1] != '/');
 
   char toml[FILLER_LEN + 256];
@@ -784,8 +790,8 @@ static void test_load_rejects_permalink_oversize_in_populated_section(void) {
                    "permalink = \"/%s/{section}/{slug}.html\"\n",
                    filler);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -802,7 +808,7 @@ static void test_load_rejects_permalink_oversize_in_populated_section(void) {
   TEST_CHECK(strcmp(err, expected) == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A permalink with a literal segment longer than the filename limit is rejected at load, against
@@ -829,8 +835,8 @@ static void test_load_rejects_permalink_with_oversize_segment(void) {
                    "permalink = \"%s\"\n",
                    pattern);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -845,7 +851,7 @@ static void test_load_rejects_permalink_with_oversize_segment(void) {
   TEST_CHECK(strcmp(err, expected) == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A permalink without `{slug}` whose literal also breaks a length limit reports the missing token,
@@ -997,8 +1003,8 @@ static void test_print_load_round_trips(void) {
   char config_out[2048];
   render(&config, config_out, sizeof(config_out));
 
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, config_out);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, config_out);
 
   struct SiteConfig reloaded;
   site_config_init(&reloaded);
@@ -1022,7 +1028,7 @@ static void test_print_load_round_trips(void) {
 
   site_config_free(&reloaded);
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // An empty template array survives a load followed by a print. Neither operation alone tests this
@@ -1036,8 +1042,8 @@ static void test_print_empty_template_arrays(void) {
       "author = \"Example Author\"\n"
       "aggregate_templates = []\n"
       "feed_templates = []\n";
-  char config_path[] = "/tmp/sosig-site-config-test.XXXXXX";
-  write_temp_config(config_path, toml);
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -1067,7 +1073,7 @@ static void test_print_empty_template_arrays(void) {
                     "feed_count = 10\n") == 0);
 
   site_config_free(&config);
-  unlink(config_path);
+  remove_fixture_tree(temp_config.root_dir);
 }
 
 // A stream that latched a write error makes `site_config_print` report `-1` with `errno` set, which

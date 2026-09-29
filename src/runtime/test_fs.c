@@ -70,12 +70,8 @@ static void test_list_files_matches_suffix(void) {
   TEST_CHECK(strcmp(reason, "untouched") == 0);
   path_list_free(&paths);
 
-  (void)unlink(ignored);
-  (void)unlink(nested_md);
-  (void)unlink(root_md);
-  (void)rmdir(path_join(root_dir, "nested", &arena));
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // An empty suffix matches every regular file in the tree.
@@ -99,10 +95,8 @@ static void test_list_files_empty_suffix_matches_all(void) {
   TEST_CHECK(paths.count == 2);
   path_list_free(&paths);
 
-  (void)unlink(md_path);
-  (void)unlink(txt_path);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // An empty directory is a successful listing with no matches, not a failure.
@@ -119,7 +113,7 @@ static void test_list_files_accepts_empty_dir(void) {
   TEST_CHECK(paths.count == 0);
   path_list_free(&paths);
 
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // A symlinked directory that loops back into its own ancestry is skipped, so the walk completes and
@@ -146,10 +140,8 @@ static void test_list_files_skips_symlink_cycle(void) {
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
 
-  (void)unlink(loop);
-  (void)unlink(page);
   arena_free(&arena);
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // A symlinked directory whose target is an outer ancestor, rather than the directory holding it, is
@@ -177,11 +169,8 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
 
-  (void)unlink(up);
-  (void)unlink(page);
-  (void)rmdir(path_join(root_dir, "sub", &arena));
   arena_free(&arena);
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // Two sibling symlinks to one directory list its files once, under the directory's own path, even
@@ -319,7 +308,7 @@ static void test_list_files_rejects_missing_dir(void) {
   path_list_free(&missing_paths);
 
   arena_free(&arena);
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // A regular file passed as the root is rejected by the directory open rather than by the `stat`
@@ -350,9 +339,8 @@ static void test_list_files_rejects_file_root(void) {
   TEST_CHECK(strcmp(reason, expected) == 0);
   path_list_free(&paths);
 
-  (void)unlink(plain);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // An entry that exists but cannot be inspected fails the walk and names that entry, rather than
@@ -398,10 +386,8 @@ static void test_list_files_rejects_unstatable_entry(void) {
   TEST_CHECK(strcmp(reason, expected_entry) == 0);
   path_list_free(&paths);
 
-  (void)unlink(sealed_md);
-  (void)rmdir(sealed_dir);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // An empty file reads back as zero bytes with a valid terminator.
@@ -424,9 +410,8 @@ static void test_read_file_accepts_empty(void) {
   TEST_CHECK(file_data != NULL && file_data[0] == '\0');
   free(file_data);
 
-  (void)unlink(empty_path);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // A file exactly at `data_len_max` bytes reads in full. The limit is inclusive.
@@ -449,9 +434,8 @@ static void test_read_file_accepts_file_at_limit(void) {
   TEST_CHECK(file_data != NULL && strcmp(file_data, "four") == 0);
   free(file_data);
 
-  (void)unlink(file_path);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_read_file` rejects a missing path and a directory, leaving outputs untouched, and reports the
@@ -490,7 +474,7 @@ static void test_read_file_rejects_missing_and_non_regular(void) {
   TEST_CHECK(strcmp(reason, "not a regular file") == 0);
 
   arena_free(&arena);
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // A file carrying an embedded `NUL` is rejected, leaving outputs untouched, and says so. This is
@@ -519,9 +503,8 @@ static void test_read_file_rejects_embedded_nul(void) {
   // The reason names the policy. No system error occurred and the file reads fine otherwise.
   TEST_CHECK(strcmp(reason, "contains an embedded NUL byte") == 0);
 
-  (void)unlink(nul_path);
   arena_free(&arena);
-  (void)rmdir(root_dir);
+  remove_fixture_tree(root_dir);
 }
 
 // A file over `data_len_max` is rejected from its `stat` size, naming the limit and the size, and
@@ -556,9 +539,8 @@ static void test_read_file_rejects_oversize_before_reading(void) {
   TEST_CHECK(file_len == 999);
   TEST_CHECK(strcmp(reason, "exceeds max file size (4 bytes) at 5 bytes") == 0);
 
-  (void)unlink(file_path);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // A written file reads back byte-for-byte, and a successful write and a successful read each leave
@@ -586,9 +568,8 @@ static void test_write_then_read_round_trips(void) {
   TEST_CHECK(strcmp(reason, "untouched") == 0);
   free(file_data);
 
-  (void)unlink(root_md);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_write_file` creates a new file with `0666` reduced by the process umask, so a restrictive
@@ -618,10 +599,8 @@ static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
   TEST_CHECK(stat(created, &st) == 0 && (st.st_mode & 0777) == (mode_t)(0666 & ~077));
   TEST_CHECK(stat(existing, &st) == 0 && (st.st_mode & 0777) == 0640);
 
-  (void)unlink(created);
-  (void)unlink(existing);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_write_file` fails when the parent directory cannot be created and when the target is itself a
@@ -661,10 +640,8 @@ static void test_write_file_rejects_file_parent_and_dir_target(void) {
   char message[FS_REASON_SIZE];
   TEST_CHECK(strcmp(reason, expected_errno_reason(message, EISDIR)) == 0);
 
-  (void)unlink(blocking_file);
-  (void)rmdir(dir_target);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_mkdir_p` creates a deep path, treats an empty path as a no-op, and is idempotent.
@@ -688,11 +665,8 @@ static void test_mkdir_p_creates_nested_and_is_idempotent(void) {
   // Re-creating an existing tree is not an error.
   TEST_CHECK(fs_mkdir_p(nested, NULL, 0) == 0);
 
-  (void)rmdir(path_join(root_dir, "x/y/z", &arena));
-  (void)rmdir(path_join(root_dir, "x/y", &arena));
-  (void)rmdir(path_join(root_dir, "x", &arena));
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_mkdir_p` fails when a path component is an existing regular file. The reason names the
@@ -725,9 +699,8 @@ static void test_mkdir_p_rejects_file_component(void) {
   TEST_CHECK(fs_mkdir_p(path_through_file, reason, sizeof(reason)) == -1);
   TEST_CHECK(strcmp(reason, expected) == 0);
 
-  (void)unlink(existing_file);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_mkdir_p` fails when a component exists but cannot be inspected, which is a distinct branch
@@ -745,11 +718,6 @@ static void test_mkdir_p_rejects_unstatable_component(void) {
   arena_init(&arena);
 
   char* dangling = path_join(root_dir, "dangling", &arena);
-  TEST_ASSERT(dangling != NULL);
-  if (dangling == NULL) {
-    arena_free(&arena);
-    return;
-  }
   TEST_CHECK(symlink("/sosig-nonexistent-symlink-target", dangling) == 0);
 
   char reason[FS_REASON_SIZE] = "";
@@ -762,9 +730,8 @@ static void test_mkdir_p_rejects_unstatable_component(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(reason, expected) == 0);
 
-  (void)unlink(dangling);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_mkdir_p` fails when `mkdir` itself is refused, a third branch again. The failure is neither
@@ -806,9 +773,8 @@ static void test_mkdir_p_rejects_uncreatable_component(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(reason, expected) == 0);
 
-  (void)rmdir(sealed_dir);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 // `fs_identify` answers which file a path names rather than what the path spells: two spellings of
@@ -850,10 +816,8 @@ static void test_identify_distinguishes_files_and_rejects_missing(void) {
   TEST_CHECK(unwritten.device == 7);
   TEST_CHECK(unwritten.inode == 11);
 
-  (void)unlink(file_path);
-  (void)unlink(other_path);
-  (void)rmdir(root_dir);
   arena_free(&arena);
+  remove_fixture_tree(root_dir);
 }
 
 TEST_LIST = {
