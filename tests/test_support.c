@@ -28,7 +28,7 @@
 
 const char* init_fixture_dir(char root_dir[static 1]) {
   char* created_root_dir = mkdtemp(root_dir);
-  TEST_ASSERT(created_root_dir != NULL);
+  TEST_CHECK(created_root_dir != NULL);
   if (created_root_dir == NULL) {
     return NULL;
   }
