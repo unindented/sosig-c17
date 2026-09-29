@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "build/output_path.h"
 #include "build/render_job.h"
 #include "core/error.h"
 #include "core/path.h"
@@ -430,36 +431,20 @@ static int render_content_entry_finalize_paths_output(struct ContentEntry* entry
                                                       struct RenderJob* result) {
   const char* relative_path = url_path + 1;
   if (!path_is_safe_relative(relative_path)) {
-    // Same ordering rule as the length check below, for the same reason. `relative_path` is not yet
-    // bounded on this branch, so naming it first would truncate away the permalink and the source
-    // that identify which pattern and which file produced it.
+    // The source leads and the path trails, the order `output_path_check_limits` uses below.
+    // `relative_path` is not yet bounded on this branch, so naming it first would truncate away the
+    // source that identifies which file produced it.
     render_job_set_error(result, "permalink expanded to an unsafe output path for '%s': '%s'",
                          source_path, relative_path);
     return -1;
   }
-  // Every message below leads with the limit and the measured length, then the entry, then the
-  // generated value. A value longer than the diagnostic buffer must cost its own tail rather than
-  // the reason that names the limit. The entry is the more actionable of the two values.
-  //
-  // This leaves `metrics` uninitialized deliberately. `path_check_output_limits` fills every field
-  // whatever verdict it returns, so the fields read below are never an indeterminate value.
-  struct PathOutputMetrics metrics;
-  switch (path_check_output_limits(relative_path, &metrics)) {
-    case PATH_OUTPUT_OK:
-      break;
-    case PATH_OUTPUT_TOO_LONG:
-      render_job_set_error(
-          result,
-          "output path exceeds max output path length (%zu bytes) at %zu bytes for '%s': '%s'",
-          (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, metrics.len, source_path, relative_path);
-      return -1;
-    case PATH_OUTPUT_SEGMENT_TOO_LONG:
-      render_job_set_error(result,
-                           "output path segment exceeds max filename length (%zu bytes) at %zu "
-                           "bytes for '%s': '%.*s'",
-                           (size_t)FILENAME_LEN_MAX, metrics.segment_len, source_path,
-                           (int)metrics.segment_len, metrics.segment);
-      return -1;
+  // Every output path producer reports a limit failure through `output_path_check_limits`, so a
+  // content entry and a configured template over a limit read alike.
+  char error_message[ERROR_MESSAGE_SIZE];
+  if (output_path_check_limits(relative_path, source_path, error_message, sizeof(error_message)) !=
+      0) {
+    render_job_set_error(result, "%s", error_message);
+    return -1;
   }
 
   entry->url_path = url_path;

@@ -723,11 +723,11 @@ static void test_rejects_oversize_template_path(void) {
   TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, NULL, 0, err,
                                        sizeof(err)) == -1);
   char expected_head[128];
-  const int expected_head_len = snprintf(
-      expected_head, sizeof(expected_head),
-      "output path for a configured template exceeds max output path length (%zu bytes) at %zu "
-      "bytes: '",
-      (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, sizeof(name) - 1);
+  const int expected_head_len =
+      snprintf(expected_head, sizeof(expected_head),
+               "output path exceeds max output path length (%zu bytes) at %zu bytes (for "
+               "'aggregate_templates[0]'): '",
+               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, sizeof(name) - 1);
   TEST_CHECK(expected_head_len > 0 && (size_t)expected_head_len < sizeof(expected_head));
   TEST_CHECK(strncmp(err, expected_head, (size_t)expected_head_len) == 0);
   // The head is a prefix, so on its own it says nothing about the rest of the buffer. The name is
@@ -768,11 +768,10 @@ static void test_rejects_oversize_template_segment(void) {
   TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, NULL, 0, err,
                                        sizeof(err)) == -1);
   char expected[ERROR_MESSAGE_SIZE];
-  const int n =
-      snprintf(expected, sizeof(expected),
-               "output path segment for a configured template exceeds max filename length "
-               "(%zu bytes) at %zu bytes: '%s'",
-               (size_t)FILENAME_LEN_MAX, sizeof(name) - 1, name);
+  const int n = snprintf(expected, sizeof(expected),
+                         "output path segment exceeds max filename length (%zu bytes) at %zu "
+                         "bytes (for 'feed_templates[0]'): '%s'",
+                         (size_t)FILENAME_LEN_MAX, sizeof(name) - 1, name);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(strcmp(err, expected) == 0);
 

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "build/output_path.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -505,28 +506,8 @@ static int register_template_output(struct Manifest* manifest,
   // This is checked against the same limits as a content entry's output path. Both are generated
   // output paths joined onto `output_dir`, and both land in this manifest. Applying them to one
   // producer and not the other would leave a template output path unbounded.
-  struct PathOutputMetrics metrics;
-  switch (path_check_output_limits(template_name, &metrics)) {
-    case PATH_OUTPUT_OK:
-      break;
-    case PATH_OUTPUT_TOO_LONG:
-      // Both limit messages lead with the limit and the measured length and trail the offending
-      // value. The trigger here is a path longer than `OUTPUT_PATH_RELATIVE_LEN_MAX`, which is
-      // larger than `ERROR_MESSAGE_SIZE`, so a leading value would push the limit clause off the
-      // end at every input that could reach this branch. The reason would be unreachable, not
-      // merely at risk. The segment case names the segment rather than the whole template name,
-      // because the segment is the substring that failed and naming both would put two unbounded
-      // values in one message.
-      return error_report(err, err_len,
-                          "output path for a configured template exceeds max output path length "
-                          "(%zu bytes) at %zu bytes: '%s'",
-                          (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, metrics.len, template_name);
-    case PATH_OUTPUT_SEGMENT_TOO_LONG:
-      return error_report(err, err_len,
-                          "output path segment for a configured template exceeds max filename "
-                          "length (%zu bytes) at %zu bytes: '%.*s'",
-                          (size_t)FILENAME_LEN_MAX, metrics.segment_len, (int)metrics.segment_len,
-                          metrics.segment);
+  if (output_path_check_limits(template_name, source_label, err, err_len) != 0) {
+    return -1;
   }
 
   const char* output_path =

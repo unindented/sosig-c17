@@ -490,7 +490,7 @@ static void test_rejects_oversize_output_path(void) {
   TEST_CHECK(error_buffer.data != NULL &&
              strncmp(error_buffer.data, expected_head, (size_t)expected_head_len) == 0);
   TEST_CHECK(error_buffer.data != NULL &&
-             strstr(error_buffer.data, " bytes for 'content/hello.md': '") != NULL);
+             strstr(error_buffer.data, " bytes (for 'content/hello.md'): '") != NULL);
   // The cut is marked, as in `test_reports_frontmatter_reason_before_long_source_path`. The exact
   // length proves that this message still truncates. If a reworded message fit, the marker check
   // could pass for the wrong reason. Text could also follow the message without detection because
@@ -576,7 +576,7 @@ static void test_rejects_oversize_path_segment(void) {
   const int n2 =
       snprintf(expected, sizeof(expected),
                "output path segment exceeds max filename length (%zu bytes) at %zu bytes "
-               "for 'content/hello.md': '%s'",
+               "(for 'content/hello.md'): '%s'",
                (size_t)FILENAME_LEN_MAX, strlen(segment), segment);
   TEST_CHECK(n2 > 0 && (size_t)n2 < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
