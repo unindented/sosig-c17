@@ -185,11 +185,11 @@ static void test_build_command_receives_parsed_options(void) {
   TEST_CHECK(strcmp(dispatch_out.stderr_out,
                     "loading config\n"
                     "discovering content\n"
-                    "parsing content with 3 workers\n"
+                    "parsing content, workers: 3\n"
                     ".\n"
                     "collecting content entries\n"
                     "building output manifest\n"
-                    "rendering content with 3 workers\n"
+                    "rendering content, workers: 3\n"
                     ".\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"

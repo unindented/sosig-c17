@@ -299,7 +299,7 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
 }
 
 static int render_content_entries(struct BuildState* state, struct StringBuffer* error_out) {
-  build_verbose(state, "parsing content with %zu workers", state->worker_count);
+  build_verbose(state, "parsing content, workers: %zu", state->worker_count);
   return entry_renderer_render_entries(&state->site_config, &state->source_paths,
                                        state->worker_count, state->is_verbose, &state->render_jobs,
                                        error_out);
@@ -356,7 +356,7 @@ static int populate_output_manifest(struct BuildState* state, char* err, size_t 
 }
 
 static int render_content_pages(struct BuildState* state, struct StringBuffer* error_out) {
-  build_verbose(state, "rendering content with %zu workers", state->worker_count);
+  build_verbose(state, "rendering content, workers: %zu", state->worker_count);
   return page_renderer_render_pages(&state->render_jobs, &state->site_config,
                                     (const struct ContentEntry* const*)state->content_entries,
                                     state->content_entry_count, state->site_updated,
