@@ -36,6 +36,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/build/test_manifest_builder.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_output_path.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_page_renderer.c"
+    "${PROJECT_SOURCE_DIR}/src/build/test_render_job.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_render_support.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_render_support.h"
     "${PROJECT_SOURCE_DIR}/src/build/test_template.c"
