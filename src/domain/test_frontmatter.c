@@ -222,7 +222,7 @@ static void test_date_epoch_uses_timezone(void) {
 //
 // `frontmatter_parse_toml`'s other failure, the oversize rejection, is deliberately left uncovered:
 // reaching it needs a frontmatter slice larger than `INT_MAX - 1`, so a test would have to allocate
-// over 2 GiB. `core/error.h` records the same exemption for its `out of memory` family.
+// over 2 GiB.
 static void test_rejects_invalid_toml_at_file_line(void) {
   const char fm[] =
       "title = \"Title\"\n"
@@ -372,8 +372,8 @@ static void test_rejects_invalid_metadata(void) {
   content_entry_free(&entry);
 }
 
-// An overlong slug fails early. The diagnostic names the source, offending size, and limit. It
-// omits the slug, which would fill the buffer and truncate the reason.
+// An overlong slug fails early, with a diagnostic naming the limit, the measured length, and the
+// slug itself.
 static void test_rejects_overlong_slug(void) {
   char slug[SLUG_LEN_MAX + 2];
   memset(slug, 'a', SLUG_LEN_MAX + 1);
