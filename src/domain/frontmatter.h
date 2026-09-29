@@ -47,8 +47,8 @@ int frontmatter_split(const char* markdown,
 /**
  * @brief Parses TOML frontmatter and applies it to an initialized content entry.
  *
- * Populates required and optional metadata in the entry's arena. It validates value types, the slug
- * length, and the template name.
+ * Populates required and optional metadata in the entry's arena. It rejects a key outside the
+ * schema and validates value types, the slug length, and the template name.
  *
  * @param entry           Initialized entry that receives the parsed metadata. On failure the parse
  *                        may leave it partially populated, and the caller still owns it. Must not

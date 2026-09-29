@@ -267,6 +267,58 @@ static void test_rejects_missing_required_key(void) {
   content_entry_free(&entry);
 }
 
+// A key the schema does not define is rejected, naming the key, so a misspelling cannot silently
+// keep a default. A key that is a prefix of a known key, or extends one, is as unknown as any
+// other, and so is a table the schema has no place for.
+static void test_rejects_unknown_keys(void) {
+  static const char* const cases[][2] = {
+      {"title = \"Title\"\ndate = 2026-07-01T12:00:00Z\ndrfat = true\n",
+       "unknown frontmatter key 'drfat'"},
+      {"title = \"Title\"\ndate = 2026-07-01T12:00:00Z\ntag = [\"c\"]\n",
+       "unknown frontmatter key 'tag'"},
+      {"title = \"Title\"\ntitles = \"Title\"\ndate = 2026-07-01T12:00:00Z\n",
+       "unknown frontmatter key 'titles'"},
+      {"title = \"Title\"\ndate = 2026-07-01T12:00:00Z\n[extra]\nkey = 1\n",
+       "unknown frontmatter key 'extra'"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    struct ContentEntry entry;
+    content_entry_init(&entry);
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(frontmatter_parse(&entry, cases[i][0], strlen(cases[i][0]), "content/title.md", err,
+                                 sizeof(err)) == -1);
+    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
+    TEST_MSG("case %zu: got '%s'", i, err);
+    content_entry_free(&entry);
+  }
+}
+
+// No key in the schema holds a table, so a table under a known key fails that key's type check.
+static void test_rejects_table_values(void) {
+  static const char* const cases[][2] = {
+      {"date = 2026-07-01T12:00:00Z\n[title]\nname = \"Title\"\n",
+       "frontmatter key 'title' must be a string"},
+      {"title = \"Title\"\n[date]\nyear = 2026\n",
+       "frontmatter key 'date' must be a TOML date/datetime"},
+      {"title = \"Title\"\ndate = 2026-07-01T12:00:00Z\n[tags]\nname = \"c\"\n",
+       "frontmatter key 'tags' must be an array"},
+      {"title = \"Title\"\ndate = 2026-07-01T12:00:00Z\n[draft]\nvalue = true\n",
+       "frontmatter key 'draft' must be a boolean"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    struct ContentEntry entry;
+    content_entry_init(&entry);
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(frontmatter_parse(&entry, cases[i][0], strlen(cases[i][0]), "content/title.md", err,
+                                 sizeof(err)) == -1);
+    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
+    TEST_MSG("case %zu: got '%s'", i, err);
+    content_entry_free(&entry);
+  }
+}
+
 // A template filename that would escape the template root is rejected as unsafe, which is a
 // distinct message from the wrong-type rejection covered below.
 static void test_rejects_unsafe_template(void) {
@@ -449,6 +501,8 @@ TEST_LIST = {
     {"date epoch uses timezone", test_date_epoch_uses_timezone},
     {"rejects invalid toml at file line", test_rejects_invalid_toml_at_file_line},
     {"rejects missing required key", test_rejects_missing_required_key},
+    {"rejects unknown keys", test_rejects_unknown_keys},
+    {"rejects table values", test_rejects_table_values},
     {"rejects unsafe template", test_rejects_unsafe_template},
     {"rejects invalid metadata", test_rejects_invalid_metadata},
     {"rejects overlong slug", test_rejects_overlong_slug},

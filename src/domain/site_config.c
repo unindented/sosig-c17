@@ -38,6 +38,17 @@ static const char* const CONTENT_TEMPLATE_DEFAULT = "content.html";
 static const char* const AGGREGATE_TEMPLATES_DEFAULT[] = {"index.html"};
 static const char* const FEED_TEMPLATES_DEFAULT[] = {"atom.xml"};
 
+/**
+ * Every key the top-level table may hold. The load rejects a key outside this list, so a misspelled
+ * key cannot silently leave its default in place. A key `site_config_load_fields` reads must be
+ * listed here.
+ */
+static const char* const config_keys[] = {
+    "base_url",   "title",         "author",           "permalink",           "content_dir",
+    "output_dir", "templates_dir", "content_template", "aggregate_templates", "feed_templates",
+    "feed_count",
+};
+
 /** Default cap on content entries included in a feed when `feed_count` is unset. */
 enum { FEED_COUNT_DEFAULT = 10 };
 
@@ -120,10 +131,10 @@ static int site_config_load_toml(const char* config_path,
 /**
  * @brief Copies recognized configuration keys into site config storage.
  *
- * Applies required and optional string keys, template-name arrays, and `feed_count`. It copies
- * every value into the config's arena rather than borrowing from `table`. `site_config_load` calls
- * `toml_free` as soon as this returns, which releases the pool every `toml_datum_t` string points
- * into, while the config outlives the parse.
+ * Rejects a key outside `config_keys`, then applies required and optional string keys,
+ * template-name arrays, and `feed_count`. It copies every value into the config's arena rather than
+ * borrowing from `table`. `site_config_load` calls `toml_free` as soon as this returns, which
+ * releases the pool every `toml_datum_t` string points into, while the config outlives the parse.
  *
  * @param site_config Config that receives the values. Must not be `NULL`.
  * @param table       Parsed TOML top-level table.
@@ -485,6 +496,11 @@ static int site_config_load_fields(struct SiteConfig* site_config,
                                    toml_datum_t table,
                                    char* err,
                                    size_t err_len) {
+  if (toml_require_known_keys(table, config_keys, sizeof(config_keys) / sizeof(config_keys[0]),
+                              "config", "", err, err_len) != 0) {
+    return -1;
+  }
+
   struct SiteConfigStringKey strings[] = {
       {"base_url", &site_config->base_url, true},
       {"title", &site_config->title, true},

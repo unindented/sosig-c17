@@ -469,6 +469,67 @@ static void test_load_rejects_wrong_key_type(void) {
   remove_fixture_tree(temp_config.root_dir);
 }
 
+// A key the schema does not define is rejected, naming the key, so a misspelling cannot silently
+// keep a default. A key that is a prefix of a known key, or extends one, is as unknown as any
+// other, and so is a table the schema has no place for.
+static void test_load_rejects_unknown_keys(void) {
+  static const char* const cases[][2] = {
+      {"base_url = \"https://example.com\"\ntitle = \"Example Site\"\n"
+       "author = \"Example Author\"\nouput_dir = \"site\"\n",
+       "unknown config key 'ouput_dir'"},
+      {"base_url = \"https://example.com\"\ntitl = \"Example Site\"\n"
+       "title = \"Example Site\"\nauthor = \"Example Author\"\n",
+       "unknown config key 'titl'"},
+      {"base_url = \"https://example.com\"\ntitle = \"Example Site\"\n"
+       "author = \"Example Author\"\ntitles = \"Example Site\"\n",
+       "unknown config key 'titles'"},
+      {"base_url = \"https://example.com\"\ntitle = \"Example Site\"\n"
+       "author = \"Example Author\"\n[extra]\nkey = 1\n",
+       "unknown config key 'extra'"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
+    struct SiteConfig config;
+    site_config_init(&config);
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
+    TEST_MSG("case %zu: got '%s'", i, err);
+    site_config_free(&config);
+    remove_fixture_tree(temp_config.root_dir);
+  }
+}
+
+// No key in the schema holds a table, so a table under a known key fails that key's type check.
+static void test_load_rejects_table_values(void) {
+  static const char* const cases[][2] = {
+      {"base_url = \"https://example.com\"\nauthor = \"Example Author\"\n"
+       "[title]\nname = \"Example Site\"\n",
+       "config key 'title' must be a string"},
+      {"base_url = \"https://example.com\"\ntitle = \"Example Site\"\n"
+       "author = \"Example Author\"\n[aggregate_templates]\nname = \"index.html\"\n",
+       "config key 'aggregate_templates' must be an array"},
+      {"base_url = \"https://example.com\"\ntitle = \"Example Site\"\n"
+       "author = \"Example Author\"\n[feed_count]\ncount = 10\n",
+       "config key 'feed_count' must be an integer"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
+    struct SiteConfig config;
+    site_config_init(&config);
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
+    TEST_MSG("case %zu: got '%s'", i, err);
+    site_config_free(&config);
+    remove_fixture_tree(temp_config.root_dir);
+  }
+}
+
 // An unsafe `content_template` is rejected at load, in the singular wording that names the key,
 // rather than flowing through to the render and failing once per content entry that has no
 // frontmatter `template` of its own. Parent-relative, absolute and empty names are all unsafe.
@@ -1119,6 +1180,8 @@ TEST_LIST = {
     {"load rejects malformed toml", test_load_rejects_malformed_toml},
     {"load rejects missing required key", test_load_rejects_missing_required_key},
     {"load rejects wrong key type", test_load_rejects_wrong_key_type},
+    {"load rejects unknown keys", test_load_rejects_unknown_keys},
+    {"load rejects table values", test_load_rejects_table_values},
     {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
     {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
     {"load rejects negative feed count", test_load_rejects_negative_feed_count},

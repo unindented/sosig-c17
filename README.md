@@ -46,7 +46,7 @@ templates/
 sosig.toml
 ```
 
-`sosig.toml` must contain the required metadata fields. The example below also shows the default values for optional fields.
+`sosig.toml` must contain the required metadata fields. The example below also shows the default values for optional fields. It lists every key the file can contain. The tool rejects any other key, so a misspelled key such as `ouput_dir` fails the load instead of leaving the default in place.
 
 The tool removes trailing `/` characters from `content_dir`, `output_dir`, and `templates_dir`. These fields must not be empty. Each field can contain an absolute or parent-relative path.
 
@@ -111,7 +111,7 @@ An aggregate or feed template name has two uses. It is the source path below `te
 
 ### Content
 
-Each content entry starts with TOML frontmatter between `+++` fences. The parser accepts a UTF-8 BOM and CRLF line endings. For a nested source, `{section}` contains its source directory relative to `content_dir`. The tool normalizes each directory segment as a slug.
+Each content entry starts with TOML frontmatter between `+++` fences. The parser accepts a UTF-8 BOM and CRLF line endings. For a nested source, `{section}` contains its source directory relative to `content_dir`. The tool normalizes each directory segment as a slug. The example below lists every key the frontmatter can contain. The tool rejects any other key, so a misspelled key such as `drfat` fails the build instead of leaving the default in place.
 
 ```toml
 +++

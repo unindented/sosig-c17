@@ -98,8 +98,8 @@ void site_config_free(struct SiteConfig* site_config) __attribute__((nonnull(1))
 /**
  * @brief Loads `sosig.toml` configuration into `site_config`.
  *
- * Reads and parses the file, validates required keys and template names, and copies values into the
- * config's arena over the defaults from `site_config_init`.
+ * Reads and parses the file, rejects a key outside the schema, validates required keys and template
+ * names, and copies values into the config's arena over the defaults from `site_config_init`.
  *
  * @param site_config Initialized config that receives the loaded values. Must not be `NULL`.
  * @param config_path Path to the TOML configuration file. Must not be `NULL`.

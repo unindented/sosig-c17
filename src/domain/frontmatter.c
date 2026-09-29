@@ -20,6 +20,15 @@ static const char UTF8_BOM[] = "\xEF\xBB\xBF";
 static const char FRONTMATTER_FENCE[] = "+++";
 
 /**
+ * Every key the frontmatter table may hold. The parse rejects a key outside this list, so a
+ * misspelled key cannot silently leave its default in place. A key a `frontmatter_parse_metadata_`
+ * step reads must be listed here.
+ */
+static const char* const frontmatter_keys[] = {
+    "title", "date", "description", "slug", "tags", "draft", "template",
+};
+
+/**
  * @brief Returns the length of the line starting at `text`, including its trailing newline.
  *
  * It clamps the measure to `text_len`, so an unterminated final line measures to the end of the
@@ -74,6 +83,8 @@ static int frontmatter_parse_toml(const char* frontmatter,
 
 /**
  * @brief Populates every entry metadata field from the parsed frontmatter table.
+ *
+ * Rejects a key outside `frontmatter_keys` before it reads any field.
  *
  * @param entry       Entry that receives the metadata. Must not be `NULL`.
  * @param table       Parsed frontmatter top-level table.
@@ -381,6 +392,11 @@ static int frontmatter_parse_metadata(struct ContentEntry* entry,
                                       const char* source_path,
                                       char* err,
                                       size_t err_len) {
+  if (toml_require_known_keys(table, frontmatter_keys,
+                              sizeof(frontmatter_keys) / sizeof(frontmatter_keys[0]), "frontmatter",
+                              "", err, err_len) != 0) {
+    return -1;
+  }
   if (frontmatter_parse_metadata_source_path(entry, source_path, err, err_len) != 0) {
     return -1;
   }

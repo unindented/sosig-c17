@@ -4,6 +4,7 @@
 #include <string.h>
 #include <tomlc17.h>
 
+#include "core/error.h"
 #include "formats/toml.h"
 #include "shared/arena.h"
 
@@ -259,6 +260,53 @@ static void test_rejects_non_datetime_values(void) {
   arena_free(&arena);
 }
 
+// A table holding only listed keys passes, whatever their order, and so does an empty table checked
+// against an empty list.
+static void test_require_known_keys_accepts_known_keys(void) {
+  static const char* const known_keys[] = {"title", "date"};
+  char err[ERROR_MESSAGE_SIZE] = "";
+  toml_result_t result;
+  TEST_CHECK(toml_require_known_keys(parse_value("{ date = 1, title = 2 }", &result), known_keys,
+                                     sizeof(known_keys) / sizeof(known_keys[0]), "config", "", err,
+                                     sizeof(err)) == 0);
+  toml_free(result);
+
+  TEST_CHECK(toml_require_known_keys(parse_value("{}", &result), NULL, 0, "config", "", err,
+                                     sizeof(err)) == 0);
+  toml_free(result);
+}
+
+// An unlisted key is rejected, named with the caller's key kind and table prefix. Keys match
+// exactly, so a prefix of a known key, or one extending it, is as unknown as a typo, and an empty
+// list rejects every key.
+static void test_require_known_keys_rejects_unknown_keys(void) {
+  static const char* const known_keys[] = {"title", "date"};
+  static const char* const cases[][4] = {
+      {"{ title = 1, ttile = 2 }", "config", "", "unknown config key 'ttile'"},
+      {"{ corp = true }", "config", "derivatives.m.", "unknown config key 'derivatives.m.corp'"},
+      {"{ titl = 1 }", "frontmatter", "", "unknown frontmatter key 'titl'"},
+      {"{ titles = 1 }", "frontmatter", "", "unknown frontmatter key 'titles'"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    char err[ERROR_MESSAGE_SIZE] = "";
+    toml_result_t result;
+    TEST_CHECK(toml_require_known_keys(parse_value(cases[i][0], &result), known_keys,
+                                       sizeof(known_keys) / sizeof(known_keys[0]), cases[i][1],
+                                       cases[i][2], err, sizeof(err)) == -1);
+    TEST_CHECK(strcmp(err, cases[i][3]) == 0);
+    TEST_MSG("case %zu: got '%s'", i, err);
+    toml_free(result);
+  }
+
+  char err[ERROR_MESSAGE_SIZE] = "";
+  toml_result_t result;
+  TEST_CHECK(toml_require_known_keys(parse_value("{ title = 1 }", &result), NULL, 0, "config", "",
+                                     err, sizeof(err)) == -1);
+  TEST_CHECK(strcmp(err, "unknown config key 'title'") == 0);
+  toml_free(result);
+}
+
 TEST_LIST = {
     {"is text rejects embedded nul", test_is_text_rejects_embedded_nul},
     {"unix epoch anchor converts to zero", test_unix_epoch_anchor_converts_to_zero},
@@ -270,5 +318,7 @@ TEST_LIST = {
     {"fractional seconds preserved", test_fractional_seconds_preserved},
     {"timezoneless datetime treated as utc", test_timezoneless_datetime_treated_as_utc},
     {"rejects non-datetime values", test_rejects_non_datetime_values},
+    {"require known keys accepts known keys", test_require_known_keys_accepts_known_keys},
+    {"require known keys rejects unknown keys", test_require_known_keys_rejects_unknown_keys},
     {NULL, NULL},
 };

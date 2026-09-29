@@ -2,6 +2,7 @@
 #define SOSIG_TOML_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <tomlc17.h>
 
@@ -60,5 +61,33 @@ int toml_datum_to_epoch(toml_datum_t value, int64_t* epoch_out) __attribute__((n
  */
 char* toml_datum_format_rfc3339(toml_datum_t value, struct Arena* arena)
     __attribute__((nonnull(2)));
+
+/**
+ * @brief Rejects the first key of a table that its level of the schema does not define.
+ *
+ * A loader passes every key it reads, before it reads any, so a misspelled key fails the load
+ * rather than silently leaving its default in place. Keys match exactly, so a key that is a prefix
+ * of a known key, or extends one, is as unknown as any other.
+ *
+ * @param table           Parsed TOML table. Must be a `TOML_TABLE` datum.
+ * @param known_keys      Keys the table may hold. May be `NULL` only when `known_key_count` is 0.
+ * @param known_key_count Number of keys in `known_keys`.
+ * @param key_kind        Kind of key the diagnostic names, such as `config`. Must not be `NULL`.
+ * @param key_prefix      Dotted path of `table` with a trailing `.`, such as `section.table.`, or
+ *                        `""` for the top-level table. It qualifies the key in the diagnostic. Must
+ *                        not be `NULL`.
+ * @param err             Buffer for a diagnostic message on failure. May be `NULL` only when
+ *                        `err_len` is 0.
+ * @param err_len         Size of `err` in bytes.
+ * @return `0` when every key is known, or `-1` on the first unknown key, with
+ *         `unknown <key_kind> key '<key_prefix><key>'` in `err`.
+ */
+int toml_require_known_keys(toml_datum_t table,
+                            const char* const* known_keys,
+                            size_t known_key_count,
+                            const char* key_kind,
+                            const char* key_prefix,
+                            char* err,
+                            size_t err_len) __attribute__((nonnull(4, 5)));
 
 #endif

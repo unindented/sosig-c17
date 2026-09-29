@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/error.h"
 #include "shared/arena.h"
 
 /**
@@ -30,6 +31,20 @@ _Static_assert(sizeof(((toml_datum_t*)NULL)->u.ts.year) == sizeof(int16_t) &&
  * @return Signed day count relative to the Unix epoch (negative before `1970-01-01`).
  */
 static int64_t days_from_civil(int year, unsigned month, unsigned day);
+
+/**
+ * @brief Reports whether a key matches one of a list of names.
+ *
+ * @param key             Key bytes, not necessarily `NUL`-terminated. Must not be `NULL`.
+ * @param key_len         Length of `key` in bytes.
+ * @param known_keys      Names to match against. May be `NULL` only when `known_key_count` is 0.
+ * @param known_key_count Number of names in `known_keys`.
+ * @return `true` when `key` equals one of `known_keys`, otherwise `false`.
+ */
+static bool is_known_key(const char* key,
+                         size_t key_len,
+                         const char* const* known_keys,
+                         size_t known_key_count) __attribute__((nonnull(1)));
 
 bool toml_datum_is_text(toml_datum_t value) {
   // Use `memchr` over exactly `len` bytes instead of testing `strlen(ptr) != len`. tomlc17
@@ -99,6 +114,25 @@ char* toml_datum_format_rfc3339(toml_datum_t value, struct Arena* arena) {
   return arena_strdup(arena, buf);
 }
 
+int toml_require_known_keys(toml_datum_t table,
+                            const char* const* known_keys,
+                            size_t known_key_count,
+                            const char* key_kind,
+                            const char* key_prefix,
+                            char* err,
+                            size_t err_len) {
+  for (int32_t i = 0; i < table.u.tab.size; i++) {
+    const char* key = table.u.tab.key[i];
+    const int key_len = table.u.tab.len[i];
+    if (is_known_key(key, (size_t)key_len, known_keys, known_key_count)) {
+      continue;
+    }
+    return error_report(err, err_len, "unknown %s key '%s%.*s'", key_kind, key_prefix, key_len,
+                        key);
+  }
+  return 0;
+}
+
 static int64_t days_from_civil(int year, unsigned month, unsigned day) {
   // This is Howard Hinnant's civil calendar algorithm, kept in its published form. `era`, `yoe`,
   // `doy` and `doe` are his variable names and the expression shapes are his, so a reader can check
@@ -116,4 +150,16 @@ static int64_t days_from_civil(int year, unsigned month, unsigned day) {
   const unsigned doy = (153 * (month + (month > 2 ? (unsigned)-3 : 9)) + 2) / 5 + day - 1;
   const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
   return (int64_t)era * 146097 + (int64_t)doe - 719468;
+}
+
+static bool is_known_key(const char* key,
+                         size_t key_len,
+                         const char* const* known_keys,
+                         size_t known_key_count) {
+  for (size_t i = 0; i < known_key_count; i++) {
+    if (strlen(known_keys[i]) == key_len && memcmp(known_keys[i], key, key_len) == 0) {
+      return true;
+    }
+  }
+  return false;
 }
