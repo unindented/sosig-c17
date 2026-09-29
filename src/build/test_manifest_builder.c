@@ -21,6 +21,37 @@
 #include "shared/arena.h"
 #include "test_support.h"
 
+/**
+ * @brief Populates a manifest with one content entry and checks the input-root rejection.
+ *
+ * @param config      Configuration whose roots the output is checked against. Must not be `NULL`.
+ * @param output_path Output path of the single entry, joined onto `config->output_dir`. Must not
+ *                    be `NULL`.
+ * @param root_key    Config key of the root the diagnostic must name. Must not be `NULL`.
+ */
+static void check_rejects_output_in_root(const struct SiteConfig* config,
+                                         const char* output_path,
+                                         const char* root_key) {
+  struct ContentEntry entry = {.output_path = output_path, .source_path = "content/a.md"};
+  const struct ContentEntry* entries[] = {&entry};
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, config, "sosig.toml", &sources, entries, 1, err,
+                                       sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "output path would write inside '%s' for 'content/a.md': '%s'", root_key,
+                         output_path);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_MSG("actual: '%s'", err);
+  manifest_free(&manifest);
+  path_list_free(&sources);
+}
+
 // Distinct output paths are all registered without error.
 static void test_accepts_unique(void) {
   struct SiteConfig config;
@@ -81,6 +112,54 @@ static void test_accepts_missing_templates_dir(void) {
                                        sizeof(err)) == 0);
   TEST_CHECK(err[0] == '\0');
   TEST_CHECK(manifest.count == 1);
+
+  manifest_free(&manifest);
+  path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
+// An output beside an input root, in a directory whose name only starts with the root's name, is
+// accepted, because the root check compares whole directories rather than path prefixes.
+static void test_accepts_output_beside_input_roots(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-beside-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "") == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "") == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "contentx/old.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.content_dir = path_join(root_dir, "content", &arena);
+  config.templates_dir = path_join(root_dir, "templates", &arena);
+  config.output_dir = root_dir;
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+  TEST_ASSERT(config.content_dir != NULL && config.templates_dir != NULL);
+
+  struct ContentEntry a = {.output_path = path_join(root_dir, "contentx/a.html", &arena),
+                           .source_path = "content/a.md"};
+  struct ContentEntry b = {.output_path = path_join(root_dir, "templatesx/b.html", &arena),
+                           .source_path = "content/b.md"};
+  TEST_ASSERT(a.output_path != NULL && b.output_path != NULL);
+  const struct ContentEntry* entries[] = {&a, &b};
+
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, entries, 2, err,
+                                       sizeof(err)) == 0);
+  TEST_CHECK(err[0] == '\0');
+  TEST_MSG("actual: '%s'", err);
 
   manifest_free(&manifest);
   path_list_free(&sources);
@@ -345,11 +424,14 @@ static void test_rejects_config_overwrite(void) {
 
 // Every file below `templates_dir` is a build input too, so an entry whose output path names one
 // is rejected. The sibling above claims a content *source*. This claims a *template*. That is the
-// other half of the protection: it guards the files the user writes by hand. The claim comes from a
-// walk of the whole template tree, so it covers a template named in a configured list, one named
-// only by an entry's `template` override, and a partial that nothing configures at all, which
-// `template.c` resolves only during the render. Each is a separate case, since a claim built from
-// the configured names instead would pass the first two and miss the third.
+// other half of the protection: it guards the files the user writes by hand. An output inside
+// `templates_dir` fails the root check first, as `test_rejects_output_in_templates_dir` pins, so
+// each output here sits in `output_dir` as a hard link to a template, which only the identity claim
+// can see. The claim comes from a walk of the whole template tree, so it covers a template named in
+// a configured list, one named only by an entry's `template` override, and a partial that nothing
+// configures at all, which `template.c` resolves only during the render. Each is a separate case,
+// since a claim built from the configured names instead would pass the first two and miss the
+// third.
 static void test_rejects_template_overwrite(void) {
   char root_dir_template[] = "/tmp/sosig-manifest-builder-template-XXXXXX";
   char* root_dir = mkdtemp(root_dir_template);
@@ -377,14 +459,21 @@ static void test_rejects_template_overwrite(void) {
   TEST_CHECK(fs_write_file(override_path, "{{title}}", 9, NULL, 0) == 0);
   TEST_CHECK(fs_write_file(partial_path, "{{title}}", 9, NULL, 0) == 0);
 
-  // Second spellings of the two template files. `stat` collapses the `/./`, so the identities match
-  // while the path strings do not, the same trick the source-overwrite test uses.
+  // A hard link in `output_dir` for each template file. The link shares the template's identity
+  // while its path lies outside `templates_dir`.
+  TEST_CHECK(fs_mkdir_p(output_dir, NULL, 0) == 0);
   char aggregate_output[PATH_MAX];
   char override_output[PATH_MAX];
-  n = snprintf(aggregate_output, sizeof(aggregate_output), "%s/templates/./index.html", root_dir);
+  char partial_output[PATH_MAX];
+  n = snprintf(aggregate_output, sizeof(aggregate_output), "%s/index.html", output_dir);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(aggregate_output));
-  n = snprintf(override_output, sizeof(override_output), "%s/templates/./custom.html", root_dir);
+  n = snprintf(override_output, sizeof(override_output), "%s/custom.html", output_dir);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(override_output));
+  n = snprintf(partial_output, sizeof(partial_output), "%s/card.html", output_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(partial_output));
+  TEST_CHECK(link(aggregate_path, aggregate_output) == 0);
+  TEST_CHECK(link(override_path, override_output) == 0);
+  TEST_CHECK(link(partial_path, partial_output) == 0);
 
   static const char* const aggregates[] = {"index.html"};
 
@@ -432,10 +521,10 @@ static void test_rejects_template_overwrite(void) {
   TEST_CHECK(strcmp(override_err, expected) == 0);
   manifest_free(&override_manifest);
 
-  // Third case: the collision is with a partial that no configuration or entry names. The output
-  // path is the one a permalink aimed into the template tree would produce, and only the walk of
-  // `templates_dir` can know the partial is there.
-  struct ContentEntry partial_entry = {.output_path = partial_path, .source_path = "content/c.md"};
+  // Third case: the collision is with a partial that no configuration or entry names. Only the
+  // walk of `templates_dir` can know the partial is there.
+  struct ContentEntry partial_entry = {.output_path = partial_output,
+                                       .source_path = "content/c.md"};
   const struct ContentEntry* partial_entries[] = {&partial_entry};
   struct Manifest partial_manifest;
   manifest_init(&partial_manifest);
@@ -443,13 +532,121 @@ static void test_rejects_template_overwrite(void) {
   TEST_CHECK(manifest_builder_populate(&partial_manifest, &config, "sosig.toml", &sources,
                                        partial_entries, 1, partial_err, sizeof(partial_err)) == -1);
   n = snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               "content/c.md", partial_path);
+               "content/c.md", partial_output);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(strcmp(partial_err, expected) == 0);
   manifest_free(&partial_manifest);
 
   path_list_free(&sources);
   site_config_free(&config);
+  remove_fixture_tree(root_dir);
+}
+
+// An output that would land below `content_dir` is rejected even though no file sits at its path
+// yet. Left through, `output_dir = "."` with a permalink aimed into the content tree wrote a
+// Markdown file there, and the next build failed to parse it as a content source. The root is
+// compared by identity, so an alternate spelling of it, a symlink to it, and an `output_dir` inside
+// it are rejected the same way.
+static void test_rejects_output_in_content_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-content-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "") == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "content/public/old.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+  const char* content_dir = path_join(root_dir, "content", &arena);
+  const char* content_link = path_join(root_dir, "content-link", &arena);
+  const char* output_dir = path_join(root_dir, "out", &arena);
+  const char* output_link = path_join(root_dir, "out/link", &arena);
+  TEST_ASSERT(content_dir != NULL && content_link != NULL && output_dir != NULL &&
+              output_link != NULL);
+  TEST_CHECK(symlink(content_dir, content_link) == 0);
+  TEST_CHECK(fs_mkdir_p(output_dir, NULL, 0) == 0);
+  TEST_CHECK(symlink(content_dir, output_link) == 0);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+
+  // The output is a new file below the root, spelled the way `output_dir = "."` spells it.
+  config.content_dir = content_dir;
+  config.output_dir = root_dir;
+  check_rejects_output_in_root(&config, path_join(root_dir, "content/b.md", &arena), "content_dir");
+
+  // The root is configured through a symlink and spelled with a `./` component.
+  config.content_dir = path_join(root_dir, "./content-link", &arena);
+  check_rejects_output_in_root(&config, path_join(root_dir, "content/sub/b.md", &arena),
+                               "content_dir");
+
+  // `output_dir` itself lies inside the root, so every output does.
+  config.content_dir = content_dir;
+  config.output_dir = path_join(root_dir, "content/public", &arena);
+  check_rejects_output_in_root(&config, path_join(config.output_dir, "a.html", &arena),
+                               "content_dir");
+
+  // A symlink inside `output_dir` leads into the root.
+  config.output_dir = output_dir;
+  check_rejects_output_in_root(&config, path_join(output_dir, "link/b.md", &arena), "content_dir");
+
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
+// An output that would land below `templates_dir` is rejected even though no file sits at its path
+// yet. Left through, a permalink aimed at `partials/` wrote a partial that the same build's
+// aggregate render then read back. The check covers configured template outputs as well as content
+// entries.
+static void test_rejects_output_in_templates_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-manifest-builder-templates-XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  TEST_ASSERT(root_dir != NULL);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "templates/partials/card.html", "") == 0);
+  struct Arena arena;
+  arena_init(&arena);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  config.templates_dir = path_join(root_dir, "templates", &arena);
+  config.output_dir = root_dir;
+  config.aggregate_template_count = 0;
+  config.feed_template_count = 0;
+  TEST_ASSERT(config.templates_dir != NULL);
+  check_rejects_output_in_root(&config, path_join(root_dir, "templates/partials/b.html", &arena),
+                               "templates_dir");
+
+  // A configured template whose name leads into the template tree is rejected by its list entry.
+  static const char* const aggregates[] = {"templates/index.html"};
+  config.aggregate_templates = aggregates;
+  config.aggregate_template_count = 1;
+  struct PathList sources;
+  path_list_init(&sources);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, "sosig.toml", &sources, NULL, 0, err,
+                                       sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int n = snprintf(expected, sizeof(expected),
+                         "output path would write inside 'templates_dir' for "
+                         "'aggregate_templates[0]': '%s/templates/index.html'",
+                         root_dir);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_MSG("actual: '%s'", err);
+
+  manifest_free(&manifest);
+  path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -592,6 +789,7 @@ static void test_rejects_oversize_template_segment(void) {
 TEST_LIST = {
     {"accepts unique", test_accepts_unique},
     {"accepts missing templates dir", test_accepts_missing_templates_dir},
+    {"accepts output beside input roots", test_accepts_output_beside_input_roots},
     {"rejects duplicate", test_rejects_duplicate},
     {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
     {"rejects prefix collision", test_rejects_prefix_collision},
@@ -599,6 +797,8 @@ TEST_LIST = {
     {"rejects input overwrite", test_rejects_input_overwrite},
     {"rejects config overwrite", test_rejects_config_overwrite},
     {"rejects template overwrite", test_rejects_template_overwrite},
+    {"rejects output in content dir", test_rejects_output_in_content_dir},
+    {"rejects output in templates dir", test_rejects_output_in_templates_dir},
     {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},
     {"rejects oversize template path", test_rejects_oversize_template_path},
     {"rejects oversize template segment", test_rejects_oversize_template_segment},

@@ -56,6 +56,7 @@ Before the tool renders page templates or writes files, it rejects an output pla
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
+- An output is at or below `content_dir` or `templates_dir`, even if no file exists at that path yet. Otherwise the next build would read a generated `.md` file as a content source, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
 - An output overwrites the config, a content source, or any file below `templates_dir`, including partials.
 
 The build does not remove stale files from an earlier build. If the write phase fails, some outputs can be new while others remain unchanged.

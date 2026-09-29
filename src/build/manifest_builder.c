@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "core/error.h"
 #include "core/grow.h"
@@ -47,10 +48,12 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * Path strings cannot reliably identify the same file. An output path is relative to `output_dir`,
  * but a source path is relative to `content_dir`. For example, `output_dir = "."` can produce
  * `./content/x.md` for the source `content/x.md`. That is one file with two spellings that are not
- * byte-equal. Byte-equal spellings are reachable too, when `output_dir` and `content_dir` name the
- * same directory, so neither comparison includes the other, and identity is what covers both.
- * A `(device, inode)` comparison also detects cases that text cannot. These include symlinks, hard
- * links, and case-insensitive path aliases.
+ * byte-equal. A `(device, inode)` comparison also detects cases that text cannot. These include
+ * symlinks, hard links, and case-insensitive path aliases.
+ *
+ * The input roots reject any output below `content_dir` or `templates_dir` first, so this set is
+ * what still protects an input outside both trees: the configuration file, and the target of a
+ * source or template that is a symlink or hard link to a file elsewhere.
  *
  * Lookup is a linear scan. At the largest tested build (3,000 sources, 3,002 outputs) that is nine
  * million integer comparisons, which measures as noise beside the reads and renders around it, so a
@@ -65,6 +68,47 @@ struct InputIdentities {
 
   /** Allocated slots in `items`. */
   size_t capacity;
+};
+
+/** Number of input directory trees no output may enter: `content_dir` and `templates_dir`. */
+enum { INPUT_ROOT_COUNT = 2 };
+
+/** One input directory tree that no output may land inside. */
+struct InputRoot {
+  /** Config key naming the root in diagnostics. */
+  const char* config_key;
+
+  /** Identity of the root directory. Set only when `is_present` is `true`. */
+  struct FsIdentity identity;
+
+  /** Whether the root exists. A missing root holds no input to protect. */
+  bool is_present;
+};
+
+/**
+ * Input directory trees that no output may land at or below, gathered before any output path is
+ * registered.
+ *
+ * Protecting the files that already exist is not enough. A new output below `content_dir` is read
+ * back as a content source by the next build. A new output below `templates_dir` can be read as a
+ * partial by the render of the same build, because partials resolve lazily. Neither overwrites a
+ * file, so the identity set cannot see either.
+ *
+ * Each root is compared by identity against the directories an output passes through, for the same
+ * reasons the identity set is. `./content`, `content/`, a symlinked root, and a case-insensitive
+ * alias spell one directory in different ways. The directories compared are `output_dir`, each of
+ * its physical ancestors, and each directory between `output_dir` and the output file. A root that
+ * holds `output_dir` holds every output, so that answer is computed once.
+ */
+struct InputRoots {
+  /** The `content_dir` and `templates_dir` roots. */
+  struct InputRoot items[INPUT_ROOT_COUNT];
+
+  /** Output directory every registered output path is joined onto. */
+  const char* output_dir;
+
+  /** Config key of the root at or above `output_dir`, or `NULL` when neither root is. */
+  const char* output_dir_root_key;
 };
 
 /**
@@ -143,6 +187,53 @@ static int claim_input_identity(struct InputIdentities* inputs, const char* file
 static void free_input_identities(struct InputIdentities* inputs) __attribute__((nonnull(1)));
 
 /**
+ * @brief Records the identity of `content_dir` and `templates_dir`, and which of them, if either,
+ *        holds `output_dir`.
+ *
+ * A root with no identity is recorded as absent rather than refused, for the same reason
+ * `claim_input_identity` skips a missing file: it holds no input an output could land among.
+ *
+ * @param roots       Root set to fill. Must not be `NULL`.
+ * @param site_config Configuration supplying the three directories. Must not be `NULL`.
+ * @param scratch     Arena that owns the ancestor paths built while walking up from `output_dir`.
+ *                    Must not be `NULL`.
+ * @param err         Destination buffer for a failure diagnostic.
+ * @param err_len     Size of `err` in bytes.
+ * @return `0` on success, or `-1` on allocation failure.
+ */
+static int claim_input_roots(struct InputRoots* roots,
+                             const struct SiteConfig* site_config,
+                             struct Arena* scratch,
+                             char* err,
+                             size_t err_len) __attribute__((nonnull(1, 2, 3)));
+
+/**
+ * @brief Records which input root, if either, is `output_dir` or one of its physical ancestors.
+ *
+ * The walk appends `..` rather than trimming the text, because `output_dir` can be relative, hold
+ * `..` segments, or pass through a symlink, and the kernel resolves `..` against the directory
+ * actually reached. It stops at a root match, at a path with no identity, or at the filesystem
+ * root, whose `..` is itself.
+ *
+ * @param roots   Root set whose `output_dir_root_key` is set. Must not be `NULL`.
+ * @param scratch Arena that owns the ancestor paths. Must not be `NULL`.
+ * @return `0` on success, or `-1` on allocation failure.
+ */
+static int claim_input_roots_output_dir(struct InputRoots* roots, struct Arena* scratch)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Returns the config key of the input root whose identity is `identity`.
+ *
+ * @param roots    Root set to search. Must not be `NULL`.
+ * @param identity Directory identity to look for. Must not be `NULL`.
+ * @return The matching root's config key, or `NULL` when `identity` names neither root.
+ */
+static const char* find_input_root(const struct InputRoots* roots,
+                                   const struct FsIdentity* identity)
+    __attribute__((nonnull(1, 2)));
+
+/**
  * @brief Registers one configured template's output path in the build manifest.
  *
  * @param manifest      Manifest that receives the output path. Must not be `NULL`.
@@ -155,6 +246,7 @@ static void free_input_identities(struct InputIdentities* inputs) __attribute__(
  *                      value and itself. Must not be `NULL`.
  * @param inputs        Identities of this build's input files, which the output must not name. Must
  *                      not be `NULL`.
+ * @param roots         Input directory trees the output must not land in. Must not be `NULL`.
  * @param scratch       Arena that owns the joined output path during registration. Must not be
  *                      `NULL`.
  * @param err           Destination buffer for a failure diagnostic.
@@ -166,33 +258,61 @@ static int register_template_output(struct Manifest* manifest,
                                     const char* template_name,
                                     const char* source_label,
                                     const struct InputIdentities* inputs,
+                                    const struct InputRoots* roots,
                                     struct Arena* scratch,
                                     char* err,
-                                    size_t err_len) __attribute__((nonnull(1, 2, 3, 4, 5, 6)));
+                                    size_t err_len) __attribute__((nonnull(1, 2, 3, 4, 5, 6, 7)));
 
 /**
- * @brief Adds one output path to the manifest, reporting a duplicate, an input overwrite, or an
- *        allocation failure.
+ * @brief Adds one output path to the manifest, reporting a duplicate, an output inside an input
+ *        root, an input overwrite, or an allocation failure.
  *
- * This is the one function every intended output path passes through, so the input-overwrite check
- * lives here rather than in each producer.
+ * This is the one function every intended output path passes through, so the input checks live
+ * here rather than in each producer.
  *
  * @param manifest     Manifest to append to. Must not be `NULL`.
- * @param output_path  Filesystem output path to record. Must not be `NULL`.
+ * @param output_path  Filesystem output path to record, joined onto `roots->output_dir`. Must not
+ *                     be `NULL`.
  * @param source_label Diagnostic label for the source producing `output_path`. Must not be `NULL`.
  * @param inputs       Identities of this build's input files, which `output_path` must not name.
  *                     Must not be `NULL`.
+ * @param roots        Input directory trees `output_path` must not land in. Must not be `NULL`.
+ * @param scratch      Arena that owns the copy of `output_path` the root check truncates. Must not
+ *                     be `NULL`.
  * @param err          Destination buffer for a failure diagnostic.
  * @param err_len      Size of `err` in bytes.
- * @return `0` when the path was recorded, or `-1` when it duplicates an earlier output, names a
- *         build input, or could not be recorded.
+ * @return `0` when the path was recorded, or `-1` when it lands in an input root, duplicates an
+ *         earlier output, names a build input, or could not be recorded.
  */
 static int register_output_path(struct Manifest* manifest,
                                 const char* output_path,
                                 const char* source_label,
                                 const struct InputIdentities* inputs,
+                                const struct InputRoots* roots,
+                                struct Arena* scratch,
                                 char* err,
-                                size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
+                                size_t err_len) __attribute__((nonnull(1, 2, 3, 4, 5, 6)));
+
+/**
+ * @brief Finds the input root that an output path lands at or below.
+ *
+ * Checks the answer recorded for `output_dir` first. Then it checks each existing directory from
+ * `output_dir` down to the output path itself, so a symlink inside `output_dir` that points into
+ * an input root is caught too. The walk stops at the first missing directory, because the build
+ * creates that directory and everything below it fresh.
+ *
+ * @param roots          Input directory trees to look for. Must not be `NULL`.
+ * @param output_path    Output path joined onto `roots->output_dir`. Must not be `NULL`.
+ * @param scratch        Arena that owns the truncated copy of `output_path`. Must not be `NULL`.
+ * @param config_key_out Receives the config key of the root holding `output_path`, or `NULL` when
+ *                       neither root does. Must not be `NULL`.
+ * @return `0` on success, or `-1` on allocation failure.
+ */
+static int find_input_root_holding(const struct InputRoots* roots,
+                                   const char* output_path,
+                                   struct Arena* scratch,
+                                   const char** config_key_out)
+    __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
  * @brief Reports whether `identity` names a file this build reads.
@@ -215,26 +335,30 @@ int manifest_builder_populate(struct Manifest* manifest,
   struct Arena scratch;
   arena_init(&scratch);
   struct InputIdentities inputs = {0};
+  struct InputRoots roots;
 
   int rc = claim_build_inputs(&inputs, site_config, config_path, source_paths, err, err_len);
+  if (rc == 0) {
+    rc = claim_input_roots(&roots, site_config, &scratch, err, err_len);
+  }
 
   for (size_t i = 0; rc == 0 && i < content_entry_count; i++) {
     const struct ContentEntry* entry = content_entries[i];
-    rc = register_output_path(manifest, entry->output_path, entry->source_path, &inputs, err,
-                              err_len);
+    rc = register_output_path(manifest, entry->output_path, entry->source_path, &inputs, &roots,
+                              &scratch, err, err_len);
   }
   for (size_t i = 0; rc == 0 && i < site_config->aggregate_template_count; i++) {
     char source_label[TEMPLATE_SOURCE_LABEL_SIZE];
     (void)snprintf(source_label, sizeof(source_label), "aggregate_templates[%zu]", i);
     rc = register_template_output(manifest, site_config->output_dir,
                                   site_config->aggregate_templates[i], source_label, &inputs,
-                                  &scratch, err, err_len);
+                                  &roots, &scratch, err, err_len);
   }
   for (size_t i = 0; rc == 0 && i < site_config->feed_template_count; i++) {
     char source_label[TEMPLATE_SOURCE_LABEL_SIZE];
     (void)snprintf(source_label, sizeof(source_label), "feed_templates[%zu]", i);
     rc = register_template_output(manifest, site_config->output_dir, site_config->feed_templates[i],
-                                  source_label, &inputs, &scratch, err, err_len);
+                                  source_label, &inputs, &roots, &scratch, err, err_len);
   }
 
   // Every path is now recorded, so scan for the collision `manifest_add` cannot see incrementally:
@@ -334,11 +458,67 @@ static void free_input_identities(struct InputIdentities* inputs) {
   *inputs = (struct InputIdentities){0};
 }
 
+static int claim_input_roots(struct InputRoots* roots,
+                             const struct SiteConfig* site_config,
+                             struct Arena* scratch,
+                             char* err,
+                             size_t err_len) {
+  *roots = (struct InputRoots){
+      .items = {{.config_key = "content_dir"}, {.config_key = "templates_dir"}},
+      .output_dir = site_config->output_dir,
+  };
+  const char* root_dirs[INPUT_ROOT_COUNT] = {site_config->content_dir, site_config->templates_dir};
+  for (size_t i = 0; i < INPUT_ROOT_COUNT; i++) {
+    roots->items[i].is_present = fs_identify(root_dirs[i], &roots->items[i].identity) == 0;
+  }
+  if (claim_input_roots_output_dir(roots, scratch) != 0) {
+    return error_report(err, err_len, "out of memory recording build input directories");
+  }
+  return 0;
+}
+
+static int claim_input_roots_output_dir(struct InputRoots* roots, struct Arena* scratch) {
+  const char* dir_path = roots->output_dir;
+  struct FsIdentity identity;
+  if (fs_identify(dir_path, &identity) != 0) {
+    return 0;
+  }
+  for (;;) {
+    roots->output_dir_root_key = find_input_root(roots, &identity);
+    if (roots->output_dir_root_key != NULL) {
+      return 0;
+    }
+    dir_path = path_join(dir_path, "..", scratch);
+    if (dir_path == NULL) {
+      return -1;
+    }
+    struct FsIdentity parent_identity;
+    if (fs_identify(dir_path, &parent_identity) != 0 ||
+        (parent_identity.device == identity.device && parent_identity.inode == identity.inode)) {
+      return 0;
+    }
+    identity = parent_identity;
+  }
+}
+
+static const char* find_input_root(const struct InputRoots* roots,
+                                   const struct FsIdentity* identity) {
+  for (size_t i = 0; i < INPUT_ROOT_COUNT; i++) {
+    const struct InputRoot* root = &roots->items[i];
+    if (root->is_present && root->identity.device == identity->device &&
+        root->identity.inode == identity->inode) {
+      return root->config_key;
+    }
+  }
+  return NULL;
+}
+
 static int register_template_output(struct Manifest* manifest,
                                     const char* output_dir,
                                     const char* template_name,
                                     const char* source_label,
                                     const struct InputIdentities* inputs,
+                                    const struct InputRoots* roots,
                                     struct Arena* scratch,
                                     char* err,
                                     size_t err_len) {
@@ -373,20 +553,37 @@ static int register_template_output(struct Manifest* manifest,
   if (output_path == NULL) {
     return error_report(err, err_len, "out of memory building output path for '%s'", template_name);
   }
-  return register_output_path(manifest, output_path, source_label, inputs, err, err_len);
+  return register_output_path(manifest, output_path, source_label, inputs, roots, scratch, err,
+                              err_len);
 }
 
 static int register_output_path(struct Manifest* manifest,
                                 const char* output_path,
                                 const char* source_label,
                                 const struct InputIdentities* inputs,
+                                const struct InputRoots* roots,
+                                struct Arena* scratch,
                                 char* err,
                                 size_t err_len) {
-  // This is checked before the manifest, because it is the failure that destroys work rather than
-  // merely abandoning it. An output path that names one of this build's own input files would
-  // overwrite it with rendered output, losing a content source, a template, or a partial. Nothing
-  // later in the build would notice or report it. `fs_identify` failing means the path names
-  // nothing yet, which is the ordinary case for an output about to be created.
+  // Both input checks run before the manifest, because they catch the failures that corrupt this
+  // build's inputs rather than merely abandoning the build. The root check runs first because it is
+  // the broader rule. It rejects every output below an input root, whether or not a file already
+  // sits at that path.
+  const char* root_key = NULL;
+  if (find_input_root_holding(roots, output_path, scratch, &root_key) != 0) {
+    return error_report(err, err_len, "out of memory checking output path for '%s'", source_label);
+  }
+  if (root_key != NULL) {
+    // The root is a config key and bounded, so it stays in the sentence. The path trails for the
+    // same reason as in the overwrite message below.
+    return error_report(err, err_len, "output path would write inside '%s' for '%s': '%s'",
+                        root_key, source_label, output_path);
+  }
+
+  // An output path that names one of this build's own input files would overwrite it with rendered
+  // output, losing the configuration or the target of a linked source or template. Nothing later
+  // in the build would notice or report it. `fs_identify` failing means the path names nothing
+  // yet, which is the ordinary case for an output about to be created.
   struct FsIdentity identity;
   if (fs_identify(output_path, &identity) == 0 && has_input_identity(inputs, &identity)) {
     // The producer is the actionable part and the path trails it, matching the duplicate message
@@ -415,6 +612,41 @@ static int register_output_path(struct Manifest* manifest,
   // case, so `-Wswitch` still fails the build when someone adds an outcome without a case here. A
   // value outside the enum means memory corruption, not a failure this function can report.
   abort();
+}
+
+static int find_input_root_holding(const struct InputRoots* roots,
+                                   const char* output_path,
+                                   struct Arena* scratch,
+                                   const char** config_key_out) {
+  *config_key_out = roots->output_dir_root_key;
+  if (*config_key_out != NULL) {
+    return 0;
+  }
+  // Each directory below `output_dir` is named by cutting a copy of the path at a `/`. Starting
+  // past `output_dir` and its separator keeps the walk off `output_dir`'s own text, whose prefixes
+  // need not be its ancestors once it holds `..`. The final pass checks the output path itself, so
+  // an output that names a root directory outright is caught too.
+  char* dir_path = arena_strdup(scratch, output_path);
+  if (dir_path == NULL) {
+    return -1;
+  }
+  for (char* cursor = dir_path + strlen(roots->output_dir) + 1;; cursor++) {
+    const char c = *cursor;
+    if (c != '/' && c != '\0') {
+      continue;
+    }
+    *cursor = '\0';
+    struct FsIdentity identity;
+    const bool is_present = fs_identify(dir_path, &identity) == 0;
+    *cursor = c;
+    if (!is_present) {
+      return 0;
+    }
+    *config_key_out = find_input_root(roots, &identity);
+    if (*config_key_out != NULL || c == '\0') {
+      return 0;
+    }
+  }
 }
 
 static bool has_input_identity(const struct InputIdentities* inputs,

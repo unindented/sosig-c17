@@ -10,13 +10,22 @@ struct SiteConfig;
 
 /**
  * @brief Records every intended output path in the build manifest, rejecting duplicates and any
- *        output that would overwrite one of this build's own input files.
+ *        output that would land inside a build input tree or overwrite a build input file.
  *
  * Registers content entry and template output paths before writing any file, so it catches a
- * collision between two producers up front. It rejects three kinds of collision:
- * - two producers that claim one output path, compared after folding ASCII case
+ * collision between two producers up front. It rejects four kinds of collision:
+ * - an output path at or below `content_dir` or `templates_dir`
  * - an output path that names a build input
+ * - two producers that claim one output path, compared after folding ASCII case
  * - an output path that is a `/`-delimited directory prefix of another output path
+ *
+ * The first case catches an output that would be read back as an input without overwriting one: a
+ * new Markdown file below `content_dir` is parsed as a source by the next build, and a new file
+ * below `templates_dir` can be read as a partial by the render of this same build. Each root is
+ * compared by `(device, inode)` against `output_dir`, each of its ancestors, and each existing
+ * directory between `output_dir` and the output, so an alternate spelling of a root, a symlinked
+ * root, and a symlink inside `output_dir` are all caught, and a sibling such as `contentx` is not.
+ * A root that does not exist holds nothing to protect and is skipped.
  *
  * The last case requires one path to be both a file and a directory.
  * `manifest_find_prefix_collision` checks for it after all paths are recorded. Both path checks
@@ -24,34 +33,32 @@ struct SiteConfig;
  * are on a case-insensitive filesystem such as the macOS default. Every other byte compares
  * exactly.
  *
- * The identity check compares filesystem identity, not path text, because the two spellings need
- * not match. An output path is rooted at `output_dir` and a source path at `content_dir`, so
- * `output_dir = "."` with a permalink aiming into the content tree produces `./content/x.md`
- * against a source `content/x.md`. They can also come out byte-equal, because nothing rejects
- * `output_dir` naming the same directory as `content_dir`, so a text comparison is neither
- * sufficient on its own nor useful as a first check. Comparing `(device, inode)` covers both, and
- * also rejects a collision created by a symlink, a hard link, or a case-insensitive filesystem.
- * Every file below `templates_dir` is claimed, not only the configured templates, so partials are
- * covered even though `template_render_file` resolves them lazily from names inside template
- * bytes. A missing `templates_dir` claims nothing, because it holds no file to overwrite. The
- * render then reports the template it could not read.
+ * The input-file check compares filesystem identity, not path text, because the two spellings need
+ * not match: `output_dir = "."` with a template named `sosig.toml` produces `./sosig.toml` against
+ * the config path `sosig.toml`. Comparing `(device, inode)` also rejects a collision created by a
+ * symlink, a hard link, or a case-insensitive filesystem. It claims the config, every discovered
+ * source, and every file below `templates_dir`, so it still protects an input that a link places
+ * outside both roots. A missing `templates_dir` claims nothing, because it holds no file to
+ * overwrite. The render then reports the template it could not read.
  *
  * @param manifest            Manifest that receives the output paths. Must not be `NULL`.
- * @param site_config         Configuration supplying `output_dir`, `templates_dir` and the template
- *                            lists. Must not be `NULL`.
+ * @param site_config         Configuration supplying `content_dir`, `output_dir`, `templates_dir`
+ *                            and the template lists. Must not be `NULL`.
  * @param config_path         Path the configuration itself was loaded from. Claimed as an input
  *                            like any other, so a build cannot overwrite the file that configured
  *                            it. Must not be `NULL`.
  * @param source_paths        Every discovered content source path, drafts included, whose files
  *                            must not be overwritten. Must not be `NULL`.
- * @param content_entries     Rendered non-draft content entries whose output paths are recorded.
- *                            May be `NULL` only when `content_entry_count` is 0.
+ * @param content_entries     Rendered non-draft content entries whose output paths, each joined
+ *                            onto `output_dir`, are recorded. May be `NULL` only when
+ *                            `content_entry_count` is 0.
  * @param content_entry_count Number of entries in `content_entries`.
  * @param err                 Destination buffer for a failure diagnostic.
  * @param err_len             Size of `err` in bytes.
- * @return `0` when every output path is unique, overwrites no input, and nests under no other, or
- *         `-1` on a duplicate, a prefix collision, an input overwrite, an oversize template path,
- *         a failed template walk, or an allocation failure.
+ * @return `0` when every output path is unique, stays out of both input trees, overwrites no
+ *         input, and nests under no other, or `-1` on an output inside an input tree, a duplicate,
+ *         a prefix collision, an input overwrite, an oversize template path, a failed template
+ *         walk, or an allocation failure.
  */
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,
