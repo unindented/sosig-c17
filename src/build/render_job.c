@@ -75,11 +75,12 @@ int render_job_run(const struct RenderJobSet* render_jobs,
 }
 
 void render_job_set_error(struct RenderJob* result, const char* fmt, ...) {
-  // An empty `error_message` is this module's documented "no error" sentinel, so it doubles as the
-  // "nothing recorded yet" test without a second flag.
   if (result->error_message[0] != '\0') {
     return;
   }
+
+  // This is first-wins, like the other error latches (`record_error` and `render_fail`). The first
+  // message names the cause; a later one is generally a consequence and must not replace it.
   va_list ap;
   va_start(ap, fmt);
   // This goes through `error_report_va` rather than `vsnprintf` directly, so it marks an over-long

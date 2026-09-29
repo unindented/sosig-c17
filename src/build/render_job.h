@@ -67,13 +67,11 @@ int render_job_run(const struct RenderJobSet* render_jobs,
                    struct StringBuffer* error_out) __attribute__((nonnull(1, 3, 4, 6)));
 
 /**
- * @brief Stores an error message in a render result slot, keeping the first.
+ * @brief Records a job's first diagnostic in its render result slot.
  *
- * Safe to call from worker threads because it writes only the job's own result slot. It is
- * first-wins, like the other two error latches in this codebase (`record_error` and `render_fail`).
- * The first message names the root cause. A job records one diagnostic and returns immediately
- * today, so the policy is not yet observable. This pins the policy here so a job that grows a
- * second failure path cannot silently overwrite the cause with a consequence.
+ * Safe to call from worker threads because it writes only the job's own result slot. This is
+ * first-wins: a later call for the same slot is ignored, because the first message names the cause
+ * and a later one is generally a consequence of it.
  *
  * @param result Result slot that receives the message. Must not be `NULL`.
  * @param fmt    `printf`-style format string. Must not be `NULL`.
