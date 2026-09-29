@@ -29,7 +29,7 @@ The library is static because it supports one product. It does not provide a pub
 
 Each vendored project has a separate target. Header-only dependencies use interface libraries.
 
-`sosig_app` links to `sosig_vendor_tomlc17` as a public dependency because `formats/toml.h` exposes a tomlc17 type. The other vendored dependencies are private.
+`sosig_app` links to `sosig_vendor_tomlc17` and `sosig_vendor_sharedstuff` as public dependencies because application headers expose their types. The other vendored dependencies are private.
 
 `Threads::Threads` is a private dependency of `sosig_app`. CMake adds this link requirement to each executable that links to the static library.
 
@@ -37,7 +37,7 @@ Source directories group code by function. They do not define separate libraries
 
 ### Generated dependency graph
 
-CMake generates this graph from the `Release` configuration. The graph shows CMake targets and link relationships. It does not show dependencies between source modules. Graph options remove test-only targets.
+CMake generates this graph from the `release` preset. The graph shows CMake targets and link relationships. It does not show dependencies between source modules. Graph options remove test-only targets.
 
 ![CMake target dependency graph](media/dependencies.svg)
 
@@ -91,7 +91,7 @@ This duplication is deliberate. A configure-time glob can omit a new file until 
 
 Each source directory adds its local unit tests. The top-level `tests/` directory adds the golden test suite and `sosig_test_support`. Each CTest case has a `sosig` label. It also has a `unit` or `golden` label.
 
-`sosig_test_support` holds the unit-test plumbing that several `test_*.c` files need: a fixture-root creator, a recursive fixture-tree remover, a fixture-file writer, and a capture-stream reader. Each was duplicated verbatim per test file before. `test_support.c` defines `TEST_NO_MAIN`, so acutest's `main` and run state stay in each test executable's own translation unit and the link resolves `acutest_check_` and `acutest_abort_` against it. A failure raised inside the support library is reported against `test_support.c` and fails the test that reached it.
+`sosig_test_support` holds the unit-test plumbing that several `test_*.c` files need: a fixture-root creator, a recursive fixture-tree remover, a fixture-file writer, and a capture-stream reader. `test_support.c` defines `TEST_NO_MAIN`, so acutest's `main` and run state stay in each test executable's own translation unit and the link resolves `acutest_check_` and `acutest_abort_` against it. A failure raised inside the support library is reported against `test_support.c` and fails the test that reached it.
 
 A parent that enables `sosig` tests must call `enable_testing()` in its top-level `CMakeLists.txt`. CTest starts discovery at the build root. A child call cannot create the root test file. CMake prints this requirement when a child enables tests.
 
