@@ -395,7 +395,7 @@ static struct Node* node_scalar(struct ProviderData* provider_data, const char* 
  *                      Must not be `NULL`.
  * @param name          Requested field name. Not `NUL`-terminated. Must not be `NULL`.
  * @param name_len      Length of `name` in bytes.
- * @return The resolved node, or `NULL` when unmatched or the configuration is absent.
+ * @return The resolved node, or `NULL` when the name is unmatched or its value is unset.
  */
 static struct Node* resolve_site_field(struct ProviderData* provider_data,
                                        const char* name,
@@ -855,9 +855,6 @@ static struct Node* resolve_site_field(struct ProviderData* provider_data,
                                        const char* name,
                                        size_t name_len) {
   const struct SiteConfig* site_config = provider_data->context->site_config;
-  if (site_config == NULL) {
-    return NULL;
-  }
   if (is_name_equal(name, name_len, "base_url")) {
     return node_scalar(provider_data, site_config->base_url);
   }

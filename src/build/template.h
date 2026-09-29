@@ -13,7 +13,7 @@ struct SiteConfig;
  * field.
  */
 struct TemplateContext {
-  /** Site configuration available to site-level template variables. */
+  /** Site configuration available to site-level template variables. Must not be `NULL`. */
   const struct SiteConfig* site_config;
 
   /** Content entries available to `{{#content_entries}}` section blocks. */
