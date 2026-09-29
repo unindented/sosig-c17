@@ -341,9 +341,8 @@ static void test_writes_pages_sharing_parents_concurrently(void) {
     TEST_CHECK(path_list_push(&source_paths, source_path) == 0);
   }
 
-  char working_dir[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir, sizeof(working_dir)) != NULL);
-  TEST_ASSERT(chdir(root_dir) == 0);
+  int saved_dir_fd = -1;
+  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
   struct SiteConfig site_config;
   site_config_init(&site_config);
   char config_err[ERROR_MESSAGE_SIZE] = "";
@@ -356,8 +355,7 @@ static void test_writes_pages_sharing_parents_concurrently(void) {
   TEST_CHECK(render_pages(&site_config, &render_jobs, 8, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
+  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
 
   for (int i = 0; i < SOURCE_COUNT; i++) {
     char output_path[64];

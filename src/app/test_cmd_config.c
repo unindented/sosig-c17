@@ -3,7 +3,6 @@
 
 #include <acutest.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -49,7 +48,7 @@ static int write_text_file(const char* file_path, const char* contents) {
  * @param stdout_out_len Size of `stdout_out` in bytes. Must be non-zero.
  * @param stderr_out     Buffer that receives terminated standard error.
  * @param stderr_out_len Size of `stderr_out` in bytes. Must be non-zero.
- * @return The command exit code, or `EXIT_CODE_VALUE_MAX` on test-plumbing failure.
+ * @return The command exit code, or `TEST_PLUMBING_FAILED` on test-plumbing failure.
  */
 static enum ExitCode run_config_capturing(const char* root_dir,
                                           char* stdout_out,
@@ -58,113 +57,25 @@ static enum ExitCode run_config_capturing(const char* root_dir,
                                           size_t stderr_out_len) {
   stdout_out[0] = '\0';
   stderr_out[0] = '\0';
-
-  enum ExitCode rc = (enum ExitCode)EXIT_CODE_VALUE_MAX;
-  bool has_plumbing_failed = false;
-  bool has_changed_dir = false;
-  int saved_stdout = -1;
-  int saved_stderr = -1;
-  FILE* stdout_capture = NULL;
-  FILE* stderr_capture = NULL;
-  char working_dir[PATH_MAX];
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL) {
-    TEST_CHECK(false);
-    goto cleanup;
-  }
-  {
-    const int chdir_rc = chdir(root_dir);
-    TEST_CHECK(chdir_rc == 0);
-    if (chdir_rc != 0) {
-      goto cleanup;
-    }
-    has_changed_dir = true;
-
-    const int stdout_flush_rc = fflush(stdout);
-    const int stderr_flush_rc = fflush(stderr);
-    TEST_CHECK(stdout_flush_rc == 0);
-    TEST_CHECK(stderr_flush_rc == 0);
-    if (stdout_flush_rc != 0 || stderr_flush_rc != 0) {
-      goto cleanup;
-    }
-    saved_stdout = dup(STDOUT_FILENO);
-    TEST_CHECK(saved_stdout >= 0);
-    if (saved_stdout < 0) {
-      goto cleanup;
-    }
-    saved_stderr = dup(STDERR_FILENO);
-    TEST_CHECK(saved_stderr >= 0);
-    if (saved_stderr < 0) {
-      goto cleanup;
-    }
-    stdout_capture = tmpfile();
-    TEST_ASSERT(stdout_capture != NULL);
-    if (stdout_capture == NULL) {
-      goto cleanup;
-    }
-    stderr_capture = tmpfile();
-    TEST_ASSERT(stderr_capture != NULL);
-    if (stderr_capture == NULL) {
-      goto cleanup;
-    }
-
-    const int stdout_redirect_rc = dup2(fileno(stdout_capture), STDOUT_FILENO);
-    TEST_CHECK(stdout_redirect_rc == STDOUT_FILENO);
-    if (stdout_redirect_rc != STDOUT_FILENO) {
-      goto cleanup;
-    }
-    const int stderr_redirect_rc = dup2(fileno(stderr_capture), STDERR_FILENO);
-    TEST_CHECK(stderr_redirect_rc == STDERR_FILENO);
-    if (stderr_redirect_rc != STDERR_FILENO) {
-      goto cleanup;
-    }
-
-    rc = cmd_config_run();
-    const int captured_stdout_flush_rc = fflush(stdout);
-    const int captured_stderr_flush_rc = fflush(stderr);
-    TEST_CHECK(captured_stdout_flush_rc == 0);
-    TEST_CHECK(captured_stderr_flush_rc == 0);
-    has_plumbing_failed = captured_stdout_flush_rc != 0 || captured_stderr_flush_rc != 0;
+  int saved_dir_fd = -1;
+  if (working_dir_enter(root_dir, &saved_dir_fd) != 0) {
+    return (enum ExitCode)TEST_PLUMBING_FAILED;
   }
 
-cleanup:
-  if (saved_stdout >= 0) {
-    const int restore_rc = dup2(saved_stdout, STDOUT_FILENO);
-    TEST_CHECK(restore_rc == STDOUT_FILENO);
-    has_plumbing_failed = has_plumbing_failed || restore_rc != STDOUT_FILENO;
-    const int close_rc = close(saved_stdout);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  if (saved_stderr >= 0) {
-    const int restore_rc = dup2(saved_stderr, STDERR_FILENO);
-    TEST_CHECK(restore_rc == STDERR_FILENO);
-    has_plumbing_failed = has_plumbing_failed || restore_rc != STDERR_FILENO;
-    const int close_rc = close(saved_stderr);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  clearerr(stdout);
-  clearerr(stderr);
-  if (stdout_capture != NULL) {
+  enum ExitCode rc = (enum ExitCode)TEST_PLUMBING_FAILED;
+  bool has_plumbing_failed = true;
+  struct StreamCapture stdout_capture;
+  struct StreamCapture stderr_capture;
+  if (capture_begin(stdout, &stdout_capture) == 0) {
+    if (capture_begin(stderr, &stderr_capture) == 0) {
+      rc = cmd_config_run();
+      has_plumbing_failed = capture_end(&stderr_capture, stderr_out, stderr_out_len) != 0;
+    }
     has_plumbing_failed =
-        read_capture(stdout_capture, stdout_out, stdout_out_len) != 0 || has_plumbing_failed;
-    const int close_rc = fclose(stdout_capture);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
+        capture_end(&stdout_capture, stdout_out, stdout_out_len) != 0 || has_plumbing_failed;
   }
-  if (stderr_capture != NULL) {
-    has_plumbing_failed =
-        read_capture(stderr_capture, stderr_out, stderr_out_len) != 0 || has_plumbing_failed;
-    const int close_rc = fclose(stderr_capture);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  if (has_changed_dir) {
-    const int restore_dir_rc = chdir(working_dir);
-    TEST_CHECK(restore_dir_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || restore_dir_rc != 0;
-  }
-  return has_plumbing_failed ? (enum ExitCode)EXIT_CODE_VALUE_MAX : rc;
+  has_plumbing_failed = working_dir_leave(saved_dir_fd) != 0 || has_plumbing_failed;
+  return has_plumbing_failed ? (enum ExitCode)TEST_PLUMBING_FAILED : rc;
 }
 
 /**
@@ -175,136 +86,30 @@ cleanup:
  * @param root_dir       Fixture directory in which to run the command.
  * @param stderr_out     Buffer that receives terminated standard error.
  * @param stderr_out_len Size of `stderr_out` in bytes. Must be non-zero.
- * @return The command exit code, or `EXIT_CODE_VALUE_MAX` on test-plumbing failure.
+ * @return The command exit code, or `TEST_PLUMBING_FAILED` on test-plumbing failure.
  */
 static enum ExitCode run_config_with_unwritable_stdout(const char* root_dir,
                                                        char* stderr_out,
                                                        size_t stderr_out_len) {
   stderr_out[0] = '\0';
-  enum ExitCode rc = (enum ExitCode)EXIT_CODE_VALUE_MAX;
-  bool has_plumbing_failed = false;
-  bool has_changed_dir = false;
-  int saved_stdout = -1;
-  int saved_stderr = -1;
-  int unwritable = -1;
-  int sink = -1;
-  FILE* stderr_capture = NULL;
-  char working_dir[PATH_MAX];
-
-  if (getcwd(working_dir, sizeof(working_dir)) == NULL) {
-    TEST_CHECK(false);
-    goto cleanup;
-  }
-  {
-    const int chdir_rc = chdir(root_dir);
-    TEST_CHECK(chdir_rc == 0);
-    if (chdir_rc != 0) {
-      goto cleanup;
-    }
-    has_changed_dir = true;
-
-    const int stdout_flush_rc = fflush(stdout);
-    const int stderr_flush_rc = fflush(stderr);
-    TEST_CHECK(stdout_flush_rc == 0);
-    TEST_CHECK(stderr_flush_rc == 0);
-    if (stdout_flush_rc != 0 || stderr_flush_rc != 0) {
-      goto cleanup;
-    }
-    saved_stdout = dup(STDOUT_FILENO);
-    TEST_CHECK(saved_stdout >= 0);
-    if (saved_stdout < 0) {
-      goto cleanup;
-    }
-    saved_stderr = dup(STDERR_FILENO);
-    TEST_CHECK(saved_stderr >= 0);
-    if (saved_stderr < 0) {
-      goto cleanup;
-    }
-    unwritable = open("/dev/null", O_RDONLY);
-    TEST_CHECK(unwritable >= 0);
-    if (unwritable < 0) {
-      goto cleanup;
-    }
-    sink = open("/dev/null", O_WRONLY);
-    TEST_CHECK(sink >= 0);
-    if (sink < 0) {
-      goto cleanup;
-    }
-    stderr_capture = tmpfile();
-    TEST_ASSERT(stderr_capture != NULL);
-    if (stderr_capture == NULL) {
-      goto cleanup;
-    }
-
-    const int stdout_redirect_rc = dup2(unwritable, STDOUT_FILENO);
-    TEST_CHECK(stdout_redirect_rc == STDOUT_FILENO);
-    if (stdout_redirect_rc != STDOUT_FILENO) {
-      goto cleanup;
-    }
-    const int stderr_redirect_rc = dup2(fileno(stderr_capture), STDERR_FILENO);
-    TEST_CHECK(stderr_redirect_rc == STDERR_FILENO);
-    if (stderr_redirect_rc != STDERR_FILENO) {
-      goto cleanup;
-    }
-
-    rc = cmd_config_run();
-    const int captured_stderr_flush_rc = fflush(stderr);
-    TEST_CHECK(captured_stderr_flush_rc == 0);
-    has_plumbing_failed = captured_stderr_flush_rc != 0;
-
-    const int sink_redirect_rc = dup2(sink, STDOUT_FILENO);
-    TEST_CHECK(sink_redirect_rc == STDOUT_FILENO);
-    has_plumbing_failed = has_plumbing_failed || sink_redirect_rc != STDOUT_FILENO;
-    if (sink_redirect_rc == STDOUT_FILENO) {
-      clearerr(stdout);
-      const int drain_rc = fflush(stdout);
-      TEST_CHECK(drain_rc == 0);
-      has_plumbing_failed = has_plumbing_failed || drain_rc != 0;
-    }
+  int saved_dir_fd = -1;
+  if (working_dir_enter(root_dir, &saved_dir_fd) != 0) {
+    return (enum ExitCode)TEST_PLUMBING_FAILED;
   }
 
-cleanup:
-  if (saved_stdout >= 0) {
-    const int restore_rc = dup2(saved_stdout, STDOUT_FILENO);
-    TEST_CHECK(restore_rc == STDOUT_FILENO);
-    has_plumbing_failed = has_plumbing_failed || restore_rc != STDOUT_FILENO;
-    const int close_rc = close(saved_stdout);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
+  enum ExitCode rc = (enum ExitCode)TEST_PLUMBING_FAILED;
+  bool has_plumbing_failed = true;
+  struct StreamCapture stdout_capture;
+  struct StreamCapture stderr_capture;
+  if (capture_begin_unwritable(stdout, &stdout_capture) == 0) {
+    if (capture_begin(stderr, &stderr_capture) == 0) {
+      rc = cmd_config_run();
+      has_plumbing_failed = capture_end(&stderr_capture, stderr_out, stderr_out_len) != 0;
+    }
+    has_plumbing_failed = capture_end(&stdout_capture, NULL, 0) != 0 || has_plumbing_failed;
   }
-  if (saved_stderr >= 0) {
-    const int restore_rc = dup2(saved_stderr, STDERR_FILENO);
-    TEST_CHECK(restore_rc == STDERR_FILENO);
-    has_plumbing_failed = has_plumbing_failed || restore_rc != STDERR_FILENO;
-    const int close_rc = close(saved_stderr);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  clearerr(stdout);
-  clearerr(stderr);
-  if (unwritable >= 0) {
-    const int close_rc = close(unwritable);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  if (sink >= 0) {
-    const int close_rc = close(sink);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  if (stderr_capture != NULL) {
-    has_plumbing_failed =
-        read_capture(stderr_capture, stderr_out, stderr_out_len) != 0 || has_plumbing_failed;
-    const int close_rc = fclose(stderr_capture);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  if (has_changed_dir) {
-    const int restore_dir_rc = chdir(working_dir);
-    TEST_CHECK(restore_dir_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || restore_dir_rc != 0;
-  }
-  return has_plumbing_failed ? (enum ExitCode)EXIT_CODE_VALUE_MAX : rc;
+  has_plumbing_failed = working_dir_leave(saved_dir_fd) != 0 || has_plumbing_failed;
+  return has_plumbing_failed ? (enum ExitCode)TEST_PLUMBING_FAILED : rc;
 }
 
 // A valid `sosig.toml` loads and prints, and the command reports success.

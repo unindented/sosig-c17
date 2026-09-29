@@ -87,6 +87,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/runtime/test_pool.c"
     "${PROJECT_SOURCE_DIR}/tests/test_support.c"
     "${PROJECT_SOURCE_DIR}/tests/test_support.h"
+    "${PROJECT_SOURCE_DIR}/tests/test_test_support.c"
 )
 set(sosig_configured_c_source "${PROJECT_SOURCE_DIR}/src/app/sosig_version.c.in")
 

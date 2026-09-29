@@ -7,6 +7,7 @@ target_link_libraries(sosig_test_support PRIVATE sosig_build_tests sosig_vendor_
 if(PROJECT_IS_TOP_LEVEL)
   sosig_enable_test_analysis(sosig_test_support)
 endif()
+sosig_add_unit_test(test_support)
 
 set(sosig_fixture_sites site_file_permalink site_index_permalink)
 

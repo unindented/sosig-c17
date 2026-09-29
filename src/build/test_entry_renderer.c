@@ -12,7 +12,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "app/exit_code.h"
 #include "build/entry_renderer.h"
 #include "build/page_renderer.h"
 #include "build/render_job.h"
@@ -195,7 +194,7 @@ static char* read_output(const char* root_dir, const char* relative_path) {
  * @param error_out       Buffer that receives render diagnostics.
  * @param stderr_out      Buffer that receives terminated standard error.
  * @param stderr_out_len  Size of `stderr_out` in bytes. Must be non-zero.
- * @return The renderer result, or `EXIT_CODE_VALUE_MAX` on test-plumbing failure.
+ * @return The renderer result, or `TEST_PLUMBING_FAILED` on test-plumbing failure.
  */
 static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
                                            const struct PathList* source_paths,
@@ -205,59 +204,13 @@ static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
                                            char* stderr_out,
                                            size_t stderr_out_len) {
   stderr_out[0] = '\0';
-  int rc = EXIT_CODE_VALUE_MAX;
-  bool has_plumbing_failed = false;
-  int saved_stderr = -1;
-  FILE* stderr_capture = NULL;
-
-  const int stderr_flush_rc = fflush(stderr);
-  TEST_CHECK(stderr_flush_rc == 0);
-  if (stderr_flush_rc != 0) {
-    clearerr(stderr);
-    return rc;
+  struct StreamCapture stderr_capture;
+  if (capture_begin(stderr, &stderr_capture) != 0) {
+    return TEST_PLUMBING_FAILED;
   }
-  saved_stderr = dup(STDERR_FILENO);
-  TEST_CHECK(saved_stderr >= 0);
-  if (saved_stderr < 0) {
-    goto cleanup;
-  }
-  stderr_capture = tmpfile();
-  TEST_ASSERT(stderr_capture != NULL);
-  if (stderr_capture == NULL) {
-    goto cleanup;
-  }
-
-  {
-    const int redirect_rc = dup2(fileno(stderr_capture), STDERR_FILENO);
-    TEST_CHECK(redirect_rc == STDERR_FILENO);
-    if (redirect_rc != STDERR_FILENO) {
-      goto cleanup;
-    }
-    rc = entry_renderer_render_entries(site_config, source_paths, worker_count, true,
-                                       render_jobs_out, error_out);
-    const int captured_flush_rc = fflush(stderr);
-    TEST_CHECK(captured_flush_rc == 0);
-    has_plumbing_failed = captured_flush_rc != 0;
-  }
-
-cleanup:
-  if (saved_stderr >= 0) {
-    const int restore_rc = dup2(saved_stderr, STDERR_FILENO);
-    TEST_CHECK(restore_rc == STDERR_FILENO);
-    has_plumbing_failed = has_plumbing_failed || restore_rc != STDERR_FILENO;
-    const int close_rc = close(saved_stderr);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  clearerr(stderr);
-  if (stderr_capture != NULL) {
-    has_plumbing_failed =
-        read_capture(stderr_capture, stderr_out, stderr_out_len) != 0 || has_plumbing_failed;
-    const int close_rc = fclose(stderr_capture);
-    TEST_CHECK(close_rc == 0);
-    has_plumbing_failed = has_plumbing_failed || close_rc != 0;
-  }
-  return has_plumbing_failed ? EXIT_CODE_VALUE_MAX : rc;
+  const int rc = entry_renderer_render_entries(site_config, source_paths, worker_count, true,
+                                               render_jobs_out, error_out);
+  return capture_end(&stderr_capture, stderr_out, stderr_out_len) == 0 ? rc : TEST_PLUMBING_FAILED;
 }
 
 // A single source renders its frontmatter metadata, body HTML, page output, and output paths.
@@ -408,9 +361,8 @@ static void test_verbose_prints_one_dot_per_job(void) {
   TEST_CHECK(path_list_push(&source_paths, "content/hello.md") == 0);
   TEST_CHECK(path_list_push(&source_paths, "content/second.md") == 0);
   TEST_CHECK(path_list_push(&source_paths, "content/draft.md") == 0);
-  char working_dir[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir, sizeof(working_dir)) != NULL);
-  TEST_ASSERT(chdir(root_dir) == 0);
+  int saved_dir_fd = -1;
+  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
 
   struct SiteConfig site_config;
   site_config_init(&site_config);
@@ -429,8 +381,7 @@ static void test_verbose_prints_one_dot_per_job(void) {
   // trailing newline closing the line before any later status message.
   TEST_CHECK(strcmp(stderr_out, "...\n") == 0);
 
-  const int restored = chdir(working_dir);
-  TEST_CHECK(restored == 0);
+  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
 
   render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
