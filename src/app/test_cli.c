@@ -218,6 +218,21 @@ static void test_informational_flag_clears_diagnostic(void) {
   TEST_CHECK(cluster_options.error_message[0] == '\0');
 }
 
+// A valid `--version` wins in either order next to a rejected `--version=1`. The rejected spelling
+// neither requests the version nor cancels the valid request, so the result does not depend on
+// which comes last.
+static void test_valid_version_flag_wins_over_rejected_spelling(void) {
+  char* valid_first[] = {"sosig", "--version", "--version=1", NULL};
+  struct CliOptions options = parse(valid_first);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+  TEST_CHECK(options.error_message[0] == '\0');
+
+  char* rejected_first[] = {"sosig", "--version=1", "--version", NULL};
+  options = parse(rejected_first);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+  TEST_CHECK(options.error_message[0] == '\0');
+}
+
 // No arguments at all are reported as an error with a diagnostic message.
 static void test_no_args_rejected(void) {
   char* argv[] = {"sosig", NULL};
@@ -355,9 +370,8 @@ static void test_attached_value_rejected_on_valueless_flags(void) {
 
 // The short form of each valueless flag rejects an attached value and names the complete element.
 // copt stops its one-letter comparison at `=`, so `-V=1` matches `V`. Without this check, the short
-// form would print the version while the long form failed. The later `-=` diagnostic cannot catch
-// this error because an informational flag clears `error_message`. The rejection must prevent `-V`
-// from becoming a version request.
+// form would print the version while the long form failed. An informational flag clears
+// `error_message`, so the rejection must prevent `-V` from becoming a version request.
 static void test_attached_value_rejected_on_valueless_short_flags(void) {
   char* version_argv[] = {"sosig", "-V=1", NULL};
   struct CliOptions version_options = parse(version_argv);
@@ -376,9 +390,34 @@ static void test_attached_value_rejected_on_valueless_short_flags(void) {
   TEST_CHECK(strcmp(verbose_options.error_message, "option does not take a value: '-v=0'") == 0);
 }
 
+// A rejected attached value ends its short cluster, so the letters after the `=` are not read as
+// flags. Otherwise the `V` in `-v=V` would request the version and the `h` in `-v=h` would request
+// help, and either would clear the rejection.
+static void test_attached_value_rejection_ends_short_cluster(void) {
+  char* version_argv[] = {"sosig", "-v=V", NULL};
+  struct CliOptions version_options = parse(version_argv);
+  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(!version_options.is_verbose);
+  TEST_CHECK(strcmp(version_options.error_message, "option does not take a value: '-v=V'") == 0);
+
+  char* help_argv[] = {"sosig", "-v=h", NULL};
+  struct CliOptions help_options = parse(help_argv);
+  TEST_CHECK(help_options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(help_options.error_message, "option does not take a value: '-v=h'") == 0);
+}
+
 // An unrecognized short option is rejected with a diagnostic naming the option.
 static void test_unknown_short_option(void) {
   char* argv[] = {"sosig", "build", "-x", NULL};
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "unknown option '-x'") == 0);
+}
+
+// A value attached to an unknown short option ends its cluster, so the `V` in `-x=V` does not
+// request the version. The diagnostic names the unknown option rather than the value.
+static void test_unknown_short_option_value_ends_cluster(void) {
+  char* argv[] = {"sosig", "build", "-x=V", NULL};
   struct CliOptions options = parse(argv);
   TEST_CHECK(options.action == CLI_ACTION_ERROR);
   TEST_CHECK(strcmp(options.error_message, "unknown option '-x'") == 0);
@@ -561,6 +600,8 @@ TEST_LIST = {
     {"version short flag", test_version_short_flag},
     {"version flag wins over help", test_version_flag_wins_over_help},
     {"informational flag clears diagnostic", test_informational_flag_clears_diagnostic},
+    {"valid version flag wins over rejected spelling",
+     test_valid_version_flag_wins_over_rejected_spelling},
     {"no args rejected", test_no_args_rejected},
     {"config command rejects verbose", test_config_command_rejects_verbose},
     {"config command rejects workers", test_config_command_rejects_workers},
@@ -575,7 +616,10 @@ TEST_LIST = {
     {"attached value rejected on valueless flags", test_attached_value_rejected_on_valueless_flags},
     {"attached value rejected on valueless short flags",
      test_attached_value_rejected_on_valueless_short_flags},
+    {"attached value rejection ends short cluster",
+     test_attached_value_rejection_ends_short_cluster},
     {"unknown short option", test_unknown_short_option},
+    {"unknown short option value ends cluster", test_unknown_short_option_value_ends_cluster},
     {"unknown long option", test_unknown_long_option},
     {"unknown command", test_unknown_command},
     {"extra positional argument", test_extra_positional_argument},

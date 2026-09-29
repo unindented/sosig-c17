@@ -117,15 +117,20 @@ static char* cli_parse_handle_missing_arg(const struct copt* opt, void* aux);
  * for a short option is copt's own two-byte `-x` scratch string and can never hold an `=`. Reading
  * only that would leave `-V=1` accepted as a version request while `--version=1` was rejected.
  *
+ * A rejection also consumes the rest of the argv element. copt would otherwise go on reading the
+ * letters after the `=` as a short cluster, so the `V` in `-v=V` would become a version request and
+ * the informational flag would then clear the rejection.
+ *
  * @param options Options that receive the diagnostic when a value is attached. Must not be `NULL`.
  * @param opt     copt parser positioned on the option to inspect, before any `copt_arg` call, which
- *                may advance the parser off the element being inspected. Must not be `NULL`.
+ *                may advance the parser off the element being inspected. On rejection it is left at
+ *                the end of that element. Must not be `NULL`.
  * @param argv    Argument vector the parser is walking, used to reach the current element whole.
  *                Must not be `NULL`.
  * @return `0` when no value is attached, or `-1` with a diagnostic recorded.
  */
 static int cli_parse_require_no_attached_value(struct CliOptions* options,
-                                               const struct copt* opt,
+                                               struct copt* opt,
                                                char** argv) __attribute__((nonnull(1, 2, 3)));
 
 /**
@@ -205,10 +210,16 @@ void cli_parse(struct CliOptions* options, int argc, char** argv) {
   struct copt opt = copt_init(argc, argv, 1);  // 1 enables argv reordering, not a start index
   copt_set_noargfn(&opt, cli_parse_handle_missing_arg, NULL);
   while (copt_next(&opt)) {
+    // A valid informational flag stays requested whatever follows it, and a rejected spelling never
+    // requests one, so the outcome does not depend on the order the flags appear in.
     if (copt_opt(&opt, "V|version")) {
-      has_version = cli_parse_require_no_attached_value(options, &opt, argv) == 0;
+      if (cli_parse_require_no_attached_value(options, &opt, argv) == 0) {
+        has_version = true;
+      }
     } else if (copt_opt(&opt, "h|help")) {
-      has_help = cli_parse_require_no_attached_value(options, &opt, argv) == 0;
+      if (cli_parse_require_no_attached_value(options, &opt, argv) == 0) {
+        has_help = true;
+      }
     } else if (copt_opt(&opt, "v|verbose")) {
       if (cli_parse_require_no_attached_value(options, &opt, argv) == 0) {
         options->is_verbose = true;
@@ -218,6 +229,10 @@ void cli_parse(struct CliOptions* options, int argc, char** argv) {
       cli_parse_workers_option(options, &opt, &flags_seen);
     } else {
       record_error(options, "unknown option '%s'", copt_curopt(&opt));
+      // A value attached to an unknown option is dropped with the rest of its element, so `-x=V`
+      // cannot request the version. The unknown-option diagnostic above is the one that stays,
+      // because `record_error` keeps the first.
+      (void)cli_parse_require_no_attached_value(options, &opt, argv);
     }
   }
 
@@ -314,7 +329,7 @@ static char* cli_parse_handle_missing_arg(const struct copt* opt, void* aux) {
 }
 
 static int cli_parse_require_no_attached_value(struct CliOptions* options,
-                                               const struct copt* opt,
+                                               struct copt* opt,
                                                char** argv) {
   const char* token = copt_curopt(opt);
   // The whole element, which for a short option is the entire cluster rather than the one letter
@@ -337,6 +352,11 @@ static int cli_parse_require_no_attached_value(struct CliOptions* options,
   // The whole element trails the cause. It is a raw argument, so it is unbounded and must not be
   // able to truncate the reason away.
   record_error(options, "option does not take a value: '%s'", element);
+  // `copt_oarg` consumes whatever follows the current option in its element and ends any short
+  // cluster, so the next `copt_next` moves on to the following element. The value must be attached
+  // here, so it never reaches for the next element or calls the missing-argument handler. Like
+  // `copt_arg`, it does not touch `curopt`, and `token` is not read after it.
+  (void)copt_oarg(opt);
   return -1;
 }
 
@@ -353,7 +373,8 @@ static void cli_parse_workers_option(struct CliOptions* options,
     // `copt_arg` on the line above. The `copt_opt` tests in `cli_parse` take a `const struct copt*`
     // and so cannot invalidate `curopt`. `copt_arg` takes a mutable one and is safe here only
     // because it never touches `curopt`. copt's own contract does not promise that, so recheck it
-    // on a vendor bump.
+    // on a vendor bump. `cli_parse_require_no_attached_value` also calls a mutating `copt_oarg`,
+    // but only after its last read of `curopt`, so it does not depend on that.
     //
     // A negative value also lands here rather than in the positive-integer check below. copt reads
     // `-1` as an option cluster, so `--workers` gets no argument at all. `--workers -1` therefore
