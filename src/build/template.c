@@ -78,7 +78,7 @@ _Static_assert((size_t)RENDER_PARTIAL_COUNT_MAX <= (size_t)RENDER_EXPANSION_COUN
  * 256 leaves 241 bytes for the name, after `partials/` (9), `.html` (5) and the terminator. That is
  * far above any real partial name and deliberately below the 250 that `FILENAME_LEN_MAX` would
  * allow for `<name>.html`. This buffer, not the filesystem layer, is the first limit an absurd name
- * meets. The diagnostic the user sees names the partial instead of reporting an opaque write
+ * meets. The diagnostic the user sees names the partial instead of reporting an opaque read
  * failure.
  */
 enum { PARTIAL_PATH_SIZE = 256 };
@@ -119,7 +119,7 @@ struct Node {
   const char* scalar;
 };
 
-/** State threaded through the Mustache data-provider callbacks. */
+/** State threaded through the Mustache parser and data-provider callbacks. */
 struct ProviderData {
   /** Template directory root used to locate partials. */
   const char* templates_dir;
@@ -131,15 +131,14 @@ struct ProviderData {
    * Relative path of the template or partial currently being compiled, which `record_parse_error`
    * names as the file a syntax error is inside. Distinct from `template_name`, because a partial
    * compiles while mustache4c renders the outer template. This is a path rather than a bare name,
-   * so the `(in '<file>')` clause denotes a file in both cases. A partial's `bad` is not a file,
-   * and is ambiguous with a top-level template of the same name.
+   * so the `(in '<file>')` clause denotes a file in both cases.
    */
   const char* template_name_compiling;
 
   /** Borrowed values visible to template variables. */
   const struct TemplateContext* context;
 
-  /** Arena owning nodes and partial bookkeeping for this render. */
+  /** Arena owning the nodes and partial bookkeeping of this render. */
   struct Arena* arena;
 
   /** Root node returned to `mustache_process`. */
@@ -180,7 +179,7 @@ struct RenderOutput {
   /** Buffer accumulating the rendered bytes. */
   struct StringBuffer* buffer;
 
-  /** Provider state for this render, used to report exceeding the output limit. */
+  /** Provider state for this render, used to report a failed or oversize append. */
   struct ProviderData* provider_data;
 };
 
@@ -338,8 +337,7 @@ static MUSTACHE_TEMPLATE* node_get_partial_compile(struct ProviderData* provider
  *                          not be `NULL`.
  * @param relative_path_out Receives the `partials/<name>.html` form, arena-owned, on success only.
  *                          Handed back rather than rebuilt by the caller because that is the form
- *                          `record_parse_error` names. It is already formatted here. Must not be
- *                          `NULL`.
+ *                          `record_parse_error` names. Must not be `NULL`.
  * @return The terminated joined path owned by the render arena, or `NULL` on an oversize name or
  *         allocation failure.
  */
@@ -347,17 +345,6 @@ static char* node_get_partial_path(struct ProviderData* provider_data,
                                    const char* name,
                                    const char** relative_path_out)
     __attribute__((nonnull(1, 2, 3)));
-
-/**
- * @brief Reports whether a length-delimited name equals a terminated literal.
- *
- * @param name     Name bytes. Not `NUL`-terminated. Must not be `NULL`.
- * @param name_len Length of `name` in bytes.
- * @param expected Terminated literal to compare against. Must not be `NULL`.
- * @return `true` when the two are byte-for-byte equal, `false` otherwise.
- */
-static bool is_name_equal(const char* name, size_t name_len, const char* expected)
-    __attribute__((nonnull(1, 3)));
 
 /**
  * @brief Allocates an arena-owned node of the given kind for the current render.
@@ -370,6 +357,16 @@ static bool is_name_equal(const char* name, size_t name_len, const char* expecte
  * @return The new node, or `NULL` on allocation failure.
  */
 static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind kind)
+    __attribute__((nonnull(1)));
+
+/**
+ * @brief Returns a scalar node wrapping `value`, or `NULL` when `value` is absent or empty.
+ *
+ * @param provider_data Render provider state owning the node arena. Must not be `NULL`.
+ * @param value         Terminated string to wrap, borrowed for the rest of the render, or `NULL`.
+ * @return A scalar node, or `NULL` when `value` is `NULL` or empty, or on allocation failure.
+ */
+static struct Node* node_scalar(struct ProviderData* provider_data, const char* value)
     __attribute__((nonnull(1)));
 
 /**
@@ -400,14 +397,15 @@ static struct Node* resolve_entry_field(struct ProviderData* provider_data,
                                         size_t name_len) __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Returns a scalar node wrapping `value`, or `NULL` when `value` is absent.
+ * @brief Reports whether a length-delimited name equals a terminated literal.
  *
- * @param provider_data Render provider state owning the node arena. Must not be `NULL`.
- * @param value         Terminated string to wrap, or `NULL`.
- * @return A scalar node, or `NULL` when `value` is `NULL` or allocation fails.
+ * @param name     Name bytes. Not `NUL`-terminated. Must not be `NULL`.
+ * @param name_len Length of `name` in bytes.
+ * @param expected Terminated literal to compare against. Must not be `NULL`.
+ * @return `true` when the two are byte-for-byte equal, `false` otherwise.
  */
-static struct Node* node_scalar(struct ProviderData* provider_data, const char* value)
-    __attribute__((nonnull(1)));
+static bool is_name_equal(const char* name, size_t name_len, const char* expected)
+    __attribute__((nonnull(1, 3)));
 
 /**
  * @brief Records the render's first failure diagnostic and marks the render as failed.
@@ -430,9 +428,9 @@ static void render_fail(struct ProviderData* provider_data, const char* fmt, ...
  * no-op and `mustache_compile` reports only that it failed, so the line and column are lost and the
  * user has to find a malformed tag by eye.
  *
- * mustache4c can report multiple errors for one template. One is the secondary
- * `MUSTACHE_ERR_SECTIONOPENERHERE` note for an unclosed section. `render_fail` keeps the first
- * message, which is the primary error.
+ * mustache4c can report several errors for one template, such as the secondary
+ * `MUSTACHE_ERR_SECTIONOPENERHERE` note locating the opener of an unclosed section. `render_fail`
+ * keeps the first message, which is the primary error.
  *
  * @param err_code    mustache4c `MUSTACHE_ERR_*` code. Unused, since `msg` already names the cause.
  * @param msg         Library message for `err_code`. Must not be `NULL`.
@@ -478,9 +476,9 @@ char* template_render_file(const char* templates_dir,
   // `context`.
   struct Arena scratch;
   arena_init(&scratch);
-  struct StringBuffer buf;
-  string_buffer_init(&buf);
-  struct Node node_root = {.kind = NODE_ROOT, .entry = NULL, .scalar = NULL};
+  struct StringBuffer buffer;
+  string_buffer_init(&buffer);
+  struct Node node_root = {.kind = NODE_ROOT};
   // Because this literal names only the non-zero values, initialization cannot accidentally omit a
   // new `ProviderData` field. `partial_count`, `expansion_count`, and `has_failed` start at zero.
   // The code assigns `partials` and `partial_names` when a partial compiles. It assigns
@@ -493,7 +491,7 @@ char* template_render_file(const char* templates_dir,
                                        .node_root = &node_root,
                                        .err = err,
                                        .err_len = err_len};
-  struct RenderOutput render_output = {.buffer = &buf, .provider_data = &provider_data};
+  struct RenderOutput render_output = {.buffer = &buffer, .provider_data = &provider_data};
 
   char* template_data = NULL;
   size_t template_len = 0;
@@ -538,10 +536,9 @@ char* template_render_file(const char* templates_dir,
     goto cleanup;
   }
   // A template that rendered nothing still yields an allocated, terminated buffer to steal.
-  rendered_html = string_buffer_steal(&buf);
+  rendered_html = string_buffer_steal(&buffer);
   if (rendered_html == NULL) {
     (void)error_report(err, err_len, "out of memory rendering template '%s'", template_name);
-    goto cleanup;
   }
 
 cleanup:
@@ -552,7 +549,7 @@ cleanup:
     mustache_release(templ);
   }
   free(template_data);
-  string_buffer_free(&buf);
+  string_buffer_free(&buffer);
   arena_free(&scratch);
   return rendered_html;
 }
@@ -772,8 +769,7 @@ static char* node_get_partial_path(struct ProviderData* provider_data,
   const int n = snprintf(formatted, sizeof(formatted), "partials/%s.html", name);
   if (n < 0 || (size_t)n >= sizeof(formatted)) {
     render_fail(provider_data,
-                "partial path exceeds max partial path length (%zu bytes) at %d "
-                "bytes: '%s'",
+                "partial path exceeds max partial path length (%zu bytes) at %d bytes: '%s'",
                 sizeof(formatted) - 1, n, name);
     return NULL;
   }
@@ -791,14 +787,6 @@ static char* node_get_partial_path(struct ProviderData* provider_data,
   return partial_path;
 }
 
-static bool is_name_equal(const char* name, size_t name_len, const char* expected) {
-  // The comparison must check the lengths first, and the `&&` short circuit guarantees it. `memcmp`
-  // may read all `name_len` bytes however early the first difference falls, so comparing without
-  // already knowing the lengths match reads past the end of `expected` whenever `name_len` is the
-  // longer. That is undefined behavior, not merely a wrong answer.
-  return strlen(expected) == name_len && memcmp(name, expected, name_len) == 0;
-}
-
 static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind kind) {
   // This allocates a fresh node per resolution, never a shared singleton, even for the kinds that
   // carry no per-instance state. `vendor/mustache4c/mustache.h` requires each node of the hierarchy
@@ -812,6 +800,23 @@ static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind
     return NULL;
   }
   node->kind = kind;
+  return node;
+}
+
+static struct Node* node_scalar(struct ProviderData* provider_data, const char* value) {
+  // An empty value is absent, not present-and-empty, so `{{#field}}` skips it and `{{^field}}`
+  // fires. mustache4c decides a section's truthiness by asking for child 0. A non-list node answers
+  // with itself, so returning a node here for `""` would make a section over an unset field always
+  // render. Interpolation is unchanged. `{{field}}` writes zero bytes whether the node is absent or
+  // holds an empty string. `resolve_entry_field` already applies this same rule to an empty tag
+  // list.
+  if (value == NULL || *value == '\0') {
+    return NULL;
+  }
+  struct Node* node = node_alloc(provider_data, NODE_SCALAR);
+  if (node != NULL) {
+    node->scalar = value;
+  }
   return node;
 }
 
@@ -876,21 +881,12 @@ static struct Node* resolve_entry_field(struct ProviderData* provider_data,
   return NULL;
 }
 
-static struct Node* node_scalar(struct ProviderData* provider_data, const char* value) {
-  // An empty value is absent, not present-and-empty, so `{{#field}}` skips it and `{{^field}}`
-  // fires. mustache4c decides a section's truthiness by asking for child 0. A non-list node answers
-  // with itself, so returning a node here for `""` would make a section over an unset optional
-  // field always render. Interpolation is unchanged. `{{field}}` writes zero bytes whether the node
-  // is absent or holds an empty string. `resolve_entry_field` already applies this same rule to an
-  // empty tag list.
-  if (value == NULL || *value == '\0') {
-    return NULL;
-  }
-  struct Node* node = node_alloc(provider_data, NODE_SCALAR);
-  if (node != NULL) {
-    node->scalar = value;
-  }
-  return node;
+static bool is_name_equal(const char* name, size_t name_len, const char* expected) {
+  // The comparison must check the lengths first, and the `&&` short circuit guarantees it. `memcmp`
+  // may read all `name_len` bytes however early the first difference falls, so comparing without
+  // already knowing the lengths match reads past the end of `expected` whenever `name_len` is the
+  // longer. That is undefined behavior, not merely a wrong answer.
+  return strlen(expected) == name_len && memcmp(name, expected, name_len) == 0;
 }
 
 static void render_fail(struct ProviderData* provider_data, const char* fmt, ...) {
@@ -910,7 +906,6 @@ static void record_parse_error(int err_code,
                                void* parser_data) {
   (void)err_code;
   struct ProviderData* provider_data = parser_data;
-
   render_fail(provider_data, "%s at line %u, column %u (in '%s')", msg, line, column,
               provider_data->template_name_compiling);
 }
