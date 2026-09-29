@@ -266,11 +266,11 @@ static void test_honors_configured_content_template(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content-entry.html",
-                                "<main>{{title}} {{{body}}}</main>\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content-entry.html",
+                                 "<main>{{title}} {{{body}}}</main>\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -317,14 +317,14 @@ static void test_writes_exactly_manifest_outputs(void) {
       "draft = true\n"
       "+++\n"
       "Draft body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/alpha.md", alpha) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/beta.md", beta) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/alpha.md", alpha) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/beta.md", beta) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   static const char* expected[] = {"public/alpha.html", "public/beta.html", "public/feed.xml",
                                    "public/index.html"};
@@ -372,10 +372,10 @@ static void test_mirrors_nested_source_tree(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/nested/post.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/nested/post.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -410,10 +410,10 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/post.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/post.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -454,10 +454,10 @@ static void test_honors_custom_permalink(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -496,11 +496,11 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "B body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/a/post.md", a) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/b/post.md", b) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a/post.md", a) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/b/post.md", b) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -538,10 +538,10 @@ static void test_honors_requested_worker_count(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
-             0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
+              0);
 
   const struct BuildOptions options = {.worker_count = 3, .is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
@@ -627,10 +627,10 @@ static void test_leaves_error_buffer_empty_on_success(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
-             0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
+              0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -695,9 +695,9 @@ static void test_rejects_unsafe_permalink(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -755,7 +755,7 @@ static void test_reports_absent_content_dir(void) {
       "author = \"Author\"\n"
       "aggregate_templates = []\n"
       "feed_templates = []\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -791,9 +791,9 @@ static void test_reports_unusable_output_dir(void) {
       "author = \"Author\"\n"
       "aggregate_templates = []\n"
       "feed_templates = []\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
   // `public` is the default `output_dir`, so a file there is what makes `fs_mkdir_p` fail.
-  TEST_CHECK(write_fixture_file(root_dir, "public", "not a directory") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "public", "not a directory") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -833,9 +833,9 @@ static void test_reports_unparsable_content(void) {
       "title = \"X\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", unterminated) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", unterminated) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -869,10 +869,10 @@ static void test_rejects_duplicate_output(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/index.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/index.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -911,8 +911,8 @@ static void test_reports_bad_template(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
 
   // No `templates/content.html` exists, so the page render fails for the entry. The diagnostic
   // names the failing entry and the specific file that could not be read, rather than a generic
@@ -963,9 +963,9 @@ static void test_reports_one_line_per_failing_entry(void) {
       "date = 2026-07-02T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", first) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/b.md", second) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", first) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", second) == 0);
 
   // No `templates/content.html`, so the page render fails for both entries.
   struct StringBuffer error_buffer;
@@ -1012,9 +1012,9 @@ static void test_reports_unwritable_output(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", entry) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", entry) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
   struct Arena arena;
   arena_init(&arena);
