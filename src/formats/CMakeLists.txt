@@ -9,7 +9,7 @@ target_sources(
 target_link_libraries(sosig_app PRIVATE sosig_vendor_md4c)
 
 if(SOSIG_BUILD_TESTING)
-  sosig_add_unit_test(html)
-  sosig_add_unit_test(markdown)
-  sosig_add_unit_test(toml)
+  foreach(module IN ITEMS html markdown toml)
+    sosig_add_unit_test(${module})
+  endforeach()
 endif()

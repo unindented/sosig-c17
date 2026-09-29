@@ -109,6 +109,11 @@ if(CMAKE_CROSSCOMPILING)
   set(sosig_cppcheck_command "")
 endif()
 
+# Production and test targets run cppcheck with the same arguments.
+set(sosig_cppcheck_property
+    "${sosig_cppcheck_command};--enable=warning,performance,portability;--std=${sosig_cppcheck_standard};--error-exitcode=1;--quiet"
+)
+
 function(sosig_enable_project_analysis target)
   if(sosig_clang_tidy_command)
     set_property(
@@ -118,21 +123,13 @@ function(sosig_enable_project_analysis target)
     )
   endif()
   if(sosig_cppcheck_command)
-    set_property(
-      TARGET ${target}
-      PROPERTY C_CPPCHECK
-               "${sosig_cppcheck_command};--enable=warning,performance,portability;--std=${sosig_cppcheck_standard};--error-exitcode=1;--quiet"
-    )
+    set_property(TARGET ${target} PROPERTY C_CPPCHECK "${sosig_cppcheck_property}")
   endif()
 endfunction()
 
 function(sosig_enable_test_analysis target)
   if(sosig_cppcheck_command)
-    set_property(
-      TARGET ${target}
-      PROPERTY C_CPPCHECK
-               "${sosig_cppcheck_command};--enable=warning,performance,portability;--std=${sosig_cppcheck_standard};--error-exitcode=1;--quiet"
-    )
+    set_property(TARGET ${target} PROPERTY C_CPPCHECK "${sosig_cppcheck_property}")
   endif()
 endfunction()
 
