@@ -43,6 +43,8 @@ struct TemplateContext {
  * @param template_name Safe relative template name within `templates_dir`. Must not be `NULL`.
  * @param context       Borrowed data visible to the template during this render. Must not be
  *                      `NULL`.
+ * @param html_len_out  Receives the length of the returned HTML in bytes, excluding its
+ *                      terminator, on success. May be `NULL` when the caller does not need it.
  * @param err           Buffer receiving a diagnostic that names the specific failure: an unsafe
  *                      name, an unreadable template or partial, or an exceeded limit. May be `NULL`
  *                      only when `err_len` is 0.
@@ -52,6 +54,7 @@ struct TemplateContext {
 char* template_render_file(const char* templates_dir,
                            const char* template_name,
                            const struct TemplateContext* context,
+                           size_t* html_len_out,
                            char* err,
                            size_t err_len) __attribute__((nonnull(1, 2, 3)));
 
@@ -67,6 +70,8 @@ char* template_render_file(const char* templates_dir,
  *                       `NULL`.
  * @param output_len_max Largest rendered output accepted, in bytes. A render whose accumulated
  *                       output passes it fails with a diagnostic naming it.
+ * @param html_len_out   Receives the length of the returned HTML, as for `template_render_file`.
+ *                       May be `NULL`.
  * @param err            Buffer receiving a diagnostic, as for `template_render_file`. May be `NULL`
  *                       only when `err_len` is 0.
  * @param err_len        Size of `err` in bytes.
@@ -76,6 +81,7 @@ char* template_render_file_limited(const char* templates_dir,
                                    const char* template_name,
                                    const struct TemplateContext* context,
                                    size_t output_len_max,
+                                   size_t* html_len_out,
                                    char* err,
                                    size_t err_len) __attribute__((nonnull(1, 2, 3)));
 

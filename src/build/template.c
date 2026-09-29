@@ -481,16 +481,18 @@ static const MUSTACHE_PARSER parser = {record_parse_error};
 char* template_render_file(const char* templates_dir,
                            const char* template_name,
                            const struct TemplateContext* context,
+                           size_t* html_len_out,
                            char* err,
                            size_t err_len) {
   return template_render_file_limited(templates_dir, template_name, context,
-                                      (size_t)RENDER_OUTPUT_LEN_MAX, err, err_len);
+                                      (size_t)RENDER_OUTPUT_LEN_MAX, html_len_out, err, err_len);
 }
 
 char* template_render_file_limited(const char* templates_dir,
                                    const char* template_name,
                                    const struct TemplateContext* context,
                                    size_t output_len_max,
+                                   size_t* html_len_out,
                                    char* err,
                                    size_t err_len) {
   if (!path_is_safe_relative(template_name)) {
@@ -526,6 +528,7 @@ char* template_render_file_limited(const char* templates_dir,
   size_t template_len = 0;
   MUSTACHE_TEMPLATE* templ = NULL;
   char* rendered_html = NULL;
+  size_t rendered_len = 0;
 
   char* template_path = path_join(templates_dir, template_name, &scratch);
   if (template_path == NULL) {
@@ -566,9 +569,12 @@ char* template_render_file_limited(const char* templates_dir,
     goto cleanup;
   }
   // A template that rendered nothing still yields an allocated, terminated buffer to steal.
+  rendered_len = buffer.len;
   rendered_html = string_buffer_steal(&buffer);
   if (rendered_html == NULL) {
     (void)error_report(err, err_len, "out of memory rendering template '%s'", template_name);
+  } else if (html_len_out != NULL) {
+    *html_len_out = rendered_len;
   }
 
 cleanup:

@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "build/manifest_builder.h"
 #include "build/template.h"
@@ -99,7 +98,9 @@ static int write_rendered_template(const char* templates_dir,
 
   int rc = -1;
   char* output_path = NULL;
-  char* rendered_html = template_render_file(templates_dir, template_name, context, err, err_len);
+  size_t rendered_html_len = 0;
+  char* rendered_html =
+      template_render_file(templates_dir, template_name, context, &rendered_html_len, err, err_len);
   if (rendered_html == NULL) {
     goto cleanup;
   }
@@ -110,8 +111,7 @@ static int write_rendered_template(const char* templates_dir,
     goto cleanup;
   }
   char reason[FS_REASON_SIZE];
-  if (fs_write_file(output_path, rendered_html, strlen(rendered_html), reason, sizeof(reason)) !=
-      0) {
+  if (fs_write_file(output_path, rendered_html, rendered_html_len, reason, sizeof(reason)) != 0) {
     (void)error_report(err, err_len, "failed to write template output: %s ('%s')", reason,
                        output_path);
     goto cleanup;
