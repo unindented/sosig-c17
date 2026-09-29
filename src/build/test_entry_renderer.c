@@ -155,6 +155,35 @@ static int render_sources(const char* root_dir,
 }
 
 /**
+ * @brief Reads a page the render pass wrote below a fixture root.
+ *
+ * Pages in these tests are short, so a fixed-size read holds any of them whole.
+ *
+ * @param root_dir      Fixture root the output path is relative to.
+ * @param relative_path Output path relative to `root_dir`.
+ * @return Terminated file contents the caller must `free`, or `NULL` when the file cannot be read.
+ */
+static char* read_output(const char* root_dir, const char* relative_path) {
+  enum { OUTPUT_LEN_MAX = 4096 };
+  struct Arena arena;
+  arena_init(&arena);
+  const char* path = path_join(root_dir, relative_path, &arena);
+  FILE* fp = path != NULL ? fopen(path, "rb") : NULL;
+  arena_free(&arena);
+  if (fp == NULL) {
+    return NULL;
+  }
+  char* data = calloc(OUTPUT_LEN_MAX + 1, 1);
+  const size_t data_len = data != NULL ? fread(data, 1, OUTPUT_LEN_MAX, fp) : 0;
+  if (data != NULL && (ferror(fp) != 0 || data_len == OUTPUT_LEN_MAX)) {
+    free(data);
+    data = NULL;
+  }
+  (void)fclose(fp);
+  return data;
+}
+
+/**
  * @brief Runs the entry-render pass while capturing standard error.
  *
  * Restores standard error before returning.
@@ -276,9 +305,11 @@ static void test_renders_entry_metadata_and_html(void) {
       TEST_CHECK(strstr(entry->body_html, "<p>Body</p>") != NULL);
       TEST_CHECK(strcmp(entry->url_path, "/hello.html") == 0);
       TEST_CHECK(strcmp(entry->output_path, "public/hello.html") == 0);
-      TEST_CHECK(strstr(render_jobs.items[0].rendered_html, "<main>Hello <p>Body</p>") != NULL);
     }
   }
+  char* page = read_output(root_dir, "public/hello.html");
+  TEST_CHECK(page != NULL && strstr(page, "<main>Hello <p>Body</p>") != NULL);
+  free(page);
 
   render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
@@ -287,7 +318,7 @@ static void test_renders_entry_metadata_and_html(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A draft source is parsed but leaves an empty result slot with no rendered HTML.
+// A draft source is parsed but leaves an empty result slot and writes no page.
 static void test_skips_draft_entry(void) {
   char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -325,8 +356,10 @@ static void test_skips_draft_entry(void) {
   TEST_CHECK(error_buffer.len == 0);
   if (render_jobs.items != NULL) {
     TEST_CHECK(render_jobs.items[0].entry == NULL);
-    TEST_CHECK(render_jobs.items[0].rendered_html == NULL);
   }
+  char* page = read_output(root_dir, "public/hello.html");
+  TEST_CHECK(page == NULL);
+  free(page);
 
   render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);

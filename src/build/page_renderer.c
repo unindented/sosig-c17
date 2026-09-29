@@ -2,12 +2,15 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "build/render_job.h"
 #include "build/template.h"
 #include "core/error.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
+#include "runtime/fs.h"
 
 /**
  * Worker context shared by all content entry page render jobs. Every field is read-only to a job
@@ -35,14 +38,14 @@ struct ContentEntryPageContext {
 };
 
 /**
- * @brief Renders one parsed content entry's content template as a worker-pool job.
+ * @brief Renders one parsed content entry's content template and writes it as a worker-pool job.
  *
- * Transfers the rendered HTML to the matching result slot on success. A slot left empty by a draft
- * or by a source that was never parsed is skipped.
+ * Frees the rendered HTML once it is written. A slot left empty by a draft or by a source that was
+ * never parsed is skipped.
  *
  * @param index    Result slot index this job renders.
  * @param userdata Pointer to the shared `struct ContentEntryPageContext`. Must not be `NULL`.
- * @return `0` on success or a skipped slot, or `-1` on a render failure.
+ * @return `0` on success or a skipped slot, or `-1` on a render or write failure.
  */
 static int render_content_page_job(size_t index, void* userdata) __attribute__((nonnull(2)));
 
@@ -59,6 +62,22 @@ static char* render_content_page_template(const char* templates_dir,
                                           const struct TemplateContext* context,
                                           struct RenderJob* result)
     __attribute__((nonnull(1, 2, 3)));
+
+/**
+ * @brief Writes one content entry's rendered HTML to its output path.
+ *
+ * Runs on a worker thread. `fs_write_file` creates missing parent directories, and a sibling job
+ * creating the same parent at the same moment is not a failure, because it treats `EEXIST` as
+ * success.
+ *
+ * @param entry         Entry whose `output_path` receives the page. Must not be `NULL`.
+ * @param rendered_html Terminated page HTML to write. Must not be `NULL`.
+ * @param result        Result slot that receives an error message on failure. Must not be `NULL`.
+ * @return `0` on success, or `-1` on a write failure.
+ */
+static int render_content_page_write(const struct ContentEntry* entry,
+                                     const char* rendered_html,
+                                     struct RenderJob* result) __attribute__((nonnull(1, 2, 3)));
 
 int page_renderer_render_pages(struct RenderJobSet* render_jobs,
                                const struct SiteConfig* site_config,
@@ -101,9 +120,11 @@ static int render_content_page_job(size_t index, void* userdata) {
     // behavior. The copy lives on this job's stack, so no other job can observe a change to it.
     struct TemplateContext context = page_context->base_context;
     context.content_entry_current = result->entry;
-    result->rendered_html =
+    char* rendered_html =
         render_content_page_template(page_context->templates_dir, &context, result);
-    rc = result->rendered_html != NULL ? 0 : -1;
+    rc = rendered_html != NULL ? render_content_page_write(result->entry, rendered_html, result)
+                               : -1;
+    free(rendered_html);
   }
   render_job_progress_dot(page_context->is_verbose);
   return rc;
@@ -126,4 +147,17 @@ static char* render_content_page_template(const char* templates_dir,
     render_job_set_error(result, "%s (while rendering '%s')", error_message, entry->source_path);
   }
   return rendered_html;
+}
+
+static int render_content_page_write(const struct ContentEntry* entry,
+                                     const char* rendered_html,
+                                     struct RenderJob* result) {
+  char reason[FS_REASON_SIZE];
+  if (fs_write_file(entry->output_path, rendered_html, strlen(rendered_html), reason,
+                    sizeof(reason)) != 0) {
+    render_job_set_error(result, "failed to write output: %s (for '%s', to '%s')", reason,
+                         entry->source_path, entry->output_path);
+    return -1;
+  }
+  return 0;
 }

@@ -11,12 +11,12 @@ struct ContentEntry;
 struct StringBuffer;
 
 /**
- * Result slot for one content entry render job, shared by the two render passes and by the writer.
+ * Result slot for one content entry render job, shared by the two render passes.
  *
  * `entry_renderer_render_entries` allocates the slots and fills each slot's `entry`,
- * `page_renderer_render_pages` reads that `entry` and writes its `rendered_html`, and either pass
- * records `error_message` on failure. The slot is the sole coupling between the passes: neither
- * module needs the other's header, only this one.
+ * `page_renderer_render_pages` reads that `entry` and writes its page, and either pass records
+ * `error_message` on failure. The slot is the sole coupling between the passes: neither module
+ * needs the other's header, only this one.
  */
 struct RenderJob {
   /**
@@ -24,12 +24,6 @@ struct RenderJob {
    * with the slot by `render_job_set_free`.
    */
   struct ContentEntry* entry;
-
-  /**
-   * Rendered content entry HTML owned until written to disk, or `NULL` when unset. Released with
-   * the slot by `render_job_set_free` unless freed and reset to `NULL` earlier.
-   */
-  char* rendered_html;
 
   /** Render job error reported after the workers finish. */
   char error_message[ERROR_MESSAGE_SIZE];
@@ -102,7 +96,7 @@ void render_job_set_error(struct RenderJob* result, const char* fmt, ...)
 void render_job_progress_dot(bool is_verbose);
 
 /**
- * @brief Releases every slot's entry and rendered HTML, and the slot array itself.
+ * @brief Releases every slot's entry and the slot array itself.
  *
  * @param render_jobs Result slot set to release. Must not be `NULL`.
  */

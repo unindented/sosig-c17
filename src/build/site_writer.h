@@ -4,31 +4,12 @@
 #include <stddef.h>
 
 struct ContentEntry;
-struct RenderJobSet;
 struct SiteConfig;
 
-// These are declared in the order `cmd_build` runs them, which keeps the three
-// `site_writer_write_*` names adjacent. The manifest pass in `manifest_builder` claims every
-// intended output path before this module writes anything. Ordering the entries and deriving
-// `site.updated` happen earlier still, in `content_entry` (`content_entry_sort`,
-// `content_entry_latest_date`).
-
-/**
- * @brief Writes each rendered content entry output to its configured output path.
- *
- * Call this only once `page_renderer_render_pages` returns `0`. Every slot with a non-`NULL`
- * `entry` must also have its `rendered_html` set, which that return guarantees. A slot with an
- * entry but no rendered HTML is a caller error, not a skipped entry.
- *
- * @param render_jobs Result slots holding rendered entries and HTML. Its `items` may be `NULL`
- *                    only when its `count` is 0. Must not be `NULL`.
- * @param err         Destination buffer for a failure diagnostic.
- * @param err_len     Size of `err` in bytes.
- * @return `0` on success, or `-1` on the first write failure.
- */
-int site_writer_write_content_entries(const struct RenderJobSet* render_jobs,
-                                      char* err,
-                                      size_t err_len) __attribute__((nonnull(1)));
+// These are declared in the order `cmd_build` runs them. The manifest pass in `manifest_builder`
+// claims every intended output path before this module writes anything. Content pages are written
+// earlier, by `page_renderer_render_pages`. Ordering the entries and deriving `site.updated` happen
+// earlier still, in `content_entry` (`content_entry_sort`, `content_entry_latest_date`).
 
 /**
  * @brief Renders and writes configured aggregate templates with all non-draft entries visible.

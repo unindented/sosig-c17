@@ -305,7 +305,6 @@ static void test_build_command_receives_parsed_options(void) {
                     "building output manifest\n"
                     "rendering content with 3 workers\n"
                     ".\n"
-                    "writing content pages\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
                     "build complete\n") == 0);

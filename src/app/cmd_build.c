@@ -141,10 +141,10 @@ static int populate_output_manifest(struct BuildState* state, char* err, size_t 
     __attribute__((nonnull(1)));
 
 /**
- * @brief Renders every content entry's content template, dispatching jobs across worker threads.
+ * @brief Renders and writes every content entry's page, dispatching jobs across worker threads.
  *
  * Runs after the entries are collected and sorted, so a content template sees the whole entry set
- * and the site's last-updated timestamp.
+ * and the site's last-updated timestamp. Runs after the manifest, so no two jobs write one file.
  *
  * @param state     Build state holding the sorted entries and result slots. Must not be `NULL`.
  * @param error_out Growable buffer that receives the collected render diagnostics. Must not be
@@ -155,26 +155,15 @@ static int render_content_pages(struct BuildState* state, struct StringBuffer* e
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Writes content entry outputs, then configured template outputs.
+ * @brief Renders and writes the configured aggregate and feed templates.
  *
- * @param state   Build state holding rendered results and collected entries. Must not be `NULL`.
+ * @param state   Build state holding the collected entries. Must not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
  * @return `0` on success, or `-1` on a write or render failure.
  */
 static int write_generated_site(struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
-
-/**
- * @brief Frees rendered content entry HTML buffers once they have been written.
- *
- * @param render_jobs Result set holding rendered HTML. Each slot's `rendered_html` is freed and
- *                    reset to `NULL`, so `build_state_free`, which frees the same field on every
- *                    path, cannot double-free it. Its `items` may be `NULL` when its `count` is 0,
- *                    which an empty content directory produces through a zero-sized `calloc`. The
- *                    count then bounds the loop away from that `NULL`. Must not be `NULL`.
- */
-static void free_rendered_html(const struct RenderJobSet* render_jobs) __attribute__((nonnull(1)));
 
 enum ExitCode cmd_build_run(const struct BuildOptions* options) {
   struct StringBuffer error_buffer;
@@ -375,12 +364,6 @@ static int render_content_pages(struct BuildState* state, struct StringBuffer* e
 }
 
 static int write_generated_site(struct BuildState* state, char* err, size_t err_len) {
-  build_verbose(state, "writing content pages");
-  if (site_writer_write_content_entries(&state->render_jobs, err, err_len) != 0) {
-    return -1;
-  }
-  free_rendered_html(&state->render_jobs);
-
   build_verbose(state, "rendering aggregate templates");
   if (site_writer_write_aggregates(
           &state->site_config, (const struct ContentEntry* const*)state->content_entries,
@@ -391,14 +374,4 @@ static int write_generated_site(struct BuildState* state, char* err, size_t err_
   return site_writer_write_feeds(&state->site_config,
                                  (const struct ContentEntry* const*)state->content_entries,
                                  state->content_entry_count, state->site_updated, err, err_len);
-}
-
-// This frees the buffers eagerly after writes to reduce peak retained memory during the build. It
-// resets each slot to `NULL`, so `build_state_free`, which frees the same field on every path,
-// stays correct. Without the reset this eager free turns that one into a double free.
-static void free_rendered_html(const struct RenderJobSet* render_jobs) {
-  for (size_t i = 0; i < render_jobs->count; i++) {
-    free(render_jobs->items[i].rendered_html);
-    render_jobs->items[i].rendered_html = NULL;
-  }
 }

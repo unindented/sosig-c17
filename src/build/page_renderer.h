@@ -10,25 +10,24 @@ struct SiteConfig;
 struct StringBuffer;
 
 /**
- * @brief Renders each parsed content entry through its content template.
+ * @brief Renders each parsed content entry through its content template and writes its page.
  *
  * This is the second of the two render passes. It runs only after `entry_renderer_render_entries`
  * succeeds and the entries are collected and sorted. Every entry's template sees the whole sorted
  * entry set and the site's last-updated timestamp, so a content template resolves `site.updated`
  * and `{{#content_entries}}` exactly as an aggregate template does.
  *
- * Fills the `rendered_html` of each result slot holding an entry and leaves draft slots untouched.
- * Each finished job prints a progress dot when `is_verbose`. Each failing job's buffered diagnostic
- * goes to `error_out`, one per line.
+ * Each job writes its entry's page to the entry's `output_path` and frees the HTML before the next
+ * job starts, so at most one page per worker is held in memory. Draft slots are skipped. A failed
+ * write is that entry's diagnostic, like a failed render, and leaves the other pages written. Each
+ * finished job prints a progress dot when `is_verbose`. Each failing job's buffered diagnostic goes
+ * to `error_out`, one per line.
  *
- * The result slots lead as this pass's subject rather than trailing as an output. Unlike
- * `entry_renderer_render_entries`, which fills each slot exactly once, this pass reads the `entry`
- * out of a slot and writes its `rendered_html` back, so the set is an in/out subject. That
- * asymmetry is why only the other function's parameter carries `_out`.
+ * Call this only after `manifest_builder_populate` accepts every output path. Jobs write
+ * concurrently, and the manifest is what guarantees that no two of them target the same file.
  *
- * @param render_jobs         Result set filled by `entry_renderer_render_entries`. Each slot
- *                            holding an entry receives its rendered HTML. Its `items` may be `NULL`
- *                            only when its `count` is 0. Must not be `NULL`.
+ * @param render_jobs         Result set filled by `entry_renderer_render_entries`. A failing
+ *                            slot receives its diagnostic. Must not be `NULL`.
  * @param site_config         Site configuration supplying `templates_dir` and the default content
  *                            template. Must not be `NULL`.
  * @param content_entries     Non-draft entries, sorted newest-first, visible to every page. May be
@@ -40,8 +39,8 @@ struct StringBuffer;
  * @param is_verbose          Whether each finished job prints a progress dot to `stderr`.
  * @param error_out           Growable buffer that receives the collected render diagnostics. Must
  *                            not be `NULL`.
- * @return `0` when every job succeeded, or `-1` when a render job failed, when the worker pool
- *         could not start, or when a diagnostic could not be buffered.
+ * @return `0` when every job succeeded, or `-1` when a page failed to render or write, when the
+ *         worker pool could not start, or when a diagnostic could not be buffered.
  */
 int page_renderer_render_pages(struct RenderJobSet* render_jobs,
                                const struct SiteConfig* site_config,

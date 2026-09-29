@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "build/render_job.h"
 #include "build/template.h"
 #include "core/error.h"
 #include "core/path.h"
@@ -13,7 +12,7 @@
 #include "runtime/fs.h"
 #include "shared/arena.h"
 
-// This module's three exported writers are exercised end-to-end by CTest's golden test suite, which
+// This module's two exported writers are exercised end-to-end by CTest's golden test suite, which
 // builds every fixture site and compares each result with its `tests/expected/<site>` tree, so
 // there is no `src/build/test_site_writer.c`. Collision checks live in `manifest_builder`,
 // unit-tested in `src/build/test_manifest_builder.c`.
@@ -40,29 +39,6 @@ static int write_rendered_template(const char* templates_dir,
                                    const struct TemplateContext* context,
                                    char* err,
                                    size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
-
-int site_writer_write_content_entries(const struct RenderJobSet* render_jobs,
-                                      char* err,
-                                      size_t err_len) {
-  for (size_t i = 0; i < render_jobs->count; i++) {
-    const struct ContentEntry* entry = render_jobs->items[i].entry;
-    // A `NULL` entry is a draft or an unparsed slot, and it is the only slot this pass skips. This
-    // deliberately does not check `rendered_html` alongside it. The header's precondition is that
-    // `page_renderer_render_pages` returned `0`, which guarantees every slot holding an entry also
-    // holds its rendered HTML. Making the two checks symmetric would turn a broken invariant into a
-    // silently missing page, which is the one outcome the header says must not happen.
-    if (entry == NULL) {
-      continue;
-    }
-    char reason[FS_REASON_SIZE];
-    if (fs_write_file(entry->output_path, render_jobs->items[i].rendered_html,
-                      strlen(render_jobs->items[i].rendered_html), reason, sizeof(reason)) != 0) {
-      return error_report(err, err_len, "failed to write output: %s (for '%s', to '%s')", reason,
-                          entry->source_path, entry->output_path);
-    }
-  }
-  return 0;
-}
 
 int site_writer_write_aggregates(const struct SiteConfig* site_config,
                                  const struct ContentEntry* const* content_entries,

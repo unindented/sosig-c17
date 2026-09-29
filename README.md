@@ -63,7 +63,7 @@ Before the tool renders page templates or writes files, it rejects an output pla
 - An output is at or below `content_dir` or `templates_dir`, even if no file exists at that path yet. Otherwise the next build would read a generated `.md` file as a content source, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
 - An output overwrites the config, a content source, or any file below `templates_dir`, including partials.
 
-The build does not remove stale files from an earlier build. If the write phase fails, some outputs can be new while others remain unchanged.
+The build does not remove stale files from an earlier build. If rendering or writing fails partway, some outputs can be new while others remain unchanged.
 
 ```toml
 # Required absolute site URL for feed links. It must be an `http://` or `https://` URL with a host.

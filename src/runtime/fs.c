@@ -673,10 +673,10 @@ static int ensure_parent_dir(const char* file_path, char* reason, size_t reason_
 
 static int ensure_dir(const char* dir_path, char* reason, size_t reason_len) {
   // Create first and treat `EEXIST` as success, rather than testing with `stat` and then creating.
-  // Between a test and the create another process can win the race, and `fs_mkdir_p` runs this once
-  // per path component. Mode `0775` is a ceiling the process umask trims, not the mode the
-  // directory ends up with. The `stat` below runs only once `EEXIST` says something is already
-  // there, and rejects it when it is not a directory.
+  // Between a test and the create another process or a concurrent worker thread writing a sibling
+  // output can win the race, and `fs_mkdir_p` runs this once per path component. Mode `0775` is a
+  // ceiling the process umask trims, not the mode the directory ends up with. The `stat` below runs
+  // only once `EEXIST` says something is already there, and rejects it when it is not a directory.
   if (mkdir(dir_path, 0775) == 0) {
     return 0;
   }

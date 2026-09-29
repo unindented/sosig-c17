@@ -563,7 +563,6 @@ static void test_honors_requested_worker_count(void) {
                               "building output manifest\n"
                               "rendering content with %d workers\n"
                               ".\n"
-                              "writing content pages\n"
                               "rendering aggregate templates\n"
                               "rendering feed templates\n"
                               "build complete\n",
@@ -588,7 +587,6 @@ static void test_honors_requested_worker_count(void) {
                           "building output manifest\n"
                           "rendering content with %d workers\n"
                           ".\n"
-                          "writing content pages\n"
                           "rendering aggregate templates\n"
                           "rendering feed templates\n"
                           "build complete\n",
@@ -993,10 +991,10 @@ static void test_reports_one_line_per_failing_entry(void) {
   remove_fixture_tree(root_dir);
 }
 
-// An output path that cannot be opened as a file fails the build at the write phase, after every
-// entry has rendered successfully. That is the last of `cmd_build_execute`'s phase arms and the
-// only one reached with a complete set of rendered pages in hand, so a write failure reported as
-// success would otherwise pass the suite with the pages silently missing.
+// An output path that cannot be opened as a file fails the build at the page phase, where each job
+// writes the page it rendered. The failure is that entry's own diagnostic, so the other entry's
+// page is still written. A write failure reported as success would otherwise pass the suite with
+// the page silently missing.
 static void test_reports_unwritable_output(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -1018,6 +1016,7 @@ static void test_reports_unwritable_output(void) {
       "Body\n";
   TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", entry) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", entry) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
   struct Arena arena;
@@ -1044,6 +1043,11 @@ static void test_reports_unwritable_output(void) {
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   string_buffer_free(&error_buffer);
   arena_free(&arena);
+  char* generated = NULL;
+  size_t generated_len = 0;
+  TEST_CHECK(read_fixture_file(root_dir, "public/b.html", &generated, &generated_len) == 0);
+  TEST_CHECK(generated != NULL && strcmp(generated, "<p>Body</p>\n\n") == 0);
+  free(generated);
 
   remove_fixture_tree(root_dir);
 }
