@@ -486,7 +486,7 @@ static int frontmatter_parse_metadata_slug(struct ContentEntry* entry,
                     ? NULL
                     : text_slugify(slug_source, strlen(slug_source), &entry->arena, &slug_len);
   if (entry->slug == NULL) {
-    return error_report(err, err_len, "out of memory deriving slug for '%s'", source_path);
+    return error_report(err, err_len, "out of memory deriving slug");
   }
   if (slug_len > SLUG_LEN_MAX) {
     // The wrapping caller appends the file, so naming it here too would print the path twice.
