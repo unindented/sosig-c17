@@ -38,8 +38,8 @@ bool text_is_safe_identifier(const char* name) {
 char* text_slugify(const char* text, size_t text_len, struct Arena* arena, size_t* slug_len_out) {
   // This decides the fallback before allocating. A text with no alphanumeric and no non-ASCII byte
   // slugifies to nothing, and taking the fallback after allocating the `2n + 1` buffer would
-  // abandon it. An arena never frees, so a long title that slugifies to nothing would cost twice
-  // its length for the rest of the build.
+  // abandon it. An arena never frees, so a long name that slugifies to nothing would cost twice its
+  // length for the rest of the build.
   bool has_slug_byte = false;
   for (size_t i = 0; i < text_len && !has_slug_byte; i++) {
     const unsigned char c = (unsigned char)text[i];

@@ -69,8 +69,8 @@ static int64_t days_from_civil(int year, unsigned month, unsigned day);
  * @param fraction_usec Microseconds in the range `0` to `999999`.
  * @param text_out      Destination buffer that receives the terminated suffix. Must hold at least
  *                      one byte: the zero-`fraction_usec` path writes the terminator without
- *                      consulting `text_out_len`, so a smaller buffer is a write past the
- * end rather than a reported truncation. Must not be `NULL`.
+ *                      consulting `text_out_len`, so a smaller buffer is a write past the end
+ *                      rather than a reported truncation. Must not be `NULL`.
  * @param text_out_len  Size of `text_out` in bytes.
  * @return `0` on success, or `-1` when the `.uuuuuu` suffix was truncated. The zero-`fraction_usec`
  *         path cannot truncate, and cannot detect a buffer too small.
@@ -85,8 +85,8 @@ static int toml_datum_format_rfc3339_fraction(int fraction_usec,
  * @param timezone_minutes Offset from UTC in minutes. `0` yields `Z`.
  * @param text_out         Destination buffer that receives the terminated suffix. Must hold at
  *                         least two bytes: the `Z` path writes both without consulting
- *                         `text_out_len`, so a smaller buffer is a write past the end
- * rather than a reported truncation. Must not be `NULL`.
+ *                         `text_out_len`, so a smaller buffer is a write past the end rather than a
+ *                         reported truncation. Must not be `NULL`.
  * @param text_out_len     Size of `text_out` in bytes.
  * @return `0` on success, or `-1` when the `±hh:mm` form was truncated. The `Z` path cannot
  *         truncate, and cannot detect a buffer too small.

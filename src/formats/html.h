@@ -18,8 +18,8 @@ struct StringBuffer;
  * - a quoted attribute value in HTML or XML, with either quote style
  *
  * They are not sufficient anywhere else. Do not place the result in:
- * - an unquoted attribute value (whitespace, `=` and a backtick pass through, so the
- * value can end early and inject an attribute)
+ * - an unquoted attribute value (whitespace, `=` and a backtick pass through, so the value can end
+ *   early and inject an attribute)
  * - a raw-text element such as `<script>` or `<style>` (character references are not decoded there,
  *   so escaping corrupts the text instead of protecting it)
  * - a URL-valued attribute such as `href` (a `javascript:` scheme survives escaping untouched)

@@ -26,11 +26,10 @@ static void test_html_escape_copies_plain_text(void) {
 }
 
 // Every byte outside the five-entity set is copied verbatim, including bytes above 0x7F and control
-// bytes XML forbids. Nothing else in the suite feeds this function a non-ASCII byte, since the one
-// non-ASCII byte in the fixtures is literal template text, which reaches the verbatim output
-// callback instead. This test checks the signedness of the `char` read by the escape switch. A
-// plausible rewrite of that switch into a 256-entry table indexed by the byte would read out of
-// bounds on the first accented character in a title.
+// bytes XML forbids. The golden fixtures are not relied on to feed this function a non-ASCII byte,
+// so this test is what checks the signedness of the `char` read by the escape switch. A plausible
+// rewrite of that switch into a 256-entry table indexed by the byte would read out of bounds on the
+// first accented character in an interpolated value.
 static void test_html_escape_copies_high_and_control_bytes_verbatim(void) {
   struct StringBuffer buf;
   string_buffer_init(&buf);

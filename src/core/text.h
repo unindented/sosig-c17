@@ -38,10 +38,10 @@ bool text_is_safe_identifier(const char* name);
  * Takes a length so a caller can slugify a borrowed slice of a larger buffer, such as one path
  * segment, without copying it out first. The returned slug is a terminated owned string either way.
  *
- * Reports the slug's length rather than leaving the caller to recover it with `strlen`. Both
- * callers need it: one to check it against `SLUG_LEN_MAX`, one to size the buffer several slugs are
- * joined into. This function already knows it exactly, so handing it back keeps every caller
- * reading that length instead of a second derivation that has to agree with it.
+ * Reports the slug's length rather than leaving the caller to recover it with `strlen`. This
+ * function already knows it exactly, so handing it back lets a caller that checks it against a
+ * limit or sizes a joined buffer from it read that length instead of a second derivation that has
+ * to agree with it.
  *
  * @param text         Source bytes to slugify. Must hold at least `text_len` bytes. Must not be
  *                     `NULL`.

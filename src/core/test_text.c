@@ -36,30 +36,30 @@ static void test_strdup_yields_independent_copy(void) {
 
 // `text_is_safe_identifier` accepts only the narrow alphabet used for template partial names, its
 // one caller. Each disallowed class gets its own assertion rather than one input carrying several.
-// A single `"../content_entry"` passes as long as *either* `.` or `/` is rejected, so it cannot say
+// A single `"../partial"` passes as long as *either* `.` or `/` is rejected, so it cannot say
 // which rule fired. A regression admitting just one of them would keep it green. This predicate is
 // the only guard on a partial name before the template engine composes it into
 // `<templates_dir>/partials/<name>.html`, and mustache4c's own tag validation rejects whitespace
 // and `..` but not `/`. The high byte pins the locale-independence guarantee `core/ascii.h` exists
 // for.
 static void test_safe_identifier_accepts_narrow_alphabet(void) {
-  TEST_CHECK(text_is_safe_identifier("content_entry_layout-1"));
+  TEST_CHECK(text_is_safe_identifier("partial_layout-1"));
   TEST_CHECK(!text_is_safe_identifier("a/b"));
   TEST_CHECK(!text_is_safe_identifier("a.b"));
   TEST_CHECK(!text_is_safe_identifier("a b"));
   TEST_CHECK(!text_is_safe_identifier("caf\xC3\xA9"));
-  TEST_CHECK(!text_is_safe_identifier("../content_entry"));
+  TEST_CHECK(!text_is_safe_identifier("../partial"));
   TEST_CHECK(!text_is_safe_identifier(""));
   TEST_CHECK(!text_is_safe_identifier(NULL));
 }
 
-// A run of ASCII punctuation and space collapses to one dash and uppercase folds down, so
-// `Hello, C17 World!` yields a single dash between words rather than one per stripped byte. Text
-// with nothing usable in it takes `SLUG_FALLBACK` instead of yielding an empty slug.
+// A run of ASCII punctuation, underscores, and spaces collapses to one dash and uppercase folds
+// down, so `Hello, C17_World!` yields a single dash between words rather than one per stripped
+// byte. Text with nothing usable in it takes `SLUG_FALLBACK` instead of yielding an empty slug.
 static void test_slugify_normalizes_and_defaults(void) {
   struct Arena arena;
   arena_init(&arena);
-  char* slug = slugify("Hello, C17 World!", &arena);
+  char* slug = slugify("Hello, C17_World!", &arena);
   TEST_ASSERT(slug != NULL);
   TEST_CHECK(strcmp(slug, "hello-c17-world") == 0);
   TEST_CHECK(strcmp(slugify("!!!", &arena), "untitled") == 0);
@@ -96,10 +96,11 @@ static void test_slugify_honors_length(void) {
   struct Arena arena;
   arena_init(&arena);
 
-  const char* path = "notes/deep/post.md";
+  const char* path = "Blog_Notes/Deep/post.md";
   size_t slug_len = 0;
-  TEST_CHECK(strcmp(text_slugify(path, strlen("notes"), &arena, &slug_len), "notes") == 0);
-  TEST_CHECK(strcmp(text_slugify(path + 6, strlen("deep"), &arena, &slug_len), "deep") == 0);
+  TEST_CHECK(strcmp(text_slugify(path, strlen("Blog_Notes"), &arena, &slug_len), "blog-notes") ==
+             0);
+  TEST_CHECK(strcmp(text_slugify(path + 11, strlen("Deep"), &arena, &slug_len), "deep") == 0);
   // A zero-length slice has no usable characters, so it takes the fallback.
   TEST_CHECK(strcmp(text_slugify(path, 0, &arena, &slug_len), "untitled") == 0);
 
@@ -107,8 +108,8 @@ static void test_slugify_honors_length(void) {
 }
 
 // The reported length matches the slug, on the folding path where it is not the input's length and
-// on the fallback path that returns a literal. Callers size a buffer from this rather than
-// rescanning the slug, so a wrong value is an under-allocation rather than a cosmetic error.
+// on the fallback path that copies `SLUG_FALLBACK`. A caller that sizes a buffer from this rather
+// than rescanning the slug would under-allocate on a wrong value, so it is not a cosmetic error.
 static void test_slugify_reports_length(void) {
   struct Arena arena;
   arena_init(&arena);
@@ -124,8 +125,8 @@ static void test_slugify_reports_length(void) {
   TEST_CHECK(slug_len == strlen(slug));
   TEST_CHECK(slug_len > strlen("Café"));
 
-  // The fallback returns a literal rather than the buffer the loop fills, so its length is written
-  // by a separate statement.
+  // The fallback returns a copy of the literal rather than the buffer the loop fills, so its length
+  // is written by a separate statement.
   slug = text_slugify("---", strlen("---"), &arena, &slug_len);
   TEST_CHECK(strcmp(slug, "untitled") == 0);
   TEST_CHECK(slug_len == strlen("untitled"));
