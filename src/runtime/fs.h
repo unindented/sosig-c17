@@ -82,9 +82,10 @@ int fs_list_files_with_suffix(struct PathList* paths,
  * on success. It rejects non-regular files and files that change size during a read. It never
  * reports a partial copy as a successful read.
  *
- * It rejects a file larger than `data_len_max` from its `stat` size, before allocating or reading
- * anything, so an oversize input never becomes resident. Each caller passes the limit for the kind
- * of file it reads.
+ * It opens the path without blocking and checks the opened descriptor, so the file inspected is the
+ * file read and a FIFO is rejected rather than waited on. It rejects a file larger than
+ * `data_len_max` from that `fstat` size, before any read or allocation, so an oversize input never
+ * becomes resident. Each caller passes the limit for the kind of file it reads.
  *
  * It also rejects a file containing an embedded `NUL` byte. This is the boundary that establishes
  * the codebase's text invariant. Every owned string is a `NUL`-free C string, which makes

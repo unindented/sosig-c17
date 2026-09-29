@@ -477,6 +477,34 @@ static void test_read_file_rejects_missing_and_non_regular(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A FIFO is rejected as not a regular file instead of blocking the open until a writer opens it,
+// leaving the outputs untouched.
+static void test_read_file_rejects_fifo(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-read-fifo.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* fifo = path_join(root_dir, "fifo.md", &arena);
+  TEST_ASSERT(mkfifo(fifo, 0600) == 0);
+
+  char sentinel[] = "unchanged";
+  char* file_data = sentinel;
+  size_t file_len = 999;
+  char reason[FS_REASON_SIZE] = "";
+  TEST_CHECK(fs_read_file(fifo, TEST_FILE_LEN_MAX, &file_data, &file_len, reason, sizeof(reason)) ==
+             -1);
+  TEST_CHECK(file_data == sentinel);
+  TEST_CHECK(file_len == 999);
+  TEST_CHECK(strcmp(reason, "not a regular file") == 0);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // A file carrying an embedded `NUL` is rejected, leaving outputs untouched, and says so. This is
 // the boundary that establishes the `NUL`-free text invariant every downstream `strlen` relies on.
 // Accepting it would silently truncate the rendered output at the `NUL`.
@@ -507,16 +535,10 @@ static void test_read_file_rejects_embedded_nul(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A file over `data_len_max` is rejected from its `stat` size, naming the limit and the size, and
-// leaves outputs untouched. The file is unreadable, so a rejection that opened or read it first
-// would report `EACCES` instead: the size check must come before either.
+// A readable file over `data_len_max` is rejected from its `fstat` size, before anything is
+// allocated or read, naming the limit and the size and leaving the outputs untouched. The file is
+// sized with `truncate`, so its size is the only thing about it the check can see.
 static void test_read_file_rejects_oversize_before_reading(void) {
-  // Root bypasses the permission bits, so the open would succeed and the test would not show that
-  // the check came first.
-  if (geteuid() == 0) {
-    return;
-  }
-
   char root_dir_template[] = "/tmp/sosig-fs-read-oversize.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -526,8 +548,8 @@ static void test_read_file_rejects_oversize_before_reading(void) {
   struct Arena arena;
   arena_init(&arena);
   char* file_path = path_join(root_dir, "big.md", &arena);
-  TEST_CHECK(fs_write_file(file_path, "five!", strlen("five!"), NULL, 0) == 0);
-  TEST_CHECK(chmod(file_path, 0200) == 0);
+  TEST_CHECK(fs_write_file(file_path, "", 0, NULL, 0) == 0);
+  TEST_CHECK(truncate(file_path, (off_t)strlen("five") + 1) == 0);
 
   char sentinel[] = "unchanged";
   char* file_data = sentinel;
@@ -836,6 +858,7 @@ TEST_LIST = {
     {"read file accepts empty", test_read_file_accepts_empty},
     {"read file accepts file at limit", test_read_file_accepts_file_at_limit},
     {"read file rejects missing and non-regular", test_read_file_rejects_missing_and_non_regular},
+    {"read file rejects fifo", test_read_file_rejects_fifo},
     {"read file rejects embedded nul", test_read_file_rejects_embedded_nul},
     {"read file rejects oversize before reading", test_read_file_rejects_oversize_before_reading},
     {"write then read round trips", test_write_then_read_round_trips},
