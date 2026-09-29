@@ -361,7 +361,8 @@ static bool is_name_equal(const char* name, size_t name_len, const char* expecte
 /**
  * @brief Allocates an arena-owned node of the given kind for the current render.
  *
- * Flags the render as failed on allocation failure.
+ * Zeroes every field other than `kind`, so a caller sets only the fields its kind carries. Flags
+ * the render as failed on allocation failure.
  *
  * @param provider_data Render provider state owning the node arena. Must not be `NULL`.
  * @param kind          Node kind to assign.
@@ -546,11 +547,9 @@ cleanup:
   for (size_t i = 0; i < provider_data.partial_count; i++) {
     mustache_release(provider_data.partials[i]);
   }
-  // This is reached with `templ` as `NULL` whenever the path build, the read, or the compile
-  // failed. `mustache.h` documents no `NULL` tolerance for this call. The guard exists only in
-  // `mustache.c`'s implementation, so this reads as a missing check today and would become a real
-  // one on a vendor bump. Verify it before removing the apparent redundancy.
-  mustache_release(templ);
+  if (templ != NULL) {
+    mustache_release(templ);
+  }
   free(template_data);
   string_buffer_free(&buf);
   arena_free(&scratch);
@@ -806,14 +805,12 @@ static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind
   // sharing would work, but that is an implementation detail a vendor bump can change without a
   // word. The allocation reads as an unnoticed inefficiency, so do not replace it with a shared
   // node.
-  struct Node* node = arena_alloc(provider_data->arena, sizeof(*node));
+  struct Node* node = arena_calloc(provider_data->arena, 1, sizeof(*node));
   if (node == NULL) {
     render_fail(provider_data, "out of memory building template render context");
     return NULL;
   }
   node->kind = kind;
-  node->entry = NULL;
-  node->scalar = NULL;
   return node;
 }
 
