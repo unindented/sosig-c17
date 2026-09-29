@@ -35,6 +35,10 @@ struct TemplateContext {
  * Loads `template_name` from `templates_dir`, renders it with mustache4c against `context`, and
  * transfers ownership of the result to the caller. The template name must be a safe relative path.
  *
+ * Templates are trusted input. The render limits terminate a partial that includes itself, bound
+ * the output buffer, and bound the compiled-partial cache. They do not bound the render's total
+ * memory: a template's own nested sections allocate in proportion to the iterations they ask for.
+ *
  * @param templates_dir Template directory root. Must not be `NULL`.
  * @param template_name Safe relative template name within `templates_dir`. Must not be `NULL`.
  * @param context       Borrowed data visible to the template during this render. Must not be

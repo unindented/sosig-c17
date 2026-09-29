@@ -19,11 +19,20 @@
 #include "shared/string_buffer.h"
 
 // Bounds on one template render. There are three independent failure modes, so three limits, each
-// enforced at the one place that can observe it. Each limit names the resource it protects. All
-// three bound a single render, and renders run `worker_count`-wide, so several per-render costs can
-// be live at once. That scaling is close to linear. On an 8-entry runaway build at three names per
-// expansion, peak resident memory rose from 63 MB with one worker to 397 MB with eight. Read the
-// per-render figures below as costs that `worker_count` concurrent runaway renders multiply.
+// enforced at the one place that can observe it. Each limit names what it bounds: the expansion
+// count terminates partial recursion, the output length bounds the output buffer, and the distinct
+// partial count bounds the compiled-partial cache. All three bound a single render, and renders run
+// `worker_count`-wide, so several per-render costs can be live at once. That scaling is close to
+// linear. On an 8-entry runaway build at three names per expansion, peak resident memory rose from
+// 63 MB with one worker to 397 MB with eight. Read the per-render figures below as costs that
+// `worker_count` concurrent runaway renders multiply.
+//
+// None of the three bounds the render's total memory. Templates are trusted input, like the config.
+// `node_alloc` puts a node in the per-render arena for every name resolution, and a section nested
+// inside another resolves its names once per iteration of every enclosing section without touching
+// the expansion counter. A template's own nested iteration therefore uses memory proportional to
+// the iterations it asks for. Over 20 entries, `{{#tags}}{{/tags}}` inside `{{#content_entries}}`
+// nested five deep renders a one-byte page at 322 MB peak resident memory, and six deep at 6.4 GB.
 //
 // Termination: mustache4c expands partials iteratively through its own stack and exposes no nesting
 // depth, but it calls the partial resolver once per expansion, cache hits included. Expansions are
@@ -33,33 +42,33 @@
 //
 // The margin is three rather than ten because of what an expansion costs. mustache4c's own stack is
 // 24 bytes per expansion: three `uintptr_t` pushes, at `mustache.c:1119`, heap-backed rather than
-// thread stack. That is the smaller term. The larger one is this file's. `node_alloc` puts a
-// `struct Node` in the per-render arena for every *name resolution*, the arena lives until the
-// render ends, and nothing bounds names-per-expansion. A template referencing nine names inside a
-// self-including partial resolves nine nodes per expansion, so a runaway render's memory is
-// `expansions × names`, not `expansions`. The bound has to be set against the product.
+// thread stack. That is the smaller term. The larger one is this file's nodes, which the arena
+// keeps until the render ends, and nothing bounds names-per-expansion. A template referencing nine
+// names inside a self-including partial resolves nine nodes per expansion, so a runaway render's
+// memory is `expansions × names`, not `expansions`. The bound has to be set against the product.
 //
 // These figures are peak resident memory of a whole `sosig build` measured at this bound, one
 // entry, one worker, release build: 10 MB for a bare `{{>loop}}`, 53 MB at three names, 111 MB at
-// nine, scaling linearly in names from there. The nodes cannot be shared or interned to avoid this,
-// so the expansion count is the only bound on this axis. See `node_alloc`, which states the
-// vendored contract requiring pointer-unique nodes. Lowering the count further would start to
-// reject the legitimate case above.
+// nine, scaling linearly in names from there. The nodes cannot be shared or interned to avoid this.
+// See `node_alloc`, which states the vendored contract requiring pointer-unique nodes. Lowering the
+// count further would start to reject the legitimate case above. A section iterating inside the
+// recursive partial multiplies each expansion's cost by its iteration count, which no limit here
+// bounds.
 //
-// Memory: escaping expands one byte into as much as a six-byte entity, so the check bounds
-// accumulated output after each append rather than from the incoming chunk length. This is the only
-// one of the three a legitimate site can reach, so the bound targets that case rather than a
-// runaway one. An aggregate embedding every entry's full body costs `entry_count * body_size`,
-// which for 10,000 entries at ~6.7 KB is 64 MB, so the bound sits four times above the largest site
-// this tool is meant for. The growable buffer doubles, so a render that reaches the bound allocates
-// near three times it before failing. Resident memory stays lower, because the doubled capacity is
-// never written. One that tripped the bound peaked at 261 MB. Reaching it costs that many bytes, so
-// `template_render_file_limited` takes the bound as a parameter, and the test that asserts its
-// diagnostic passes a smaller one.
+// Output: escaping expands one byte into as much as a six-byte entity, so the check bounds
+// accumulated output after each append rather than from the incoming chunk length. This bounds the
+// output buffer, not the render's other allocations. It is the only one of the three a legitimate
+// site can reach, so the bound targets that case rather than a runaway one. An aggregate embedding
+// every entry's full body costs `entry_count * body_size`, which for 10,000 entries at ~6.7 KB is
+// 64 MB, so the bound sits four times above the largest site this tool is meant for. The growable
+// buffer doubles, so a render that reaches the bound allocates near three times it before failing.
+// Resident memory stays lower, because the doubled capacity is never written. One that tripped the
+// bound peaked at 261 MB. Reaching it costs that many bytes, so `template_render_file_limited`
+// takes the bound as a parameter, and the test that asserts its diagnostic passes a smaller one.
 //
 // Capacity: the compiled-partial cache is a fixed array, so its length bounds the distinct partial
-// count. This one limits real templates, not runaway ones. A cycle cannot inflate the distinct-name
-// count, because the cache returns hits.
+// count and with it the cache. This one limits real templates, not runaway ones. A cycle cannot
+// inflate the distinct-name count, because the cache returns hits.
 enum { RENDER_EXPANSION_COUNT_MAX = 300000 };
 enum { RENDER_OUTPUT_LEN_MAX = 256 * 1024 * 1024 };
 enum { RENDER_PARTIAL_COUNT_MAX = 64 };
