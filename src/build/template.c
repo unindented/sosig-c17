@@ -21,10 +21,9 @@
 // Bounds on one template render. There are three independent failure modes, so three limits, each
 // enforced at the one place that can observe it. Each limit names the resource it protects. All
 // three bound a single render, and renders run `worker_count`-wide, so several per-render costs can
-// be live at once. That scaling is real but sublinear. On an 8-entry runaway build, peak resident
-// memory rose from 62 MB with one worker to 117 MB with eight, because sequential renders reuse
-// pages their predecessors freed. Do not read these figures as a per-build ceiling of
-// `worker_count` times each one.
+// be live at once. That scaling is close to linear. On an 8-entry runaway build at three names per
+// expansion, peak resident memory rose from 63 MB with one worker to 397 MB with eight. Read the
+// per-render figures below as costs that `worker_count` concurrent runaway renders multiply.
 //
 // Termination: mustache4c expands partials iteratively through its own stack and exposes no nesting
 // depth, but it calls the partial resolver once per expansion, cache hits included. Expansions are
@@ -40,19 +39,21 @@
 // self-including partial resolves nine nodes per expansion, so a runaway render's memory is
 // `expansions × names`, not `expansions`. The bound has to be set against the product.
 //
-// These figures are measured at this bound, one entry, release build: 11 MB for a bare `{{>loop}}`,
-// 50 MB at three names, 170 MB at nine, scaling linearly in names from there. The nodes cannot be
-// shared or interned to avoid this, so the expansion count is the only bound on this axis. See
-// `node_alloc`, which states the vendored contract requiring pointer-unique nodes. Lowering the
-// count further would start to reject the legitimate case above.
+// These figures are peak resident memory of a whole `sosig build` measured at this bound, one
+// entry, one worker, release build: 10 MB for a bare `{{>loop}}`, 53 MB at three names, 111 MB at
+// nine, scaling linearly in names from there. The nodes cannot be shared or interned to avoid this,
+// so the expansion count is the only bound on this axis. See `node_alloc`, which states the
+// vendored contract requiring pointer-unique nodes. Lowering the count further would start to
+// reject the legitimate case above.
 //
 // Memory: escaping expands one byte into as much as a six-byte entity, so the check bounds
 // accumulated output after each append rather than from the incoming chunk length. This is the only
 // one of the three a legitimate site can reach, so the bound targets that case rather than a
 // runaway one. An aggregate embedding every entry's full body costs `entry_count * body_size`,
 // which for 10,000 entries at ~6.7 KB is 64 MB, so the bound sits four times above the largest site
-// this tool is meant for. The growable buffer doubles, so a render that reaches the bound peaks
-// near three times it before failing. Reaching it costs that many bytes, so
+// this tool is meant for. The growable buffer doubles, so a render that reaches the bound allocates
+// near three times it before failing. Resident memory stays lower, because the doubled capacity is
+// never written. One that tripped the bound peaked at 261 MB. Reaching it costs that many bytes, so
 // `SOSIG_RENDER_OUTPUT_LEN_MAX` overrides the default for the test binary that asserts its
 // diagnostic. Nothing else defines it.
 //
