@@ -30,33 +30,6 @@
  */
 enum { CONTENT_FILE_LEN_MAX = MARKDOWN_INPUT_LEN_MAX };
 
-/**
- * Slugified `/`-separated path segments and their lengths, sized and filled in one pass.
- *
- * `item_lens` and `joined_len` come from the same measurements, so `join_segments` sizes its
- * allocation and fills it from one set of numbers. Recovering the lengths again with `strlen` at
- * the fill would make the allocation depend on two derivations agreeing. The allocation has no
- * slack to absorb a disagreement. It is exactly `joined_len + count`, which is the payload plus one
- * `/` between segments plus the terminator.
- */
-struct SlugSegments {
-  /** Arena-owned terminated slug for each segment, in path order. */
-  const char** items;
-
-  /** Length in bytes of each slug in `items`, excluding its terminator. */
-  const size_t* item_lens;
-
-  /** Number of segments, one more than the separator count. */
-  size_t count;
-
-  /**
-   * Sum of `item_lens`: the payload `join_segments` writes, separators aside. Each slug is at most
-   * twice its source segment or the 8-byte `untitled` fallback, whichever is larger. The segments
-   * partition one allocated path, so the sum cannot overflow.
-   */
-  size_t joined_len;
-};
-
 /** Source bytes and frontmatter slices for one content entry render job. */
 struct ContentEntryRenderSource {
   /** Complete Markdown source file contents owned by this struct. */
@@ -193,36 +166,6 @@ static const char* render_content_entry_finalize_paths_relative(const char* sour
  */
 static char* render_content_entry_finalize_paths_section(const char* source_relative_path,
                                                          struct Arena* arena)
-    __attribute__((nonnull(1, 2)));
-
-/**
- * @brief Slugifies each `/`-separated segment of `text` into arena storage.
- *
- * Counting the separators up front lets the code hold every slug at once. The count bounds the two
- * parallel arrays. The slugs' own lengths then size the joined result exactly, so the caller builds
- * directly in arena storage rather than in a heap buffer it copies.
- *
- * @param text         Segment bytes to slugify, without a trailing separator. Must not be `NULL`.
- * @param text_len     Number of bytes in `text`.
- * @param arena        Arena that owns every array and slug written to `segments_out`. Must not be
- *                     `NULL`.
- * @param segments_out Receives the slugs, their lengths, and their total. Written only on success.
- *                     Must not be `NULL`.
- * @return `0` on success, or `-1` on allocation failure.
- */
-static int slugify_segments(const char* text,
-                            size_t text_len,
-                            struct Arena* arena,
-                            struct SlugSegments* segments_out) __attribute__((nonnull(1, 3, 4)));
-
-/**
- * @brief Joins slugified segments with `/` into one arena-owned string.
- *
- * @param segments Segments to join, as filled by `slugify_segments`. Must not be `NULL`.
- * @param arena    Arena that owns the returned string. Must not be `NULL`.
- * @return Terminated joined string owned by `arena`, or `NULL` on allocation failure.
- */
-static char* join_segments(const struct SlugSegments* segments, struct Arena* arena)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -446,76 +389,43 @@ static char* render_content_entry_finalize_paths_section(const char* source_rela
     return arena_strdup(arena, "");
   }
 
-  struct SlugSegments segments;
-  if (slugify_segments(source_relative_path, (size_t)(last_slash - source_relative_path), arena,
-                       &segments) != 0) {
-    return NULL;
-  }
-  return join_segments(&segments, arena);
-}
-
-static int slugify_segments(const char* text,
-                            size_t text_len,
-                            struct Arena* arena,
-                            struct SlugSegments* segments_out) {
+  const size_t dir_len = (size_t)(last_slash - source_relative_path);
   size_t segment_count = 1;
-  for (size_t i = 0; i < text_len; i++) {
-    if (text[i] == '/') {
+  for (size_t i = 0; i < dir_len; i++) {
+    if (source_relative_path[i] == '/') {
       segment_count++;
     }
   }
-  const char** items = arena_calloc(arena, segment_count, sizeof(*items));
-  size_t* item_lens = arena_calloc(arena, segment_count, sizeof(*item_lens));
-  if (items == NULL || item_lens == NULL) {
-    return -1;
-  }
-
-  size_t joined_len = 0;
-  size_t index = 0;
-  size_t segment_start = 0;
-  // Run one index past `text_len` so the final segment, which has no separator after it within the
-  // range, is flushed by the same branch as the others. The `i < text_len` half of the guard below
-  // keeps the character test from reading at the sentinel index.
-  for (size_t i = 0; i <= text_len; i++) {
-    if (i < text_len && text[i] != '/') {
-      continue;
-    }
-    // `text_slugify` writes the length it just computed, so `item_lens` and the running total below
-    // are the same measurement rather than a second scan of the bytes.
-    items[index] = text_slugify(text + segment_start, i - segment_start, arena, &item_lens[index]);
-    if (items[index] == NULL) {
-      return -1;
-    }
-    joined_len += item_lens[index];
-    index++;
-    segment_start = i + 1;
-  }
-
-  // This publishes only once every segment is slugified, so the struct never claims a count backed
-  // by a partly filled array.
-  *segments_out = (struct SlugSegments){
-      .items = items, .item_lens = item_lens, .count = segment_count, .joined_len = joined_len};
-  return 0;
-}
-
-static char* join_segments(const struct SlugSegments* segments, struct Arena* arena) {
-  // One `/` between segments plus the terminator is exactly `count` bytes beyond the payload, so
-  // the allocation is exact and has no slack. That is safe because `joined_len` was summed from the
-  // same `item_lens` the loop below reads.
-  char* joined = arena_alloc(arena, segments->joined_len + segments->count);
-  if (joined == NULL) {
+  // A slug is at most twice its segment, or the 8-byte `untitled` fallback, and each segment adds
+  // one `/` or the terminator. The segments partition one allocated path, so the sum cannot
+  // overflow.
+  char* section = arena_alloc(arena, dir_len * 2 + segment_count * 9);
+  if (section == NULL) {
     return NULL;
   }
-  size_t len = 0;
-  for (size_t i = 0; i < segments->count; i++) {
-    if (i > 0) {
-      joined[len++] = '/';
+  size_t section_len = 0;
+  size_t segment_start = 0;
+  // Run one index past `dir_len` so the final segment, which has no separator after it within the
+  // range, is flushed by the same branch as the others.
+  for (size_t i = 0; i <= dir_len; i++) {
+    if (i < dir_len && source_relative_path[i] != '/') {
+      continue;
     }
-    memcpy(joined + len, segments->items[i], segments->item_lens[i]);
-    len += segments->item_lens[i];
+    size_t slug_len = 0;
+    const char* slug =
+        text_slugify(source_relative_path + segment_start, i - segment_start, arena, &slug_len);
+    if (slug == NULL) {
+      return NULL;
+    }
+    if (segment_start > 0) {
+      section[section_len++] = '/';
+    }
+    memcpy(section + section_len, slug, slug_len);
+    section_len += slug_len;
+    segment_start = i + 1;
   }
-  joined[len] = '\0';
-  return joined;
+  section[section_len] = '\0';
+  return section;
 }
 
 static int render_content_entry_finalize_paths_output(struct ContentEntry* entry,
