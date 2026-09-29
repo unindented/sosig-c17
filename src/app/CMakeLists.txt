@@ -7,7 +7,7 @@ target_sources(
 )
 
 if(SOSIG_BUILD_TESTING)
-  foreach(module IN ITEMS cli cli_dispatch cmd_build cmd_config exit_code)
+  foreach(module IN ITEMS cli cli_dispatch cmd_build cmd_config)
     sosig_add_unit_test(${module})
   endforeach()
 endif()

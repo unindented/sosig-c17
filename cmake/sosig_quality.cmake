@@ -18,7 +18,6 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/app/test_cli_dispatch.c"
     "${PROJECT_SOURCE_DIR}/src/app/test_cmd_build.c"
     "${PROJECT_SOURCE_DIR}/src/app/test_cmd_config.c"
-    "${PROJECT_SOURCE_DIR}/src/app/test_exit_code.c"
     "${PROJECT_SOURCE_DIR}/src/build/entry_renderer.c"
     "${PROJECT_SOURCE_DIR}/src/build/entry_renderer.h"
     "${PROJECT_SOURCE_DIR}/src/build/manifest_builder.c"

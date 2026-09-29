@@ -13,17 +13,9 @@ enum ExitCode {
   EXIT_CODE_USAGE = 2,
 };
 
-/**
- * Highest exit status a code may use. Shells reserve 126 and above for their own meanings (command
- * not executable, command not found, and 128 plus a signal number), so a code there would be
- * misread as one of those. The `_Static_assert` below enforces this bound, and `test_exit_code.c`
- * pins the individual values.
- */
-enum { EXIT_CODE_VALUE_MAX = 125 };
-
-_Static_assert((int)EXIT_CODE_OK <= (int)EXIT_CODE_VALUE_MAX &&
-                   (int)EXIT_CODE_FAILURE <= (int)EXIT_CODE_VALUE_MAX &&
-                   (int)EXIT_CODE_USAGE <= (int)EXIT_CODE_VALUE_MAX,
-               "exit codes must stay below the shell's reserved range");
+// The values are interface: a shell or CI wrapper branches on them, and `2` for a usage error is
+// the convention every option parser sets.
+_Static_assert(EXIT_CODE_OK == 0 && EXIT_CODE_FAILURE == 1 && EXIT_CODE_USAGE == 2,
+               "exit codes must keep their documented values");
 
 #endif
