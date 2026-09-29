@@ -451,8 +451,9 @@ static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
 
 // `fs_write_file` fails when the parent directory cannot be created and when the target is itself a
 // directory, and reports the two as different reasons. The first case is what pins that the
-// parent-directory failure is propagated rather than discarded, which the return value alone cannot
-// show, since a write that never needed a parent directory returns 0 either way.
+// parent-directory failure is propagated rather than discarded. The return value alone cannot show
+// that, because a discarded failure would still reach the open, which fails with `ENOTDIR` and
+// returns `-1` as well. That is why the assertion is on the reason.
 static void test_write_file_rejects_file_parent_and_dir_target(void) {
   char root_dir_template[] = "/tmp/sosig-fs-write-fail.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);

@@ -280,7 +280,8 @@ int fs_write_file(const char* file_path,
   // does not require `fwrite` to set it, so a stream error that left it at 0 is reported as `EIO`.
   errno = 0;
   const size_t written = fwrite(data, 1, data_len, fp);
-  // Capture `errno` before `ferror`, which is permitted to modify it even when it succeeds.
+  // Capture `errno` before calling `ferror`, which is permitted to modify it even when it succeeds.
+  // Reading it afterwards could name a cause the write never had.
   const int write_errno = errno;
   int rc = 0;
   if (written != data_len) {

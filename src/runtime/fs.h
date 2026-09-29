@@ -90,7 +90,8 @@ int fs_list_files_with_suffix(struct PathList* paths,
  *                     success.
  * @param reason_len   Size of `reason` in bytes.
  * @return `0` on success, or `-1` when the file is missing, not regular, too large, changed size
- *         mid-read or contains an embedded `NUL`, and on a read, allocation or close failure.
+ *         mid-read or contains an embedded `NUL`, and on an open, read, allocation or close
+ *         failure.
  */
 int fs_read_file(const char* file_path,
                  char** data_out,
