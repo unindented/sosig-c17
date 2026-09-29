@@ -279,11 +279,8 @@ static int manifest_reserve_entries(struct Manifest* manifest) {
 }
 
 static int manifest_reserve_buckets(struct Manifest* manifest) {
-  // The guard runs before the increment, not after. `count + 1` at `SIZE_MAX` wraps to zero, which
-  // would pass the load-factor test below and report success on a table with no room.
-  if (manifest->count == SIZE_MAX) {
-    return -1;
-  }
+  // `manifest_reserve_entries` runs first and leaves `count` below an entry capacity that
+  // `grow_capacity` bounded, so `count + 1` cannot wrap.
   const size_t count_next = manifest->count + 1;
   // Keep the table below a 3/4 load factor. Short probe chains are the performance reason. The
   // correctness reason is that a table never full leaves at least one empty bucket.
@@ -293,20 +290,15 @@ static int manifest_reserve_buckets(struct Manifest* manifest) {
   if (manifest->bucket_count != 0 && count_next <= (manifest->bucket_count / 4) * 3) {
     return 0;
   }
-  // This doubles inline rather than through `grow_capacity`, which every other growable container
-  // in the tree uses. The mask probe requires `bucket_count` to stay a power of two, and the load
-  // factor above drives growth here rather than a full array. Only the overflow guards are shared
-  // policy, written again here. Routing both reserves through `grow_capacity` is the cleanup that
-  // looks available, and it silently breaks the mask.
-  if (manifest->bucket_count > SIZE_MAX / 2) {
+  // The mask probe requires `bucket_count` to stay a power of two. The seed is one, and doubling
+  // keeps it one. `test_grow` pins that `grow_capacity` doubles.
+  size_t bucket_count_next = 0;
+  size_t buckets_bytes_next = 0;
+  if (grow_capacity(manifest->bucket_count, MANIFEST_BUCKETS_CAPACITY_MIN,
+                    sizeof(*manifest->buckets), &bucket_count_next, &buckets_bytes_next) != 0) {
     return -1;
   }
-  const size_t bucket_count_next =
-      manifest->bucket_count == 0 ? MANIFEST_BUCKETS_CAPACITY_MIN : manifest->bucket_count * 2;
-  if (bucket_count_next > SIZE_MAX / sizeof(*manifest->buckets)) {
-    return -1;
-  }
-  size_t* buckets = calloc(bucket_count_next, sizeof(*buckets));
+  size_t* buckets = calloc(1, buckets_bytes_next);
   if (buckets == NULL) {
     return -1;
   }
