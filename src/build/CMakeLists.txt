@@ -5,6 +5,7 @@ target_sources(
          BASE_DIRS "${PROJECT_SOURCE_DIR}/src"
          FILES entry_renderer.h manifest_builder.h page_renderer.h render_job.h site_writer.h template.h
 )
+target_link_libraries(sosig_app PRIVATE sosig_vendor_mustache)
 
 if(SOSIG_BUILD_TESTING)
   foreach(module IN ITEMS entry_renderer manifest_builder page_renderer)

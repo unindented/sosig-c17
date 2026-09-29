@@ -6,6 +6,8 @@ target_sources(
          FILES html.h markdown.h toml.h
 )
 
+target_link_libraries(sosig_app PRIVATE sosig_vendor_md4c)
+
 if(SOSIG_BUILD_TESTING)
   sosig_add_unit_test(html)
   sosig_add_unit_test(markdown)

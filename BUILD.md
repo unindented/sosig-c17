@@ -33,7 +33,7 @@ Each vendored project has a separate target. Header-only dependencies use interf
 
 `Threads::Threads` is a private dependency of `sosig_app`. CMake adds this link requirement to each executable that links to the static library.
 
-Source directories group code by function. They do not define separate libraries. Each local `CMakeLists.txt` adds files to `sosig_app`. More libraries would add link boundaries without independent APIs.
+Source directories group code by function. They do not define separate libraries. Each local `CMakeLists.txt` adds files to `sosig_app` and links the private vendored dependency that only its code uses. More libraries would add link boundaries without independent APIs.
 
 ### Generated dependency graph
 

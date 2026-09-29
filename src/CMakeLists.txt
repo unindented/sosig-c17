@@ -20,8 +20,6 @@ target_link_libraries(
          sosig_vendor_sharedstuff
   PRIVATE sosig_build_project
           sosig_vendor_copt
-          sosig_vendor_md4c
-          sosig_vendor_mustache
           Threads::Threads
 )
 
