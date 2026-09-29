@@ -46,12 +46,17 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * what still protects an input outside both trees: the configuration file, and the target of a
  * source or template that is a symlink or hard link to a file elsewhere.
  *
- * Lookup is a linear scan. At the largest tested build (3,000 sources, 3,002 outputs) that is nine
- * million integer comparisons, which measures as noise beside the reads and renders around it, so a
- * sorted index to make it logarithmic would buy nothing measurable.
+ * The identities are sorted once after they are all claimed, and each lookup is a binary search.
+ * A rebuild looks up every output that already exists, which is every output of a site built
+ * before. At the 10,000 sources sosig targets, a linear scan over the inputs would make that about
+ * 100 million comparisons.
  */
 struct InputIdentities {
-  /** Identities owned by this set, allocated once with a slot for every candidate input. */
+  /**
+   * Identities owned by this set, allocated once with a slot for every candidate input. In claim
+   * order until `claim_build_inputs` sorts them by device and then inode for
+   * `has_input_identity`'s binary search.
+   */
   struct FsIdentity* items;
 
   /** Number of recorded identities. */
@@ -167,6 +172,15 @@ static int claim_build_inputs_list_templates(struct PathList* template_paths,
  */
 static void claim_input_identity(struct InputIdentities* inputs, const char* file_path)
     __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Orders two identities by device and then inode, for `qsort` and `bsearch`.
+ *
+ * @param a First `struct FsIdentity`. Must not be `NULL`.
+ * @param b Second `struct FsIdentity`. Must not be `NULL`.
+ * @return A negative value, zero, or a positive value as `a` orders before, equal to, or after `b`.
+ */
+static int compare_identities(const void* a, const void* b) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Releases the identity set and leaves it initialized for reuse.
@@ -306,7 +320,7 @@ static int find_input_root_holding(const struct InputRoots* roots,
 /**
  * @brief Reports whether `identity` names a file this build reads.
  *
- * @param inputs   Identity set to search. Must not be `NULL`.
+ * @param inputs   Identity set to search, sorted by `claim_build_inputs`. Must not be `NULL`.
  * @param identity Identity to look for. Must not be `NULL`.
  * @return `true` when the identity was claimed as an input, `false` otherwise.
  */
@@ -398,6 +412,7 @@ static int claim_build_inputs(struct InputIdentities* inputs,
       for (size_t i = 0; i < template_paths.count; i++) {
         claim_input_identity(inputs, template_paths.items[i]);
       }
+      qsort(inputs->items, inputs->count, sizeof(*inputs->items), compare_identities);
     }
   }
   path_list_free(&template_paths);
@@ -432,6 +447,18 @@ static void claim_input_identity(struct InputIdentities* inputs, const char* fil
   if (fs_identify(file_path, &identity) == 0) {
     inputs->items[inputs->count++] = identity;
   }
+}
+
+static int compare_identities(const void* a, const void* b) {
+  const struct FsIdentity* left = a;
+  const struct FsIdentity* right = b;
+  if (left->device != right->device) {
+    return left->device < right->device ? -1 : 1;
+  }
+  if (left->inode != right->inode) {
+    return left->inode < right->inode ? -1 : 1;
+  }
+  return 0;
 }
 
 static void free_input_identities(struct InputIdentities* inputs) {
@@ -613,10 +640,6 @@ static int find_input_root_holding(const struct InputRoots* roots,
 
 static bool has_input_identity(const struct InputIdentities* inputs,
                                const struct FsIdentity* identity) {
-  for (size_t i = 0; i < inputs->count; i++) {
-    if (inputs->items[i].device == identity->device && inputs->items[i].inode == identity->inode) {
-      return true;
-    }
-  }
-  return false;
+  return inputs->count > 0 && bsearch(identity, inputs->items, inputs->count,
+                                      sizeof(*inputs->items), compare_identities) != NULL;
 }
