@@ -31,7 +31,7 @@ struct BuildState {
   /** Intended output paths for this build, populated before any file is written. */
   struct Manifest manifest;
 
-  /** Render job result slots, one per source path, paired with their count. */
+  /** Render job result slots, one per source path, allocated by the entry pass. */
   struct RenderJobSet render_jobs;
 
   /** Rendered non-draft content entries used by templates, sorted newest-first. */
@@ -78,14 +78,12 @@ static void build_state_init(struct BuildState* state) __attribute__((nonnull(1)
 static void build_state_free(struct BuildState* state) __attribute__((nonnull(1)));
 
 /**
- * @brief Loads `sosig.toml`, creates the output directory, discovers content entry sources, and
- *        prepares result storage.
+ * @brief Loads `sosig.toml`, creates the output directory, and discovers content entry sources.
  *
- * @param state   Build state that receives the config, source paths, and result slots. Must not be
- *                `NULL`.
+ * @param state   Build state that receives the config and source paths. Must not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
- * @return `0` on success, or `-1` on a config, directory, listing, or allocation failure.
+ * @return `0` on success, or `-1` on a config, directory, or listing failure.
  */
 static int load_build_inputs(struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
@@ -93,7 +91,8 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
 /**
  * @brief Parses every discovered content entry source, dispatching jobs across worker threads.
  *
- * @param state     Build state holding the sources and result slots. Must not be `NULL`.
+ * @param state     Build state holding the sources, which receives the result slots. Must not be
+ *                  `NULL`.
  * @param error_out Growable buffer that receives the collected render diagnostics. Must not be
  *                  `NULL`.
  * @return `0` when every job succeeded, or `-1` when any render job failed.
@@ -279,23 +278,11 @@ static void build_state_init(struct BuildState* state) {
   manifest_init(&state->manifest);
 }
 
-// Releases content entries through their module API before freeing result storage.
-//
 // `content_entries` holds borrowed pointers into `render_jobs`, so only its array is freed here.
-// Each entry is owned by the slot it was rendered into and is released with that slot. The loop
-// bound is the set's own `count`, stored with the slots, so do not assume the array has one slot
-// per discovered source path. A `count` of 0 leaves `items` `NULL`, and both the loop and the
-// trailing `free` handle that.
+// Each entry is owned by the slot it was rendered into and is released with that slot.
 static void build_state_free(struct BuildState* state) {
   free(state->content_entries);
-  for (size_t i = 0; i < state->render_jobs.count; i++) {
-    free(state->render_jobs.items[i].rendered_html);
-    if (state->render_jobs.items[i].entry != NULL) {
-      content_entry_free(state->render_jobs.items[i].entry);
-      free(state->render_jobs.items[i].entry);
-    }
-  }
-  free(state->render_jobs.items);
+  render_job_set_free(&state->render_jobs);
   manifest_free(&state->manifest);
   path_list_free(&state->source_paths);
   site_config_free(&state->site_config);
@@ -319,18 +306,6 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
     // configured root, so the root is not repeated here, as for `fs_mkdir_p` above.
     return error_report(err, err_len, "failed to list Markdown files: %s", reason);
   }
-
-  // `calloc` fails rather than wrapping when the product overflows, so it carries the bound. The
-  // count check belongs here, not at the `arena_calloc` sites. `calloc(0, n)` may return `NULL` for
-  // an empty request, while the arena hands back a distinct one-byte allocation.
-  state->render_jobs.items = calloc(state->source_paths.count, sizeof(*state->render_jobs.items));
-  if (state->render_jobs.items == NULL && state->source_paths.count > 0) {
-    return error_report(err, err_len, "out of memory allocating content entry render results");
-  }
-  // Set the count only past the failure check, so `count > 0` always implies a non-`NULL` `items`.
-  // `build_state_free` leans on that: it bounds its loop by `count` with no separate `NULL`
-  // guard.
-  state->render_jobs.count = state->source_paths.count;
   return 0;
 }
 

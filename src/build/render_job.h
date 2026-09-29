@@ -13,21 +13,21 @@ struct StringBuffer;
 /**
  * Result slot for one content entry render job, shared by the two render passes and by the writer.
  *
- * `entry_renderer_render_entries` fills the slot's `entry`, `page_renderer_render_pages` reads that
- * `entry` and writes its `rendered_html`, and either pass records `error_message` on failure. The
- * slot is the sole coupling between the passes: neither module needs the other's header, only this
- * one.
+ * `entry_renderer_render_entries` allocates the slots and fills each slot's `entry`,
+ * `page_renderer_render_pages` reads that `entry` and writes its `rendered_html`, and either pass
+ * records `error_message` on failure. The slot is the sole coupling between the passes: neither
+ * module needs the other's header, only this one.
  */
 struct RenderJob {
   /**
-   * Rendered content entry the caller takes ownership of on success, or `NULL` for a draft or
-   * unrendered slot. Heap-allocated: release with `content_entry_free` then `free`.
+   * Rendered content entry, or `NULL` for a draft or unrendered slot. Heap-allocated and released
+   * with the slot by `render_job_set_free`.
    */
   struct ContentEntry* entry;
 
   /**
-   * Rendered content entry HTML owned until written to disk, or `NULL` when unset. Release with
-   * `free`.
+   * Rendered content entry HTML owned until written to disk, or `NULL` when unset. Released with
+   * the slot by `render_job_set_free` unless freed and reset to `NULL` earlier.
    */
   char* rendered_html;
 
@@ -38,13 +38,9 @@ struct RenderJob {
 /**
  * The full set of render result slots for one build, one slot per discovered source path. Pairs the
  * slot array with its length so a caller that only touches results carries no separate count.
- * `count` equals the source-path count.
  */
 struct RenderJobSet {
-  /**
-   * Result slots, one per source path. Its length is `count`. `NULL` only when `count` is 0, which
-   * a zero-sized `calloc` may return.
-   */
+  /** Result slots, one per source path. Its length is `count`. */
   struct RenderJob* items;
 
   /** Number of result slots in `items`. */
@@ -59,8 +55,7 @@ struct RenderJobSet {
  * `error_message` after the pool joins.
  *
  * @param render_jobs  Result slot set whose `count` is the job count and whose buffered
- *                     diagnostics are collected. Its `items` is `NULL` only for a `count` of 0.
- * Must not be `NULL`.
+ *                     diagnostics are collected. Must not be `NULL`.
  * @param worker_count Worker threads used for rendering. `0` is treated as `1`.
  * @param job_fn       Job run once per result slot. Must not be `NULL`.
  * @param userdata     Shared job context forwarded to `job_fn`. Must not be `NULL`.
@@ -105,5 +100,12 @@ void render_job_set_error(struct RenderJob* result, const char* fmt, ...)
  * @param is_verbose Whether the dot is printed at all.
  */
 void render_job_progress_dot(bool is_verbose);
+
+/**
+ * @brief Releases every slot's entry and rendered HTML, and the slot array itself.
+ *
+ * @param render_jobs Result slot set to release. Must not be `NULL`.
+ */
+void render_job_set_free(struct RenderJobSet* render_jobs) __attribute__((nonnull(1)));
 
 #endif

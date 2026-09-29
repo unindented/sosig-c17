@@ -11,9 +11,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/error.h"
+#include "domain/content_entry.h"
 #include "runtime/pool.h"
 #include "shared/string_buffer.h"
 
@@ -100,6 +102,17 @@ void render_job_progress_dot(bool is_verbose) {
   (void)fputc('.', stderr);
   (void)fflush(stderr);
   funlockfile(stderr);
+}
+
+void render_job_set_free(struct RenderJobSet* render_jobs) {
+  for (size_t i = 0; i < render_jobs->count; i++) {
+    free(render_jobs->items[i].rendered_html);
+    if (render_jobs->items[i].entry != NULL) {
+      content_entry_free(render_jobs->items[i].entry);
+      free(render_jobs->items[i].entry);
+    }
+  }
+  free(render_jobs->items);
 }
 
 static int append_render_error(struct StringBuffer* buffer, const char* message) {

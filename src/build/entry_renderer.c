@@ -17,6 +17,7 @@
 #include "formats/markdown.h"
 #include "runtime/fs.h"
 #include "shared/arena.h"
+#include "shared/string_buffer.h"
 
 /**
  * Largest content source file read, in bytes, frontmatter and fences included.
@@ -261,26 +262,22 @@ int entry_renderer_render_entries(const struct SiteConfig* site_config,
                                   bool is_verbose,
                                   struct RenderJobSet* render_jobs_out,
                                   struct StringBuffer* error_out) {
+  *render_jobs_out = (struct RenderJobSet){0};
+  // `calloc` fails rather than wrapping when the product overflows, so it carries the bound. It may
+  // also return `NULL` for an empty site, which is not a failure.
+  render_jobs_out->items = calloc(source_paths->count, sizeof(*render_jobs_out->items));
+  if (render_jobs_out->items == NULL && source_paths->count > 0) {
+    (void)string_buffer_append(error_out, "out of memory allocating content entry render results");
+    return -1;
+  }
+  render_jobs_out->count = source_paths->count;
+
   struct ContentEntryRenderContext render_context = {
       .site_config = site_config,
       .source_paths = source_paths,
       .render_jobs = render_jobs_out->items,
       .is_verbose = is_verbose,
   };
-
-  // Establish the sentinels each job and the aggregation below rely on. An empty `error_message`
-  // means "no error", and `NULL` `entry`/`rendered_html` marks a skipped or unrendered slot.
-  // Zeroing here (before any worker starts) means callers need not pre-initialize the slots.
-  // Callers that already allocate with `calloc` pay a second pass, which keeps this module's
-  // contract self-contained and lets tests hand over raw storage. The count guard is not an
-  // optimization. `render_jobs_out->items` may be `NULL` when there are no sources (as its contract
-  // states), and `memset` requires a non-`NULL` pointer even for a zero byte count, so an unguarded
-  // call would be undefined behavior on an empty site. The pass runs one job per source path, so
-  // the set's `count` must equal `source_paths->count`.
-  if (render_jobs_out->count > 0) {
-    memset(render_jobs_out->items, 0, render_jobs_out->count * sizeof(*render_jobs_out->items));
-  }
-
   return render_job_run(render_jobs_out, worker_count, render_content_entry_job, &render_context,
                         is_verbose, error_out);
 }
@@ -329,9 +326,7 @@ cleanup:
 static struct ContentEntry* render_content_entry_create(const char* source_path,
                                                         struct RenderJob* result) {
   // Use `malloc`, not `calloc`. `content_entry_init` assigns a whole compound literal over the
-  // struct, so it writes every field, and a prior zeroing pass would be dead. The `calloc` in
-  // `cmd_build.c`'s `load_build_inputs` is the opposite case and stays, because there the zeroing
-  // is the sentinel state the code reads its result slots against.
+  // struct, so it writes every field, and a prior zeroing pass would be dead.
   struct ContentEntry* entry = malloc(sizeof(*entry));
   if (entry == NULL) {
     render_job_set_error(result, "out of memory allocating content entry for '%s'", source_path);

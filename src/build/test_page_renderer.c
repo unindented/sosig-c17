@@ -25,35 +25,17 @@
 #include "test_support.h"
 
 /**
- * @brief Releases render jobs and all storage owned by their result slots.
- *
- * @param render_jobs      Render-job array to release. May be `NULL` when the count is zero.
- * @param render_job_count Number of entries in `render_jobs`.
- */
-static void free_render_jobs(struct RenderJob* render_jobs, size_t render_job_count) {
-  for (size_t i = 0; i < render_job_count; i++) {
-    free(render_jobs[i].rendered_html);
-    if (render_jobs[i].entry != NULL) {
-      content_entry_free(render_jobs[i].entry);
-      free(render_jobs[i].entry);
-    }
-  }
-  free(render_jobs);
-}
-
-/**
  * @brief Runs the page-render pass over filled render-job slots.
  *
  * @param site_config Configuration used for rendering.
- * @param render_jobs Filled render-job array.
- * @param count       Number of entries in `render_jobs`.
+ * @param render_jobs Render-job slots filled by the entry pass.
  * @param error_out   Buffer that receives any render diagnostic.
  * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
  */
 static int render_pages(const struct SiteConfig* site_config,
-                        struct RenderJob* render_jobs,
-                        size_t count,
+                        struct RenderJobSet* render_jobs,
                         struct StringBuffer* error_out) {
+  const size_t count = render_jobs->count;
   struct ContentEntry** entries = calloc(count > 0 ? count : 1, sizeof(*entries));
   TEST_ASSERT(entries != NULL);
   if (entries == NULL) {
@@ -61,15 +43,14 @@ static int render_pages(const struct SiteConfig* site_config,
   }
   size_t entry_count = 0;
   for (size_t i = 0; i < count; i++) {
-    if (render_jobs[i].entry != NULL) {
-      entries[entry_count++] = render_jobs[i].entry;
+    if (render_jobs->items[i].entry != NULL) {
+      entries[entry_count++] = render_jobs->items[i].entry;
     }
   }
   content_entry_sort(entries, entry_count);
   const char* site_updated =
       content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
-  struct RenderJobSet result_set = {.items = render_jobs, .count = count};
-  const int rc = page_renderer_render_pages(&result_set, site_config,
+  const int rc = page_renderer_render_pages(render_jobs, site_config,
                                             (const struct ContentEntry* const*)entries, entry_count,
                                             site_updated, 1, false, error_out);
   free(entries);
@@ -84,7 +65,8 @@ static int render_pages(const struct SiteConfig* site_config,
  * @param permalink_override   Replacement permalink, or `NULL` to keep the configured value.
  * @param site_config          Configuration populated from the fixture.
  * @param source_paths         Path list populated with the source.
- * @param render_jobs_out      Receives the allocated render-job array.
+ * @param render_jobs_out      Receives the allocated render-job slots. Must be zero-initialized, so
+ *                             `render_job_set_free` is safe whether or not it is written.
  * @param error_out            Buffer that receives any render diagnostic.
  * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
  */
@@ -93,7 +75,7 @@ static int render_single_source(const char* root_dir,
                                 const char* permalink_override,
                                 struct SiteConfig* site_config,
                                 struct PathList* source_paths,
-                                struct RenderJob** render_jobs_out,
+                                struct RenderJobSet* render_jobs_out,
                                 struct StringBuffer* error_out) {
   char working_dir[PATH_MAX];
   if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
@@ -109,16 +91,10 @@ static int render_single_source(const char* root_dir,
     if (permalink_override != NULL) {
       site_config->permalink = permalink_override;
     }
-    struct RenderJob* render_jobs = calloc(source_paths->count, sizeof(*render_jobs));
-    TEST_ASSERT(render_jobs != NULL);
-    if (render_jobs != NULL) {
-      rc = entry_renderer_render_entries(
-          site_config, source_paths, 1, false,
-          &(struct RenderJobSet){.items = render_jobs, .count = source_paths->count}, error_out);
-      if (rc == 0) {
-        rc = render_pages(site_config, render_jobs, source_paths->count, error_out);
-      }
-      *render_jobs_out = render_jobs;
+    rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
+                                       error_out);
+    if (rc == 0) {
+      rc = render_pages(site_config, render_jobs_out, error_out);
     }
   }
 
@@ -135,7 +111,8 @@ static int render_single_source(const char* root_dir,
  * @param relative_paths      Source paths relative to `root_dir`.
  * @param relative_path_count Number of entries in `relative_paths`.
  * @param source_paths        Path list populated with the sources.
- * @param render_jobs_out     Receives the allocated render-job array.
+ * @param render_jobs_out     Receives the allocated render-job slots. Must be zero-initialized, so
+ *                            `render_job_set_free` is safe whether or not it is written.
  * @param error_out           Buffer that receives any render diagnostic.
  * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
  */
@@ -144,7 +121,7 @@ static int render_sources(const char* root_dir,
                           const char* const* relative_paths,
                           size_t relative_path_count,
                           struct PathList* source_paths,
-                          struct RenderJob** render_jobs_out,
+                          struct RenderJobSet* render_jobs_out,
                           struct StringBuffer* error_out) {
   char working_dir[PATH_MAX];
   if (getcwd(working_dir, sizeof(working_dir)) == NULL || chdir(root_dir) != 0) {
@@ -160,21 +137,12 @@ static int render_sources(const char* root_dir,
     for (size_t i = 0; rc == 0 && i < relative_path_count; i++) {
       rc = path_list_push(source_paths, relative_paths[i]);
     }
-    struct RenderJob* render_jobs =
-        rc != 0 ? NULL : calloc(source_paths->count, sizeof(*render_jobs));
-    if (source_paths->count > 0) {
-      TEST_ASSERT(render_jobs != NULL);
+    if (rc == 0) {
+      rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
+                                         error_out);
     }
-    if (render_jobs == NULL) {
-      rc = 1;
-    } else {
-      rc = entry_renderer_render_entries(
-          site_config, source_paths, 1, false,
-          &(struct RenderJobSet){.items = render_jobs, .count = source_paths->count}, error_out);
-      if (rc == 0) {
-        rc = render_pages(site_config, render_jobs, source_paths->count, error_out);
-      }
-      *render_jobs_out = render_jobs;
+    if (rc == 0) {
+      rc = render_pages(site_config, render_jobs_out, error_out);
     }
   }
 
@@ -246,7 +214,7 @@ static void test_renders_site_updated_in_content_template(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJob* render_jobs = NULL;
+  struct RenderJobSet render_jobs = {0};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
@@ -255,17 +223,17 @@ static void test_renders_site_updated_in_content_template(void) {
   TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
                             &source_paths, &render_jobs, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  if (render_jobs != NULL) {
-    TEST_CHECK(render_jobs[0].rendered_html != NULL &&
-               strcmp(render_jobs[0].rendered_html, "[2026-07-02T00:00:00Z]\n") == 0);
-    TEST_CHECK(render_jobs[1].rendered_html != NULL &&
-               strcmp(render_jobs[1].rendered_html, "[2026-07-02T00:00:00Z]\n") == 0);
+  if (render_jobs.items != NULL) {
+    TEST_CHECK(render_jobs.items[0].rendered_html != NULL &&
+               strcmp(render_jobs.items[0].rendered_html, "[2026-07-02T00:00:00Z]\n") == 0);
+    TEST_CHECK(render_jobs.items[1].rendered_html != NULL &&
+               strcmp(render_jobs.items[1].rendered_html, "[2026-07-02T00:00:00Z]\n") == 0);
     // The draft is parsed but never rendered, so its slot stays empty.
-    TEST_CHECK(render_jobs[2].entry == NULL);
-    TEST_CHECK(render_jobs[2].rendered_html == NULL);
+    TEST_CHECK(render_jobs.items[2].entry == NULL);
+    TEST_CHECK(render_jobs.items[2].rendered_html == NULL);
   }
 
-  free_render_jobs(render_jobs, source_paths.count);
+  render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -286,7 +254,7 @@ static void test_iterates_content_entries_in_content_template(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJob* render_jobs = NULL;
+  struct RenderJobSet render_jobs = {0};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
@@ -294,12 +262,12 @@ static void test_iterates_content_entries_in_content_template(void) {
   TEST_CHECK(render_sources(root_dir, &site_config, sources, sizeof(sources) / sizeof(sources[0]),
                             &source_paths, &render_jobs, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  if (render_jobs != NULL) {
-    TEST_CHECK(render_jobs[0].rendered_html != NULL &&
-               strcmp(render_jobs[0].rendered_html, "[Newer][Older]\n") == 0);
+  if (render_jobs.items != NULL) {
+    TEST_CHECK(render_jobs.items[0].rendered_html != NULL &&
+               strcmp(render_jobs.items[0].rendered_html, "[Newer][Older]\n") == 0);
   }
 
-  free_render_jobs(render_jobs, source_paths.count);
+  render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -333,7 +301,7 @@ static void test_reports_missing_template(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJob* render_jobs = NULL;
+  struct RenderJobSet render_jobs = {0};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
@@ -352,7 +320,7 @@ static void test_reports_missing_template(void) {
   // for that message with something appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
-  free_render_jobs(render_jobs, source_paths.count);
+  render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
