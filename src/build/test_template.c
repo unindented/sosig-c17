@@ -12,6 +12,7 @@
 #include "build/template.h"
 #include "core/error.h"
 #include "core/path.h"
+#include "core/text.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
@@ -38,7 +39,8 @@ static void init_test_site_config(struct SiteConfig* site_config) {
 /**
  * @brief Initializes shared content-entry metadata for template tests.
  *
- * @param entry Content entry to initialize with literal-backed fields.
+ * @param entry Content entry to initialize with literal-backed fields and a heap-owned
+ *              `body_html`.
  */
 static void init_test_content_entry(struct ContentEntry* entry) {
   content_entry_init(entry);
@@ -47,7 +49,9 @@ static void init_test_content_entry(struct ContentEntry* entry) {
   entry->description = "Desc";
   entry->slug = "content-entry";
   entry->url_path = "/content-entry.html";
-  entry->body_html = "<p>raw</p>";
+  // `content_entry_free` releases `body_html`, so it is a heap copy rather than a literal.
+  entry->body_html = text_strdup("<p>raw</p>");
+  TEST_ASSERT(entry->body_html != NULL);
 }
 
 // `{{title}}` is escaped and `{{{body}}}` is not in the same render, so escaping is chosen per tag

@@ -97,14 +97,14 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
     __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
- * @brief Converts a content entry's Markdown body into arena-owned HTML.
+ * @brief Converts a content entry's Markdown body into HTML the entry owns.
  *
  * @param entry       Entry that receives `body_html`. Must not be `NULL`.
  * @param source      Render source whose frontmatter split supplies the Markdown body. Must not be
  *                    `NULL`.
  * @param source_path Source path used in the failure diagnostic. Must not be `NULL`.
  * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
- * @return `0` on success, or `-1` on a render or allocation failure.
+ * @return `0` on success, or `-1` on oversize input, a parser failure, or allocation failure.
  */
 static int render_content_entry_body(struct ContentEntry* entry,
                                      const struct ContentEntryRenderSource* source,
@@ -316,23 +316,18 @@ static int render_content_entry_body(struct ContentEntry* entry,
                                      const char* source_path,
                                      struct RenderJob* result) {
   char error_message[ERROR_MESSAGE_SIZE] = "";
-  char* html = markdown_to_html(source->split.body, source->split.body_len, error_message,
-                                sizeof(error_message));
-  int rc = -1;
-  if (html != NULL) {
-    // Copy into the entry arena so `content_entry_free` owns cleanup.
-    entry->body_html = arena_strdup(&entry->arena, html);
-    rc = entry->body_html != NULL ? 0 : -1;
+  // The entry adopts the converter's heap buffer, so `content_entry_free` releases it.
+  entry->body_html = markdown_to_html(source->split.body, source->split.body_len, error_message,
+                                      sizeof(error_message));
+  if (entry->body_html != NULL) {
+    return 0;
   }
-  if (rc != 0) {
-    if (error_message[0] != '\0') {
-      render_job_set_error(result, "%s (in '%s')", error_message, source_path);
-    } else {
-      render_job_set_error(result, "failed to render Markdown for '%s'", source_path);
-    }
+  if (error_message[0] != '\0') {
+    render_job_set_error(result, "%s (in '%s')", error_message, source_path);
+  } else {
+    render_job_set_error(result, "failed to render Markdown for '%s'", source_path);
   }
-  free(html);
-  return rc;
+  return -1;
 }
 
 static int render_content_entry_finalize_paths(struct ContentEntry* entry,

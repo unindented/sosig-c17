@@ -24,9 +24,9 @@ enum { SLUG_LEN_MAX = FILENAME_LEN_MAX - (sizeof(".html") - 1) };
 /**
  * Content entry metadata and generated paths for one Markdown source file.
  *
- * Every pointer field is either arena-owned or a string literal, so an entry stays valid until
- * `content_entry_free`. Nothing borrows from the source buffer, which the parse job frees before it
- * returns.
+ * Every pointer field except `body_html` is either arena-owned or a string literal, and
+ * `body_html` is heap-owned by the entry, so an entry stays valid until `content_entry_free`.
+ * Nothing borrows from the source buffer, which the parse job frees before it returns.
  *
  * The parse pass fills every field. The page, aggregate and feed passes only read. That is a
  * thread-safety invariant. During the page pass every worker holds pointers to every entry, so a
@@ -75,11 +75,13 @@ struct ContentEntry {
   const char* template;
 
   /**
-   * Rendered HTML body, arena-copied from the Markdown conversion. Never `NULL` on an entry the
-   * page pass sees. A draft, or an entry that failed any step, is freed before its result slot is
-   * filled, so no half-built entry is ever published.
+   * Rendered HTML body, heap-owned by the entry and released by `content_entry_free`. It is the
+   * Markdown conversion's own buffer, adopted rather than copied into `arena`, so a large body is
+   * never resident twice. Never `NULL` on an entry the page pass sees. A draft, or an entry that
+   * failed any step, is freed before its result slot is filled, so no half-built entry is ever
+   * published.
    */
-  const char* body_html;
+  char* body_html;
 
   /** Public URL path, always beginning with `/`, as expanded from the site `permalink`. */
   const char* url_path;
@@ -111,10 +113,10 @@ struct ContentEntry {
 void content_entry_init(struct ContentEntry* entry) __attribute__((nonnull(1)));
 
 /**
- * @brief Releases arena-owned content entry data and resets it for reuse.
+ * @brief Releases arena-owned content entry data and `body_html`, and resets the entry for reuse.
  *
- * Invalidates every arena-owned pointer on the entry. The entry stays initialized, so it may be
- * reused without calling `content_entry_init`.
+ * Invalidates every arena-owned pointer on the entry and frees `body_html`. The entry stays
+ * initialized, so it may be reused without calling `content_entry_init`.
  *
  * @param entry Entry to release. Must not be `NULL`.
  */

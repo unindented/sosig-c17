@@ -26,6 +26,7 @@ void content_entry_init(struct ContentEntry* entry) {
 }
 
 void content_entry_free(struct ContentEntry* entry) {
+  free(entry->body_html);
   arena_free(&entry->arena);
   content_entry_init(entry);
 }
