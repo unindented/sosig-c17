@@ -17,7 +17,8 @@ struct StringBuffer;
  * @param render_jobs  Render-job slots filled by the entry pass. Must not be `NULL`.
  * @param worker_count Worker threads the page pass runs on.
  * @param error_out    Buffer that receives any render diagnostic. Must not be `NULL`.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
+ * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
+ *         failure.
  */
 int render_pages(const struct SiteConfig* site_config,
                  struct RenderJobSet* render_jobs,
@@ -39,7 +40,8 @@ int render_pages(const struct SiteConfig* site_config,
  * @param render_jobs_out     Receives the allocated render-job slots. Must be zero-initialized, so
  *                            `render_job_set_free` is safe whether or not it is written.
  * @param error_out           Buffer that receives any render diagnostic. Must not be `NULL`.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
+ * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
+ *         failure.
  */
 int render_sources(const char* root_dir,
                    const char* const* relative_paths,
@@ -63,7 +65,8 @@ int render_sources(const char* root_dir,
  * @param render_jobs_out      Receives the allocated render-job slots. Must be zero-initialized, so
  *                             `render_job_set_free` is safe whether or not it is written.
  * @param error_out            Buffer that receives any render diagnostic. Must not be `NULL`.
- * @return `0` on success, `-1` on render failure, or `1` on test-plumbing failure.
+ * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
+ *         failure.
  */
 int render_single_source(const char* root_dir,
                          const char* source_relative_path,

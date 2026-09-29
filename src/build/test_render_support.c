@@ -29,7 +29,7 @@ int render_pages(const struct SiteConfig* site_config,
   struct ContentEntry** entries = calloc(count > 0 ? count : 1, sizeof(*entries));
   TEST_ASSERT(entries != NULL);
   if (entries == NULL) {
-    return 1;
+    return TEST_PLUMBING_FAILED;
   }
   size_t entry_count = 0;
   for (size_t i = 0; i < count; i++) {
@@ -57,30 +57,35 @@ int render_sources(const char* root_dir,
                    struct StringBuffer* error_out) {
   int saved_dir_fd = -1;
   if (working_dir_enter(root_dir, &saved_dir_fd) != 0) {
-    return 1;
+    return TEST_PLUMBING_FAILED;
   }
 
   char config_err[ERROR_MESSAGE_SIZE];
   config_err[0] = '\0';
-  int rc = 1;
-  if (site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0) {
+  int rc = TEST_PLUMBING_FAILED;
+  const bool is_config_loaded =
+      site_config_load(site_config, "sosig.toml", config_err, sizeof(config_err)) == 0;
+  TEST_CHECK(is_config_loaded);
+  TEST_MSG("config: %s", config_err);
+  if (is_config_loaded) {
     if (permalink_override != NULL) {
       site_config->permalink = permalink_override;
     }
-    rc = 0;
-    for (size_t i = 0; rc == 0 && i < relative_path_count; i++) {
-      rc = path_list_push(source_paths, relative_paths[i]);
+    bool is_pushed = true;
+    for (size_t i = 0; is_pushed && i < relative_path_count; i++) {
+      is_pushed = path_list_push(source_paths, relative_paths[i]) == 0;
     }
-    if (rc == 0) {
+    TEST_CHECK(is_pushed);
+    if (is_pushed) {
       rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
                                          error_out);
-    }
-    if (rc == 0) {
-      rc = render_pages(site_config, render_jobs_out, 1, error_out);
+      if (rc == 0) {
+        rc = render_pages(site_config, render_jobs_out, 1, error_out);
+      }
     }
   }
 
-  return working_dir_leave(saved_dir_fd) == 0 ? rc : 1;
+  return working_dir_leave(saved_dir_fd) == 0 ? rc : TEST_PLUMBING_FAILED;
 }
 
 int render_single_source(const char* root_dir,
