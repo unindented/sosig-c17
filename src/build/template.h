@@ -25,7 +25,7 @@ struct TemplateContext {
   /** Current entry for content templates, or `NULL` for aggregate and feed templates. */
   const struct ContentEntry* content_entry_current;
 
-  /** Site last-updated timestamp exposed as `site.updated`, or `NULL` when unavailable. */
+  /** Site last-updated timestamp exposed as `site.updated`. Must not be `NULL`. */
   const char* site_updated;
 };
 
