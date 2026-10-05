@@ -935,9 +935,9 @@ static void test_load_prefers_safety_over_length_and_distinctness(void) {
 static void test_print_defaults(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://www.example.com";
-  config.title = "C17 Notes";
-  config.author = "Author Name";
+  config.base_url = "https://example.com";
+  config.title = "Example Site";
+  config.author = "Example Author";
 
   char config_out[1024];
   render(&config, config_out, sizeof(config_out));
@@ -945,9 +945,9 @@ static void test_print_defaults(void) {
   // The whole buffer, not a set of per-line searches: only an exact comparison can catch a key that
   // is missing, duplicated, extra, or emitted in the wrong order.
   TEST_CHECK(strcmp(config_out,
-                    "base_url = \"https://www.example.com\"\n"
-                    "title = \"C17 Notes\"\n"
-                    "author = \"Author Name\"\n"
+                    "base_url = \"https://example.com\"\n"
+                    "title = \"Example Site\"\n"
+                    "author = \"Example Author\"\n"
                     "permalink = \"/{section}/{slug}.html\"\n"
                     "content_dir = \"content\"\n"
                     "output_dir = \"public\"\n"
@@ -1100,9 +1100,9 @@ static void test_print_empty_template_arrays(void) {
 static void test_print_reports_write_failure(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://www.example.com";
-  config.title = "C17 Notes";
-  config.author = "Author Name";
+  config.base_url = "https://example.com";
+  config.title = "Example Site";
+  config.author = "Example Author";
 
   FILE* stream = fopen("/dev/null", "r");
   TEST_ASSERT(stream != NULL);
