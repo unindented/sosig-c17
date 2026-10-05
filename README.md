@@ -54,6 +54,8 @@ The build searches all directories under `content_dir` for regular files that en
 
 The search follows symlinked directories but reads each directory only once. A directory that more than one path reaches publishes its entries once, not once per path. For example, with `blog` a symlink to `posts`, the entries publish only under `posts`. The build prefers the path that uses no symlink. For a directory that only symlinks reach, it uses the first such path in byte order. A symlink back into its own parent directories is skipped.
 
+The content and template directories must exist.
+
 The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
 
 Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.

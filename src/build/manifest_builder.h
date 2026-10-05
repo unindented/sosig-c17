@@ -66,8 +66,8 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * source, and every file below `templates_dir`, so it still protects an input that a link places
  * outside both roots. The template walk leaves out `output_dir`, so a generated file that a symlink
  * inside `templates_dir` reaches is not mistaken for a template. A missing `templates_dir` claims
- * nothing, because it holds no file to overwrite. The render then reports the template it could not
- * read.
+ * nothing, because it holds no file to overwrite. A full build never gets here with one: loading
+ * the build inputs already rejects it.
  *
  * @param manifest            Manifest that receives the output paths. Must not be `NULL`.
  * @param site_config         Configuration supplying `content_dir`, `output_dir`, `templates_dir`

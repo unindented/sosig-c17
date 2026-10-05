@@ -629,14 +629,17 @@ static void test_reports_missing_config(void) {
   remove_fixture_tree(root_dir);
 }
 
-// An absent content directory is reported through the returned diagnostic.
+// `content_dir` is required, so an absent one is a failure, reported as a resolution failure
+// carrying the system cause. `ENOENT` and `EACCES` need different fixes and nothing later would
+// report either, so the cause has to appear here. Compared exactly, so a caller that appended the
+// path a second time would fail.
 static void test_reports_absent_content_dir(void) {
   char root_dir_template[] = "/tmp/sosig-build-no-content.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -645,12 +648,61 @@ static void test_reports_absent_content_dir(void) {
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected),
-               "failed to list Markdown files: cannot inspect directory: %s ('content')",
+               "failed to resolve config directory 'content_dir': %s ('content')",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  // Compared exactly, not by substring: the walk's reason already names the path, so the only way
-  // to catch the caller appending it a second time is to assert nothing trails the message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  string_buffer_free(&error_buffer);
+
+  remove_fixture_tree(root_dir);
+}
+
+// `templates_dir` is required the same way, and reports the key the user has to fix rather than the
+// one that happened to be checked first.
+static void test_reports_absent_templates_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-build-no-templates.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  char reason[FS_REASON_SIZE];
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to resolve config directory 'templates_dir': %s ('templates')",
+               error_system_message(reason, sizeof(reason), ENOENT));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  string_buffer_free(&error_buffer);
+
+  remove_fixture_tree(root_dir);
+}
+
+// A `templates_dir` that exists but is a regular file is reported as the wrong type, which is its
+// own cause rather than an `errno`, so the message carries no system text.
+static void test_reports_templates_dir_that_is_a_file(void) {
+  char root_dir_template[] = "/tmp/sosig-build-templates-file.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates", "not a directory\n") == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL &&
+             strcmp(error_buffer.data,
+                    "failed to resolve config directory 'templates_dir': not a directory "
+                    "('templates')") == 0);
   string_buffer_free(&error_buffer);
 
   remove_fixture_tree(root_dir);
@@ -922,6 +974,8 @@ TEST_LIST = {
     {"rejects unsafe permalink", test_rejects_unsafe_permalink},
     {"reports missing config", test_reports_missing_config},
     {"reports absent content dir", test_reports_absent_content_dir},
+    {"reports absent templates dir", test_reports_absent_templates_dir},
+    {"reports templates dir that is a file", test_reports_templates_dir_that_is_a_file},
     {"reports unusable output dir", test_reports_unusable_output_dir},
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
     {"reports unparsable content", test_reports_unparsable_content},

@@ -20,6 +20,15 @@
 #include "runtime/pool.h"
 #include "shared/string_buffer.h"
 
+/** One configured directory the build reads, which must be a usable directory. */
+struct ReadRoot {
+  /** Configured path, already slash-trimmed by the config load. */
+  const char* path;
+
+  /** Config key naming `path`, used by every diagnostic so the user knows what to edit. */
+  const char* key;
+};
+
 /** Mutable state owned by one `cmd_build_execute` invocation. */
 struct BuildState {
   /** Loaded site configuration. */
@@ -87,9 +96,25 @@ static void build_state_free(struct BuildState* state) __attribute__((nonnull(1)
  * @param state   Build state that receives the config and source paths. Must not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
- * @return `0` on success, or `-1` on a config, output directory, or listing failure.
+ * @return `0` on success, or `-1` on a configuration, directory, output directory, or listing
+ *         failure.
  */
 static int load_build_inputs(struct BuildState* state, char* err, size_t err_len)
+    __attribute__((nonnull(1)));
+
+/**
+ * @brief Requires every configured read root to be a usable directory.
+ *
+ * Walks the `ReadRoot` spec table, so each diagnostic names the config key the user has to edit. A
+ * root that cannot be resolved is reported with its cause.
+ *
+ * @param state   Build state supplying the configured read roots. Must not be `NULL`.
+ * @param err     Destination buffer for a failure diagnostic.
+ * @param err_len Size of `err` in bytes.
+ * @return `0` when every root is a usable directory, or `-1` when one cannot be resolved or is not
+ *         a directory.
+ */
+static int require_read_roots(const struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
 
 /**
@@ -303,9 +328,13 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
   if (site_config_load(&state->site_config, SITE_CONFIG_PATH_DEFAULT, err, err_len) != 0) {
     return -1;
   }
+  if (require_read_roots(state, err, err_len) != 0) {
+    return -1;
+  }
   if (manifest_builder_check_output_dir(&state->site_config, err, err_len) != 0) {
     return -1;
   }
+
   build_verbose(state, "discovering content");
   static const char* const content_suffixes[] = {".md"};
   char reason[FS_REASON_SIZE];
@@ -316,6 +345,23 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
     // The reason names the directory or entry that failed, which is more precise than the
     // configured root, so the root is not repeated here.
     return error_report(err, err_len, "failed to list Markdown files: %s", reason);
+  }
+  return 0;
+}
+
+static int require_read_roots(const struct BuildState* state, char* err, size_t err_len) {
+  const struct ReadRoot roots[] = {
+      {state->site_config.content_dir, "content_dir"},
+      {state->site_config.templates_dir, "templates_dir"},
+  };
+  char reason[FS_REASON_SIZE];
+  for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+    // The message carries the cause. `ENOENT` and `EACCES` call for different fixes, and nothing
+    // after this point would report either, because the loop returns here.
+    if (fs_require_dir(roots[i].path, reason, sizeof(reason)) != 0) {
+      return error_report(err, err_len, "failed to resolve config directory '%s': %s", roots[i].key,
+                          reason);
+    }
   }
   return 0;
 }

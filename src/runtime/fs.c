@@ -456,6 +456,21 @@ cleanup:
   return rc;
 }
 
+int fs_require_dir(const char* dir_path, char* reason, size_t reason_len) {
+  struct stat st;
+  if (stat(dir_path, &st) != 0) {
+    // The bare system message rather than `fs_reason_path_errno`'s "cannot <action>" form: the
+    // caller names the operation, so a verb here would stutter in the composed diagnostic.
+    char message[FS_REASON_SIZE];
+    return error_report(reason, reason_len, "%s ('%s')",
+                        error_system_message(message, sizeof(message), errno), dir_path);
+  }
+  if (!S_ISDIR(st.st_mode)) {
+    return error_report(reason, reason_len, "not a directory ('%s')", dir_path);
+  }
+  return 0;
+}
+
 int fs_identify(const char* file_path, struct FsIdentity* identity_out) {
   struct stat st;
   if (stat(file_path, &st) != 0) {

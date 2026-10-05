@@ -126,8 +126,9 @@ struct InputRoots {
  *
  * This skips a path with no identity rather than refusing it. A missing configuration file or
  * source cannot be overwritten, and neither can a missing `templates_dir`, which claims nothing.
- * The render reports a missing template with a template-specific diagnostic, so failing here would
- * only report the same absence earlier and with less context.
+ * `cmd_build` already rejects a missing `templates_dir` while loading the build inputs, and the
+ * render reports a missing template with a template-specific diagnostic, so failing here would only
+ * report an absence earlier and with less context.
  *
  * The template tree is listed first, so the set is allocated once with a slot for every candidate.
  *
@@ -470,10 +471,10 @@ static int claim_build_inputs_list_templates(struct PathList* template_paths,
                                              char* err,
                                              size_t err_len) {
   // A `templates_dir` with no identity holds no file to overwrite, so there is nothing to claim.
-  // This is the same skip `claim_input_identity` applies to a single missing path. The walk below
-  // would otherwise fail on it, and report a missing template directory ahead of the render's
-  // diagnostic naming the template it needed. An existing root that cannot be walked still fails,
-  // because a partial the walk could not see would stay overwritable.
+  // This is the same skip `claim_input_identity` applies to a single missing path. A full build
+  // never gets here with one, because `cmd_build` rejects a missing `templates_dir` while loading
+  // the build inputs, so reporting it is left to that earlier check. An existing root that cannot
+  // be walked still fails, because a partial the walk could not see would stay overwritable.
   struct FsIdentity templates_dir_identity;
   if (fs_identify(templates_dir, &templates_dir_identity) != 0) {
     return 0;

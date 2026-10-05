@@ -1052,6 +1052,45 @@ static void test_mkdir_p_rejects_uncreatable_component(void) {
   remove_fixture_tree(root_dir);
 }
 
+// `fs_require_dir` tells an absent directory apart from one of the wrong type. The reason is the
+// bare cause with the path trailing, so a caller can compose it after naming its own operation.
+static void test_require_dir_reports_why_a_directory_is_unusable(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-require-dir.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* present = path_join(root_dir, "templates", &arena);
+  char* plain_file = path_join(root_dir, "templates.txt", &arena);
+  char* absent = path_join(root_dir, "missing", &arena);
+  TEST_CHECK(fs_mkdir_p(present, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(plain_file, "x", 1, NULL, 0) == 0);
+
+  TEST_CHECK(fs_require_dir(present, NULL, 0) == 0);
+
+  char reason[FS_REASON_SIZE] = "";
+  char message[FS_REASON_SIZE];
+  char expected[FS_REASON_SIZE];
+  TEST_CHECK(fs_require_dir(absent, reason, sizeof(reason)) == -1);
+  const int absent_len = snprintf(expected, sizeof(expected), "%s ('%s')",
+                                  expected_errno_reason(message, ENOENT), absent);
+  TEST_CHECK(absent_len > 0 && (size_t)absent_len < sizeof(expected));
+  TEST_CHECK(strcmp(reason, expected) == 0);
+
+  // A wrong type is its own cause rather than an `errno`, so it carries no system message.
+  reason[0] = '\0';
+  TEST_CHECK(fs_require_dir(plain_file, reason, sizeof(reason)) == -1);
+  const int type_len = snprintf(expected, sizeof(expected), "not a directory ('%s')", plain_file);
+  TEST_CHECK(type_len > 0 && (size_t)type_len < sizeof(expected));
+  TEST_CHECK(strcmp(reason, expected) == 0);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // `fs_identify` answers which file a path names rather than what the path spells: two spellings of
 // one file share an identity, two files do not. A path that cannot be inspected is rejected with
 // the caller's struct left alone. The last of those is what `register_output_path` relies on to
@@ -1127,6 +1166,8 @@ TEST_LIST = {
     {"mkdir_p rejects file component", test_mkdir_p_rejects_file_component},
     {"mkdir_p rejects unstatable component", test_mkdir_p_rejects_unstatable_component},
     {"mkdir_p rejects uncreatable component", test_mkdir_p_rejects_uncreatable_component},
+    {"require dir reports why a directory is unusable",
+     test_require_dir_reports_why_a_directory_is_unusable},
     {"identify distinguishes files and rejects missing",
      test_identify_distinguishes_files_and_rejects_missing},
     {NULL, NULL},

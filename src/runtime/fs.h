@@ -178,6 +178,28 @@ int fs_write_file(const char* file_path,
 int fs_mkdir_p(const char* dir_path, char* reason, size_t reason_len) __attribute__((nonnull(1)));
 
 /**
+ * @brief Requires a path to exist and be a directory, reporting why when it does not.
+ *
+ * Use this when a directory is required and the caller has to tell the user what is wrong. A
+ * predicate cannot do that job: `ENOENT` and `EACCES` call for different fixes, and a caller that
+ * returns on `false` gives no later operation the chance to report the cause.
+ *
+ * The reason is the bare cause with the path trailing it, so a caller composes it after naming its
+ * own operation and subject, as in
+ * `failed to resolve config directory 'content_dir': No such file or directory ('content')`.
+ *
+ * @param dir_path   Path that must be an existing directory. Symlinks are followed. Must not be
+ *                   `NULL`.
+ * @param reason     Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ *                   Untouched on success.
+ * @param reason_len Size of `reason` in bytes.
+ * @return `0` when `dir_path` is an existing directory, or `-1` when it cannot be inspected or is
+ *         not a directory.
+ */
+int fs_require_dir(const char* dir_path, char* reason, size_t reason_len)
+    __attribute__((nonnull(1)));
+
+/**
  * @brief Reports the identity of the file at `file_path`, when it exists and can be inspected.
  *
  * Unlike the other actions here this one takes no `reason`, because its caller wants a fact rather
