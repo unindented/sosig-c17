@@ -319,63 +319,6 @@ static void test_load_accepts_zero_feed_count(void) {
   remove_fixture_tree(temp_config.root_dir);
 }
 
-// A directory key that is empty, or that trims to empty, is rejected by name.
-static void test_load_rejects_empty_directory_keys(void) {
-  static const char* const cases[][2] = {
-      {"content_dir = \"\"\n", "config key 'content_dir' must not be empty"},
-      {"output_dir = \"/\"\n", "config key 'output_dir' must not be empty"},
-      {"templates_dir = \"///\"\n", "config key 'templates_dir' must not be empty"},
-  };
-
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    check_load_rejects(cases[i][0], cases[i][1]);
-  }
-}
-
-// `site_config_load` rejects a `base_url` that is not an absolute HTTP(S) URL. Without that
-// rejection it is not a load error at all: it silently produces a broken link in every feed entry
-// and canonical URL.
-static void test_load_rejects_relative_base_url(void) {
-  static const char* const base_urls_invalid[] = {
-      "example.com",         // no scheme
-      "/relative",           // a path, not a URL
-      "",                    // present and a string, but empty
-      "ftp://example.com",   // a scheme, but not one a browser follows from a feed
-      "https:/example.com",  // one slash short of a scheme
-      "https://",            // scheme with no host
-      "https:///path",       // the host ends before it starts
-      "https://?draft=1",    // likewise
-  };
-
-  for (size_t i = 0; i < sizeof(base_urls_invalid) / sizeof(base_urls_invalid[0]); i++) {
-    char toml[256];
-    const int n = snprintf(toml, sizeof(toml),
-                           "base_url = \"%s\"\n"
-                           "title = \"Example Site\"\n"
-                           "author = \"Example Author\"\n",
-                           base_urls_invalid[i]);
-    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-
-    struct SiteConfig config;
-    site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    char expected[ERROR_MESSAGE_SIZE];
-    const int expected_len =
-        snprintf(expected, sizeof(expected),
-                 "config key 'base_url' must be an absolute 'http://' or 'https://' URL with "
-                 "a host: '%s'",
-                 base_urls_invalid[i]);
-    TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    TEST_CHECK(strcmp(err, expected) == 0);
-
-    site_config_free(&config);
-    remove_fixture_tree(temp_config.root_dir);
-  }
-}
-
 // Loading a config path that does not exist reports a read failure naming the path and cause.
 static void test_load_rejects_missing_file(void) {
   struct SiteConfig config;
@@ -571,39 +514,6 @@ static void test_load_rejects_table_values(void) {
   }
 }
 
-// An unsafe `content_template` is rejected at load, in the singular wording that names the key,
-// rather than flowing through to the render and failing once per content entry that has no
-// frontmatter `template` of its own. Parent-relative, absolute and empty names are all unsafe.
-static void test_load_rejects_unsafe_content_template(void) {
-  const char* const unsafe_names[] = {"../evil.html", "/etc/passwd", ""};
-
-  for (size_t i = 0; i < sizeof(unsafe_names) / sizeof(unsafe_names[0]); i++) {
-    char toml_extra[256];
-    const int n =
-        snprintf(toml_extra, sizeof(toml_extra), "content_template = \"%s\"\n", unsafe_names[i]);
-    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
-    char expected[ERROR_MESSAGE_SIZE];
-    const int expected_len =
-        snprintf(expected, sizeof(expected),
-                 "config key 'content_template' must be a safe relative template name: '%s'",
-                 unsafe_names[i]);
-    TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    check_load_rejects(toml_extra, expected);
-  }
-}
-
-// A non-array value, a non-string element, and an unsafe name for a template array key are each
-// rejected.
-static void test_load_rejects_invalid_template_arrays(void) {
-  check_load_rejects("aggregate_templates = \"index.html\"\n",
-                     "config key 'aggregate_templates' must be an array");
-  check_load_rejects("aggregate_templates = [1]\n",
-                     "config key 'aggregate_templates' must contain only strings");
-  check_load_rejects("aggregate_templates = [\"../evil.html\"]\n",
-                     "config key 'aggregate_templates' must contain only safe relative template "
-                     "names: '../evil.html'");
-}
-
 // An integer key rejects a TOML type other than integer and enforces its exact lower bound, which
 // is 0 for `feed_count`. A non-integer fails a different assertion from an out-of-range one: the
 // user has to change the type, not the number.
@@ -642,6 +552,96 @@ static void test_load_rejects_nul_in_string_values(void) {
     site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
+}
+
+// A directory key that is empty, or that trims to empty, is rejected by name.
+static void test_load_rejects_empty_directory_keys(void) {
+  static const char* const cases[][2] = {
+      {"content_dir = \"\"\n", "config key 'content_dir' must not be empty"},
+      {"output_dir = \"/\"\n", "config key 'output_dir' must not be empty"},
+      {"templates_dir = \"///\"\n", "config key 'templates_dir' must not be empty"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    check_load_rejects(cases[i][0], cases[i][1]);
+  }
+}
+
+// `site_config_load` rejects a `base_url` that is not an absolute HTTP(S) URL. Without that
+// rejection it is not a load error at all: it silently produces a broken link in every feed entry
+// and canonical URL.
+static void test_load_rejects_relative_base_url(void) {
+  static const char* const base_urls_invalid[] = {
+      "example.com",         // no scheme
+      "/relative",           // a path, not a URL
+      "",                    // present and a string, but empty
+      "ftp://example.com",   // a scheme, but not one a browser follows from a feed
+      "https:/example.com",  // one slash short of a scheme
+      "https://",            // scheme with no host
+      "https:///path",       // the host ends before it starts
+      "https://?draft=1",    // likewise
+  };
+
+  for (size_t i = 0; i < sizeof(base_urls_invalid) / sizeof(base_urls_invalid[0]); i++) {
+    char toml[256];
+    const int n = snprintf(toml, sizeof(toml),
+                           "base_url = \"%s\"\n"
+                           "title = \"Example Site\"\n"
+                           "author = \"Example Author\"\n",
+                           base_urls_invalid[i]);
+    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
+    struct TempConfig temp_config;
+    const char* config_path = write_temp_config(&temp_config, toml);
+
+    struct SiteConfig config;
+    site_config_init(&config);
+    char err[ERROR_MESSAGE_SIZE] = "";
+    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+    char expected[ERROR_MESSAGE_SIZE];
+    const int expected_len =
+        snprintf(expected, sizeof(expected),
+                 "config key 'base_url' must be an absolute 'http://' or 'https://' URL with "
+                 "a host: '%s'",
+                 base_urls_invalid[i]);
+    TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+    TEST_CHECK(strcmp(err, expected) == 0);
+
+    site_config_free(&config);
+    remove_fixture_tree(temp_config.root_dir);
+  }
+}
+
+// An unsafe `content_template` is rejected at load, in the singular wording that names the key,
+// rather than flowing through to the render and failing once per content entry that has no
+// frontmatter `template` of its own. Parent-relative, absolute and empty names are all unsafe.
+static void test_load_rejects_unsafe_content_template(void) {
+  const char* const unsafe_names[] = {"../evil.html", "/etc/passwd", ""};
+
+  for (size_t i = 0; i < sizeof(unsafe_names) / sizeof(unsafe_names[0]); i++) {
+    char toml_extra[256];
+    const int n =
+        snprintf(toml_extra, sizeof(toml_extra), "content_template = \"%s\"\n", unsafe_names[i]);
+    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
+    char expected[ERROR_MESSAGE_SIZE];
+    const int expected_len =
+        snprintf(expected, sizeof(expected),
+                 "config key 'content_template' must be a safe relative template name: '%s'",
+                 unsafe_names[i]);
+    TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+    check_load_rejects(toml_extra, expected);
+  }
+}
+
+// A non-array value, a non-string element, and an unsafe name for a template array key are each
+// rejected.
+static void test_load_rejects_invalid_template_arrays(void) {
+  check_load_rejects("aggregate_templates = \"index.html\"\n",
+                     "config key 'aggregate_templates' must be an array");
+  check_load_rejects("aggregate_templates = [1]\n",
+                     "config key 'aggregate_templates' must contain only strings");
+  check_load_rejects("aggregate_templates = [\"../evil.html\"]\n",
+                     "config key 'aggregate_templates' must contain only safe relative template "
+                     "names: '../evil.html'");
 }
 
 // A permalink that could escape the output directory, or that uses bytes the expanded path cannot
@@ -1127,8 +1127,6 @@ TEST_LIST = {
     {"load leaves directory overlap to the build", test_load_leaves_directory_overlap_to_the_build},
     {"load accepts valid permalinks", test_load_accepts_valid_permalinks},
     {"load accepts zero feed count", test_load_accepts_zero_feed_count},
-    {"load rejects empty directory keys", test_load_rejects_empty_directory_keys},
-    {"load rejects relative base url", test_load_rejects_relative_base_url},
     {"load rejects missing file", test_load_rejects_missing_file},
     {"load rejects oversize file", test_load_rejects_oversize_file},
     {"load rejects nul in file", test_load_rejects_nul_in_file},
@@ -1137,11 +1135,13 @@ TEST_LIST = {
     {"load rejects wrong key type", test_load_rejects_wrong_key_type},
     {"load rejects unknown keys", test_load_rejects_unknown_keys},
     {"load rejects table values", test_load_rejects_table_values},
-    {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
-    {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
     {"load rejects invalid integer type and minimum",
      test_load_rejects_invalid_integer_type_and_minimum},
     {"load rejects nul in string values", test_load_rejects_nul_in_string_values},
+    {"load rejects empty directory keys", test_load_rejects_empty_directory_keys},
+    {"load rejects relative base url", test_load_rejects_relative_base_url},
+    {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
+    {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
     {"load rejects unsafe permalink", test_load_rejects_unsafe_permalink},
     {"load rejects permalink without slug", test_load_rejects_permalink_without_slug},
     {"load rejects oversize permalink", test_load_rejects_oversize_permalink},
