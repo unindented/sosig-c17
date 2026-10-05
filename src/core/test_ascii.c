@@ -2,9 +2,9 @@
 
 #include "core/ascii.h"
 
-// `ascii_is_digit` answers for `[0-9]` and nothing else, asserted at both edges. Its only caller
-// hands the byte to `strtoull`, which re-checks it, so a widened alphabet here is invisible from
-// outside the module.
+// `ascii_is_digit` answers for `[0-9]` and nothing else, asserted at both edges. Only `parse_size`
+// calls it, and it re-checks the byte afterwards by handing it to `strtoull`, so a widened alphabet
+// here is invisible from outside the module.
 static void test_is_digit_accepts_only_ascii_digits(void) {
   TEST_CHECK(ascii_is_digit('0'));
   TEST_CHECK(ascii_is_digit('5'));
@@ -20,10 +20,11 @@ static void test_is_digit_accepts_only_ascii_digits(void) {
 }
 
 // `ascii_is_alphanumeric` answers for `[0-9A-Za-z]` and nothing else, asserted at every edge of the
-// three ranges. This predicate defines the accept set of `text_is_safe_identifier` and
+// three ranges. This predicate defines the alphanumeric accept set of `text_is_safe_identifier` and
 // `path_is_safe_relative` and the pass-through set of `text_slugify`, so widening it by one byte
-// silently changes generated slugs and output paths. `content/hello_world.md` publishes
-// `public/hello-world.html`. An added `'_'` would change that to `public/hello_world.html`.
+// silently changes which identifiers and output paths are accepted and which slugs a build
+// generates. `content/hello_world.md` publishes `public/hello-world.html`. An added `'_'` would
+// change that to `public/hello_world.html`.
 static void test_is_alnum_accepts_only_letters_and_digits(void) {
   TEST_CHECK(ascii_is_alphanumeric('0'));
   TEST_CHECK(ascii_is_alphanumeric('9'));
@@ -53,14 +54,14 @@ static void test_is_alnum_accepts_only_letters_and_digits(void) {
   TEST_CHECK(!ascii_is_alphanumeric(0xFF));
 }
 
-// `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. Slugs, URL schemes, and
-// manifest keys all use this exact locale-independent fold, through `text_slugify`, `skip_scheme`,
-// and `manifest_equal_bytes` with `manifest_hash_bytes`. `skip_scheme` folds both the URL byte and
-// the scheme byte before comparing, and a fold that set bit 0x20 unconditionally would make the
-// control byte 0x1A compare equal to ':' and 0x0F equal to '/'. A scheme-less `base_url` spelled
-// with those control bytes would then pass as absolute. The high-byte case pins the rule that bytes
-// outside ASCII never fold, whatever the locale: `tolower` from `<ctype.h>` may fold such a byte
-// under some locales, and this must not.
+// `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. Slugs, URL schemes, file
+// suffixes, and manifest keys all use this exact locale-independent fold, through `text_slugify`,
+// `skip_scheme`, `has_suffix` in `fs.c`, and `manifest_equal_bytes` with `manifest_hash_bytes`.
+// `skip_scheme` folds both the URL byte and the scheme byte before comparing, and a fold that set
+// bit 0x20 unconditionally would make the control byte 0x1A compare equal to ':' and 0x0F equal to
+// '/'. A scheme-less `base_url` spelled with those control bytes would then pass as absolute. The
+// high-byte case pins the rule that bytes outside ASCII never fold, whatever the locale: `tolower`
+// from `<ctype.h>` may fold such a byte under some locales, and this must not.
 static void test_to_lower_folds_uppercase_and_passes_through(void) {
   TEST_CHECK(ascii_to_lower('A') == 'a');
   TEST_CHECK(ascii_to_lower('Z') == 'z');

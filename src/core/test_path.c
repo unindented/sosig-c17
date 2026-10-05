@@ -97,8 +97,7 @@ static void test_check_output_limits_reports_both_limits_and_metrics(void) {
 static void test_basename_strips_dirs_and_extension(void) {
   struct Arena arena;
   arena_init(&arena);
-  TEST_CHECK(strcmp(path_basename_without_extension("content/content_entries/hello.md", &arena),
-                    "hello") == 0);
+  TEST_CHECK(strcmp(path_basename_without_extension("content/hello.md", &arena), "hello") == 0);
   TEST_CHECK(strcmp(path_basename_without_extension("README", &arena), "README") == 0);
   TEST_CHECK(strcmp(path_basename_without_extension(".gitignore", &arena), ".gitignore") == 0);
   // Only the last extension goes, which is what distinguishes searching the name from its end

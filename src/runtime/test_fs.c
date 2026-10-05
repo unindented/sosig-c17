@@ -755,7 +755,7 @@ static void test_write_then_read_round_trips(void) {
   TEST_CHECK(
       fs_read_file(root_md, TEST_FILE_LEN_MAX, &file_data, &file_len, reason, sizeof(reason)) == 0);
   TEST_CHECK(file_len == strlen("root"));
-  TEST_CHECK(strcmp(file_data, "root") == 0);
+  TEST_CHECK(file_data != NULL && strcmp(file_data, "root") == 0);
   TEST_CHECK(strcmp(reason, "untouched") == 0);
   free(file_data);
 
@@ -763,7 +763,7 @@ static void test_write_then_read_round_trips(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A second write truncates a prior file and replaces its contents.
+// A second write replaces a prior file's contents, including bytes past the new end.
 static void test_write_file_replaces_contents(void) {
   char root_dir_template[] = "/tmp/sosig-fs-replace.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -782,7 +782,7 @@ static void test_write_file_replaces_contents(void) {
   size_t data_len = 0;
   TEST_CHECK(fs_read_file(file_path, TEST_FILE_LEN_MAX, &data, &data_len, NULL, 0) == 0);
   TEST_CHECK(data_len == sizeof(replacement));
-  TEST_CHECK(memcmp(data, replacement, sizeof(replacement)) == 0);
+  TEST_CHECK(data != NULL && memcmp(data, replacement, sizeof(replacement)) == 0);
   free(data);
 
   arena_free(&arena);
@@ -813,8 +813,8 @@ static void test_write_file_applies_umask_and_keeps_existing_mode(void) {
   (void)umask(previous_umask);
 
   struct stat st;
-  TEST_CHECK(stat(created, &st) == 0 && (st.st_mode & 0777) == (mode_t)(0666 & ~077));
-  TEST_CHECK(stat(existing, &st) == 0 && (st.st_mode & 0777) == 0640);
+  TEST_CHECK(stat(created, &st) == 0 && (st.st_mode & 07777) == (mode_t)(0666 & ~077));
+  TEST_CHECK(stat(existing, &st) == 0 && (st.st_mode & 07777) == 0640);
 
   arena_free(&arena);
   remove_fixture_tree(root_dir);
