@@ -513,7 +513,7 @@ cleanup:
 
 // A regular file passed as the root is rejected by the directory open rather than by the `stat`
 // that seeds the ancestor chain, which deliberately does not check the type. The directory open
-// prevents a walk when `content_dir` names a file instead of a tree.
+// prevents a walk when an input root names a file instead of a tree.
 static void test_list_files_rejects_file_root(void) {
   char root_dir_template[] = "/tmp/sosig-fs-list-file-root.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
