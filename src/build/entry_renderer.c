@@ -43,7 +43,7 @@ struct ContentEntryRenderSource {
  * Worker context shared by all content entry parse jobs. Every field is read-only to a job, except
  * `source_entries`, where each job writes its own slot.
  */
-struct ContentEntryRenderContext {
+struct EntryRenderContext {
   /** Site configuration shared by every parse job. */
   const struct SiteConfig* site_config;
 
@@ -64,8 +64,8 @@ struct ContentEntryRenderContext {
  *
  * @param jobs     Running job set, whose error slot for `index` the job may fill through
  *                 `job_set_error`. Must not be `NULL`.
- * @param index    Source path index this job parses.
- * @param userdata Pointer to the shared `struct ContentEntryRenderContext`. Must not be `NULL`.
+ * @param index    Source path index this job handles. Must be below the source path count.
+ * @param userdata `struct EntryRenderContext*` shared by every worker. Must not be `NULL`.
  * @return `0` on success, or a skipped draft, or `-1` after recording the failure through
  *         `job_set_error`.
  */
@@ -217,12 +217,12 @@ int entry_renderer_render_entries(const struct SiteConfig* site_config,
                                   bool is_verbose,
                                   struct ContentEntry** source_entries,
                                   struct StringBuffer* error_out) {
-  struct ContentEntryRenderContext render_context = {
+  struct EntryRenderContext context = {
       .site_config = site_config,
       .source_paths = source_paths,
       .source_entries = source_entries,
   };
-  return job_run(source_paths->count, worker_count, render_content_entry_job, &render_context,
+  return job_run(source_paths->count, worker_count, render_content_entry_job, &context,
                  "parsing content", is_verbose, error_out);
 }
 
@@ -240,8 +240,8 @@ void entry_renderer_free_entries(struct ContentEntry** source_entries, size_t so
 }
 
 static int render_content_entry_job(struct JobSet* jobs, size_t index, void* userdata) {
-  struct ContentEntryRenderContext* render_context = userdata;
-  const char* source_path = render_context->source_paths->items[index];
+  const struct EntryRenderContext* context = userdata;
+  const char* source_path = context->source_paths->items[index];
   struct ContentEntryRenderSource source = {0};
   struct ContentEntry* entry = NULL;
   int rc = -1;
@@ -260,12 +260,12 @@ static int render_content_entry_job(struct JobSet* jobs, size_t index, void* use
   if (render_content_entry_body(entry, &source, source_path, jobs, index) != 0) {
     goto cleanup;
   }
-  if (render_content_entry_finalize_paths(entry, render_context->site_config, source_path, jobs,
-                                          index) != 0) {
+  if (render_content_entry_finalize_paths(entry, context->site_config, source_path, jobs, index) !=
+      0) {
     goto cleanup;
   }
 
-  render_context->source_entries[index] = entry;
+  context->source_entries[index] = entry;
   entry = NULL;
   rc = 0;
 
@@ -305,21 +305,21 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
     return -1;
   }
 
-  char error_message[ERROR_MESSAGE_SIZE];
+  char err[ERROR_MESSAGE_SIZE];
   // This writes the callee's reason first, and keeps all of it. Leading with the source path would
   // put the reason at the tail of a second `ERROR_MESSAGE_SIZE` buffer, where a long path evicts it
   // entirely and leaves the user with a path twice and no cause. The path can still be cut for a
   // pathological one, which costs far less. The job can recover the path, but not the reason. This
   // parenthesizes the attribution, because a reason may itself end in a `: '<value>'` clause, which
   // a bare `in '%s'` suffix would read as part of.
-  if (frontmatter_split(source_out->markdown, markdown_len, &source_out->split, error_message,
-                        sizeof(error_message)) != 0) {
-    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
+  if (frontmatter_split(source_out->markdown, markdown_len, &source_out->split, err, sizeof(err)) !=
+      0) {
+    job_set_error(jobs, index, "%s (in '%s')", err, source_path);
     return -1;
   }
   if (frontmatter_parse(entry, source_out->split.frontmatter, source_out->split.frontmatter_len,
-                        source_path, error_message, sizeof(error_message)) != 0) {
-    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
+                        source_path, err, sizeof(err)) != 0) {
+    job_set_error(jobs, index, "%s (in '%s')", err, source_path);
     return -1;
   }
   return 0;
@@ -330,15 +330,15 @@ static int render_content_entry_body(struct ContentEntry* entry,
                                      const char* source_path,
                                      struct JobSet* jobs,
                                      size_t index) {
-  char error_message[ERROR_MESSAGE_SIZE] = "";
+  // Terminated because `markdown_to_html` leaves it untouched on a parser or allocation failure.
+  char err[ERROR_MESSAGE_SIZE] = "";
   // The entry adopts the converter's heap buffer, so `content_entry_free` releases it.
-  entry->body_html = markdown_to_html(source->split.body, source->split.body_len, error_message,
-                                      sizeof(error_message));
+  entry->body_html = markdown_to_html(source->split.body, source->split.body_len, err, sizeof(err));
   if (entry->body_html != NULL) {
     return 0;
   }
-  if (error_message[0] != '\0') {
-    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
+  if (err[0] != '\0') {
+    job_set_error(jobs, index, "%s (in '%s')", err, source_path);
   } else {
     job_set_error(jobs, index, "failed to render Markdown for '%s'", source_path);
   }
@@ -457,10 +457,9 @@ static int render_content_entry_finalize_paths_output(struct ContentEntry* entry
   }
   // Every output path producer reports a limit failure through `output_path_check_limits`, so a
   // content entry and a configured template over a limit read alike.
-  char error_message[ERROR_MESSAGE_SIZE];
-  if (output_path_check_limits(relative_path, source_path, error_message, sizeof(error_message)) !=
-      0) {
-    job_set_error(jobs, index, "%s", error_message);
+  char err[ERROR_MESSAGE_SIZE];
+  if (output_path_check_limits(relative_path, source_path, err, sizeof(err)) != 0) {
+    job_set_error(jobs, index, "%s", err);
     return -1;
   }
 

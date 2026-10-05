@@ -14,7 +14,7 @@
 /**
  * Worker context shared by all content entry page render jobs. Every field is read-only to a job.
  */
-struct ContentEntryPageContext {
+struct PageRenderContext {
   /**
    * Template context every page render starts from, fully populated here so a job varies only
    * `content_entry_current`. Leaving a field zeroed would make `site.updated` render empty. That
@@ -41,8 +41,8 @@ struct ContentEntryPageContext {
  *
  * @param jobs     Running job set, whose error slot for `index` the job may fill through
  *                 `job_set_error`. Must not be `NULL`.
- * @param index    Entry slot index this job renders.
- * @param userdata Pointer to the shared `struct ContentEntryPageContext`. Must not be `NULL`.
+ * @param index    Entry slot index this job handles. Must be below the entry slot count.
+ * @param userdata `struct PageRenderContext*` shared by every worker. Must not be `NULL`.
  * @return `0` on success, or a skipped slot, or `-1` after recording the failure through
  *         `job_set_error`.
  */
@@ -96,7 +96,7 @@ int page_renderer_render_pages(const struct SiteConfig* site_config,
                                size_t worker_count,
                                bool is_verbose,
                                struct StringBuffer* error_out) {
-  struct ContentEntryPageContext page_context = {
+  struct PageRenderContext context = {
       .base_context =
           {
               .site_config = site_config,
@@ -108,13 +108,13 @@ int page_renderer_render_pages(const struct SiteConfig* site_config,
       .templates_dir = site_config->templates_dir,
       .source_entries = source_entries,
   };
-  return job_run(source_entry_count, worker_count, render_content_page_job, &page_context,
+  return job_run(source_entry_count, worker_count, render_content_page_job, &context,
                  "rendering content", is_verbose, error_out);
 }
 
 static int render_content_page_job(struct JobSet* jobs, size_t index, void* userdata) {
-  struct ContentEntryPageContext* page_context = userdata;
-  const struct ContentEntry* entry = page_context->source_entries[index];
+  const struct PageRenderContext* context = userdata;
+  const struct ContentEntry* entry = context->source_entries[index];
 
   int rc = 0;
   if (entry != NULL) {
@@ -125,10 +125,10 @@ static int render_content_page_job(struct JobSet* jobs, size_t index, void* user
     // Copy the shared context before setting `content_entry_current`. Every page job reads
     // `base_context` concurrently, so mutating it in place would be a data race, which is undefined
     // behavior. The copy lives on this job's stack, so no other job can observe a change to it.
-    struct TemplateContext context = page_context->base_context;
-    context.content_entry_current = entry;
+    struct TemplateContext template_context = context->base_context;
+    template_context.content_entry_current = entry;
     size_t rendered_html_len = 0;
-    char* rendered_html = render_content_page_template(page_context->templates_dir, &context,
+    char* rendered_html = render_content_page_template(context->templates_dir, &template_context,
                                                        &rendered_html_len, jobs, index);
     rc = rendered_html != NULL
              ? render_content_page_write(entry, rendered_html, rendered_html_len, jobs, index)
@@ -146,15 +146,14 @@ static char* render_content_page_template(const char* templates_dir,
   const struct ContentEntry* entry = context->content_entry_current;
   const char* template_name =
       entry->template != NULL ? entry->template : context->site_config->content_template;
-  char error_message[ERROR_MESSAGE_SIZE];
-  error_message[0] = '\0';
-  char* rendered_html = template_render_file(templates_dir, template_name, context, html_len_out,
-                                             error_message, sizeof(error_message));
+  char err[ERROR_MESSAGE_SIZE];
+  char* rendered_html =
+      template_render_file(templates_dir, template_name, context, html_len_out, err, sizeof(err));
   if (rendered_html == NULL) {
     // Parenthesize the attribution. The callee's message may itself end in a `: <reason>` clause. A
     // bare `for '%s'` suffix would read as part of that reason rather than as the entry the render
     // was for.
-    job_set_error(jobs, index, "%s (while rendering '%s')", error_message, entry->source_path);
+    job_set_error(jobs, index, "%s (while rendering '%s')", err, entry->source_path);
   }
   return rendered_html;
 }
