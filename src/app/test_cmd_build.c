@@ -200,26 +200,34 @@ static void test_honors_configured_content_template(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"content-entry.html\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content-entry.html",
-                                 "<main>{{title}} {{{body}}}</main>\n") == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  char* generated_file = NULL;
+  size_t generated_file_len = 0;
+  if (!TEST_CHECK(write_site_fixture(root_dir, "content_template = \"content-entry.html\"\n") ==
+                  0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content-entry.html",
+                                     "<main>{{title}} {{{body}}}</main>\n") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
-  char* generated_file = NULL;
-  size_t generated_file_len = 0;
   TEST_CHECK(
       read_fixture_file(root_dir, "public/hello.html", &generated_file, &generated_file_len) == 0);
   TEST_CHECK(generated_file != NULL &&
              strcmp(generated_file, "<main>Hello <p>Body</p>\n</main>\n") == 0);
-  free(generated_file);
 
+cleanup:
+  free(generated_file);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -231,7 +239,6 @@ static void test_writes_exactly_manifest_outputs(void) {
   if (root_dir == NULL) {
     return;
   }
-
   // The shared config turns off aggregates and feeds, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
@@ -258,32 +265,51 @@ static void test_writes_exactly_manifest_outputs(void) {
       "draft = true\n"
       "+++\n"
       "Draft body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/alpha.md", alpha) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/beta.md", beta) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0);
-
+  static const char* expected[] = {
+      "public/alpha.html",
+      "public/beta.html",
+      "public/feed.xml",
+      "public/index.html",
+  };
+  const size_t expected_count = sizeof(expected) / sizeof(expected[0]);
+  static const char* const all_suffixes[] = {""};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  struct Arena arena;
+  arena_init(&arena);
+  struct PathList outputs;
+  path_list_init(&outputs);
+  char* output_dir = NULL;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/alpha.md", alpha) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/beta.md", beta) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
-  static const char* expected[] = {"public/alpha.html", "public/beta.html", "public/feed.xml",
-                                   "public/index.html"};
-  const size_t expected_count = sizeof(expected) / sizeof(expected[0]);
-
-  struct Arena arena;
-  arena_init(&arena);
-  char* output_dir = path_join(root_dir, "public", &arena);
-  TEST_ASSERT(output_dir != NULL);
-  struct PathList outputs;
-  path_list_init(&outputs);
-  static const char* const all_suffixes[] = {""};
+  output_dir = path_join(root_dir, "public", &arena);
+  if (!TEST_CHECK(output_dir != NULL)) {
+    goto cleanup;
+  }
   TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
                                          0) == 0);
 
@@ -294,8 +320,10 @@ static void test_writes_exactly_manifest_outputs(void) {
     TEST_MSG("missing: '%s'", expected[i]);
   }
 
+cleanup:
   path_list_free(&outputs);
   arena_free(&arena);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -308,29 +336,35 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "content_dir = \"content/\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/post.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  char* generated_file = NULL;
+  size_t generated_file_len = 0;
+  char* leaked_file = NULL;
+  size_t leaked_file_len = 0;
+  if (!TEST_CHECK(write_site_fixture(root_dir, "content_dir = \"content/\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/post.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
-  char* generated_file = NULL;
-  size_t generated_file_len = 0;
   TEST_CHECK(
       read_fixture_file(root_dir, "public/post.html", &generated_file, &generated_file_len) == 0);
   TEST_CHECK(generated_file_len > 0);
-  free(generated_file);
 
   // The path an unnormalized `content_dir` would publish instead.
-  char* leaked_file = NULL;
-  size_t leaked_file_len = 0;
   TEST_CHECK(read_fixture_file(root_dir, "public/content/post.html", &leaked_file,
                                &leaked_file_len) == -1);
 
+cleanup:
+  free(leaked_file);
+  free(generated_file);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -343,23 +377,28 @@ static void test_honors_custom_permalink(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "permalink = \"/{slug}/\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  char* generated_file = NULL;
+  size_t generated_file_len = 0;
+  if (!TEST_CHECK(write_site_fixture(root_dir, "permalink = \"/{slug}/\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
-  char* generated_file = NULL;
-  size_t generated_file_len = 0;
   TEST_CHECK(read_fixture_file(root_dir, "public/hello/index.html", &generated_file,
                                &generated_file_len) == 0);
   TEST_CHECK(generated_file_len > 0);
-  free(generated_file);
 
+cleanup:
+  free(generated_file);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -371,19 +410,26 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a/post.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/b/post.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a/post.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/b/post.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
   TEST_CHECK(fixture_path_exists(root_dir, "public/a/post.html"));
   TEST_CHECK(fixture_path_exists(root_dir, "public/b/post.html"));
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -394,32 +440,40 @@ static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
+  static const char* const all_suffixes[] = {""};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  struct Arena arena;
+  arena_init(&arena);
+  struct PathList outputs;
+  path_list_init(&outputs);
+  char* output_dir = NULL;
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
 
-  struct Arena arena;
-  arena_init(&arena);
-  char* output_dir = path_join(root_dir, "public", &arena);
-  TEST_ASSERT(output_dir != NULL);
-  struct PathList outputs;
-  path_list_init(&outputs);
-  static const char* const all_suffixes[] = {""};
+  output_dir = path_join(root_dir, "public", &arena);
+  if (!TEST_CHECK(output_dir != NULL)) {
+    goto cleanup;
+  }
   TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
                                          0) == 0);
   // The one content page: the second build adds nothing and removes nothing.
   TEST_CHECK(outputs.count == 1);
   TEST_CHECK(has_output_path(&outputs, root_dir, "public/hello.html"));
+
+cleanup:
   path_list_free(&outputs);
   arena_free(&arena);
   string_buffer_free(&error_buffer);
-
   remove_fixture_tree(root_dir);
 }
 
@@ -432,11 +486,15 @@ static void test_builds_and_rebuilds_with_output_dir_holding_content_dir(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "output_dir = \".\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   static const char* const all_suffixes[] = {""};
   size_t output_counts[2] = {0, 0};
+  if (!TEST_CHECK(write_site_fixture(root_dir, "output_dir = \".\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   for (size_t i = 0; i < 2; i++) {
     struct StringBuffer error_buffer;
     string_buffer_init(&error_buffer);
@@ -457,6 +515,7 @@ static void test_builds_and_rebuilds_with_output_dir_holding_content_dir(void) {
   TEST_CHECK(output_counts[1] == output_counts[0]);
   TEST_CHECK(fixture_path_exists(root_dir, "hello.html"));
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -469,7 +528,6 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
   if (root_dir == NULL) {
     return;
   }
-
   // The shared config turns off aggregates, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
@@ -477,42 +535,55 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
       "author = \"Author\"\n"
       "aggregate_templates = [\"notes.md\"]\n"
       "feed_templates = []\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/notes.md", "notes\n") == 0);
-  struct Arena arena;
-  arena_init(&arena);
-  char* link_path = path_join(root_dir, "content/published", &arena);
-  TEST_ASSERT(link_path != NULL);
-  if (link_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  TEST_ASSERT(symlink("../public", link_path) == 0);
-
+  static const char* const all_suffixes[] = {""};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  struct Arena arena;
+  arena_init(&arena);
+  struct PathList outputs;
+  path_list_init(&outputs);
+  char* link_path = NULL;
+  char* output_dir = NULL;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/notes.md", "notes\n") == 0)) {
+    goto cleanup;
+  }
+  link_path = path_join(root_dir, "content/published", &arena);
+  if (!TEST_CHECK(link_path != NULL)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(symlink("../public", link_path) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
-  char* output_dir = path_join(root_dir, "public", &arena);
-  TEST_ASSERT(output_dir != NULL);
-  struct PathList outputs;
-  path_list_init(&outputs);
-  static const char* const all_suffixes[] = {""};
+  output_dir = path_join(root_dir, "public", &arena);
+  if (!TEST_CHECK(output_dir != NULL)) {
+    goto cleanup;
+  }
   TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
                                          0) == 0);
   // The page and the aggregate, and no page rendered from the aggregate's own output.
   TEST_CHECK(outputs.count == 2);
   TEST_CHECK(has_output_path(&outputs, root_dir, "public/hello.html"));
   TEST_CHECK(has_output_path(&outputs, root_dir, "public/notes.md"));
-  path_list_free(&outputs);
 
+cleanup:
+  path_list_free(&outputs);
   arena_free(&arena);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -526,37 +597,46 @@ static void test_honors_requested_worker_count(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   const struct BuildOptions options = {.worker_count = 3, .is_verbose = true};
+  const struct BuildOptions single_worker = {.worker_count = 1, .is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
   char stderr_out[ERROR_MESSAGE_SIZE * 8];
+  char expected[ERROR_MESSAGE_SIZE * 2];
+  int expected_len = 0;
+  char* generated = NULL;
+  size_t generated_len = 0;
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
                                  sizeof(stderr_out)) == EXIT_CODE_OK);
   TEST_CHECK(stdout_out[0] == '\0');
-  char expected[ERROR_MESSAGE_SIZE * 2];
-  int expected_len = snprintf(expected, sizeof(expected),
-                              "loading config\n"
-                              "discovering content\n"
-                              "parsing content, workers: %d\n"
-                              "\rparsing content 1/1\n"
-                              "collecting content entries\n"
-                              "building output manifest\n"
-                              "rendering content, workers: %d\n"
-                              "\rrendering content 1/1\n"
-                              "rendering aggregate templates\n"
-                              "rendering feed templates\n"
-                              "build complete\n",
-                              3, 3);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  expected_len = snprintf(expected, sizeof(expected),
+                          "loading config\n"
+                          "discovering content\n"
+                          "parsing content, workers: %d\n"
+                          "\rparsing content 1/1\n"
+                          "collecting content entries\n"
+                          "building output manifest\n"
+                          "rendering content, workers: %d\n"
+                          "\rrendering content 1/1\n"
+                          "rendering aggregate templates\n"
+                          "rendering feed templates\n"
+                          "build complete\n",
+                          3, 3);
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
 
   // One worker, requested explicitly, must be honored rather than read as unset. A guard spelled
   // `worker_count != 1` instead of `!= 0` swallows this request and falls back to the detected core
   // count. Asking for `3` above cannot see that. It is also the only way to ask for a serial build.
   // Like the `3` case, this assumes the host reports more than one core.
-  const struct BuildOptions single_worker = {.worker_count = 1, .is_verbose = true};
   TEST_CHECK(run_build_capturing(root_dir, &single_worker, stdout_out, sizeof(stdout_out),
                                  stderr_out, sizeof(stderr_out)) == EXIT_CODE_OK);
   TEST_CHECK(stdout_out[0] == '\0');
@@ -573,16 +653,17 @@ static void test_honors_requested_worker_count(void) {
                           "rendering feed templates\n"
                           "build complete\n",
                           1, 1);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
 
   // The requested count changes only how the work is scheduled, never the output.
-  char* generated = NULL;
-  size_t generated_len = 0;
   TEST_CHECK(read_fixture_file(root_dir, "public/hello.html", &generated, &generated_len) == 0);
   TEST_CHECK(generated != NULL && strcmp(generated, "<p>Body</p>\n\n") == 0);
-  free(generated);
 
+cleanup:
+  free(generated);
   remove_fixture_tree(root_dir);
 }
 
@@ -595,13 +676,17 @@ static void test_skips_empty_phases_in_verbose_output(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  // A file that is not a source keeps `content_dir` present while the site holds no sources.
-  TEST_ASSERT(write_fixture_file(root_dir, "content/notes.txt", "not a source\n") == 0);
-
   const struct BuildOptions options = {.worker_count = 3, .is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
   char stderr_out[ERROR_MESSAGE_SIZE * 4];
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  // A file that is not a source keeps `content_dir` present while the site holds no sources.
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/notes.txt", "not a source\n") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
                                  sizeof(stderr_out)) == EXIT_CODE_OK);
   TEST_CHECK(stdout_out[0] == '\0');
@@ -615,6 +700,7 @@ static void test_skips_empty_phases_in_verbose_output(void) {
                     "build complete\n") == 0);
   TEST_MSG("actual: '%s'", stderr_out);
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -628,16 +714,21 @@ static void test_leaves_error_buffer_empty_on_success(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -646,27 +737,26 @@ static void test_leaves_error_buffer_empty_on_success(void) {
 // test routes failures through `cmd_build_execute` to inspect the message, so without this the
 // boundary itself is unasserted: the exit code and the single print.
 static void test_run_prints_diagnostic_once_and_fails(void) {
-  char root_dir_template[] = "/tmp/sosig-build-exit.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-
-  // No `sosig.toml`, the earliest failure, so the diagnostic is a single known line.
-  const struct BuildOptions options = {0};
-  char stdout_out[ERROR_MESSAGE_SIZE];
-  char stderr_out[ERROR_MESSAGE_SIZE * 4];
-  const enum ExitCode rc = run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out),
-                                               stderr_out, sizeof(stderr_out));
-  TEST_CHECK(rc == EXIT_CODE_FAILURE);
-  TEST_CHECK(stdout_out[0] == '\0');
-
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')\n",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-build-exit.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  // No `sosig.toml`, the earliest failure, so the diagnostic is a single known line.
+  const struct BuildOptions options = {0};
+  char stdout_out[ERROR_MESSAGE_SIZE];
+  char stderr_out[ERROR_MESSAGE_SIZE * 4];
+
+  TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
+                                 sizeof(stderr_out)) == EXIT_CODE_FAILURE);
+  TEST_CHECK(stdout_out[0] == '\0');
   // Compared whole rather than by substring: "exactly once" is the claim, and only a whole-buffer
   // comparison can tell one print from two.
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
@@ -682,11 +772,15 @@ static void test_rejects_unsafe_permalink(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "permalink = \"/{slug}/../evil.html\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, "permalink = \"/{slug}/../evil.html\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // One config diagnostic, not one per entry: the message names the key, and the buffer holds a
   // single line. Compared exactly rather than by prefix, so that nothing trailing the message can
@@ -697,22 +791,14 @@ static void test_rejects_unsafe_permalink(void) {
                     "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
                     "with no empty, '.' or '..' path segment: '/{slug}/../evil.html'") == 0);
   TEST_CHECK(error_buffer.data != NULL && strchr(error_buffer.data, '\n') == NULL);
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
 // A missing `sosig.toml` is reported at the command boundary rather than printed by a helper.
 static void test_reports_missing_config(void) {
-  char root_dir_template[] = "/tmp/sosig-build-no-config.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // The cause is part of the claim: a missing config must not read like an unreadable one.
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
@@ -720,10 +806,20 @@ static void test_reports_missing_config(void) {
       snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-build-no-config.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // Exact: `expected` is the whole message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
 
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -732,16 +828,6 @@ static void test_reports_missing_config(void) {
 // report either, so the cause has to appear here. Compared exactly, so a caller that appended the
 // path a second time would fail.
 static void test_reports_absent_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-no-content.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
@@ -749,26 +835,29 @@ static void test_reports_absent_content_dir(void) {
                "failed to resolve config directory 'content_dir': %s ('content')",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
 
+  char root_dir_template[] = "/tmp/sosig-build-no-content.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
 // `templates_dir` is required the same way, and reports the key the user has to fix rather than the
 // one that happened to be checked first.
 static void test_reports_absent_templates_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-no-templates.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
@@ -776,9 +865,26 @@ static void test_reports_absent_templates_dir(void) {
                "failed to resolve config directory 'templates_dir': %s ('templates')",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
 
+  char root_dir_template[] = "/tmp/sosig-build-no-templates.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -790,19 +896,26 @@ static void test_reports_templates_dir_that_is_a_file(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates", "not a directory\n") == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates", "not a directory\n") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
                     "failed to resolve config directory 'templates_dir': not a directory "
                     "('templates')") == 0);
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -816,20 +929,27 @@ static void test_reports_unusable_output_dir(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  // `public` is the default `output_dir`, so a file there is what makes `fs_mkdir_p` fail.
-  TEST_ASSERT(write_fixture_file(root_dir, "public", "not a directory") == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  // `public` is the default `output_dir`, so a file there is what makes `fs_mkdir_p` fail.
+  if (!TEST_CHECK(write_fixture_file(root_dir, "public", "not a directory") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   TEST_CHECK(
       error_buffer.data != NULL &&
       strcmp(error_buffer.data,
              "failed to prepare output directory: exists and is not a directory ('public')") == 0);
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -838,28 +958,6 @@ static void test_reports_unusable_output_dir(void) {
 // the manifest sees nothing there, and `fs_mkdir_p` then fails the `stat` that follows `mkdir`'s
 // `EEXIST`. The message is compared whole.
 static void test_reports_dangling_output_dir_symlink(void) {
-  char root_dir_template[] = "/tmp/sosig-build-output-symlink.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  // `public` is the default `output_dir`, so a dangling symlink there is what makes `fs_mkdir_p`
-  // fail.
-  struct Arena arena;
-  arena_init(&arena);
-  char* output_dir = path_join(root_dir, "public", &arena);
-  TEST_ASSERT(output_dir != NULL);
-  if (output_dir == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  TEST_ASSERT(symlink("missing", output_dir) == 0);
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
@@ -867,11 +965,40 @@ static void test_reports_dangling_output_dir_symlink(void) {
                "failed to prepare output directory: cannot inspect directory: %s ('public')",
                error_system_message(reason, sizeof(reason), ENOENT));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-build-output-symlink.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  struct Arena arena;
+  arena_init(&arena);
+  char* output_dir = NULL;
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  // `public` is the default `output_dir`, so a dangling symlink there is what makes `fs_mkdir_p`
+  // fail.
+  output_dir = path_join(root_dir, "public", &arena);
+  if (!TEST_CHECK(output_dir != NULL)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(symlink("missing", output_dir) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
-  arena_free(&arena);
 
+cleanup:
+  arena_free(&arena);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -885,12 +1012,16 @@ static void test_rejects_output_dir_inside_content_dir(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "output_dir = \"content/generated/site\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   const struct BuildOptions options = {.is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
   char stderr_out[ERROR_MESSAGE_SIZE * 4];
+  if (!TEST_CHECK(write_site_fixture(root_dir, "output_dir = \"content/generated/site\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
                                  sizeof(stderr_out)) == EXIT_CODE_FAILURE);
   TEST_CHECK(stdout_out[0] == '\0');
@@ -901,6 +1032,7 @@ static void test_rejects_output_dir_inside_content_dir(void) {
   TEST_MSG("actual: '%s'", stderr_out);
   TEST_CHECK(!fixture_path_exists(root_dir, "content/generated"));
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -917,24 +1049,28 @@ static void test_reports_unparsable_content(void) {
   if (root_dir == NULL) {
     return;
   }
-
   // No closing fence, so `frontmatter_split` rejects the file before any key is read.
   const char unterminated[] =
       "+++\n"
       "title = \"X\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "Body\n";
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", unterminated) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", unterminated) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
                     "missing closing '+++' frontmatter fence (in 'content/a.md')") == 0);
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -942,12 +1078,17 @@ static void test_reports_unparsable_content(void) {
 // collision described in the returned diagnostic. The refused build creates no `output_dir`,
 // because nothing is written before the manifest passes.
 static void test_rejects_duplicate_output(void) {
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
+               "content/index.md", "aggregate_templates[0]", "public/index.html");
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
   char root_dir_template[] = "/tmp/sosig-build-collision.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
   // The shared config turns off aggregates, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
@@ -955,25 +1096,29 @@ static void test_rejects_duplicate_output(void) {
       "author = \"Author\"\n"
       "aggregate_templates = [\"index.html\"]\n"
       "feed_templates = []\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/index.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/index.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               "content/index.md", "aggregate_templates[0]", "public/index.html");
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
   // it from the same message with something appended.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
   TEST_CHECK(!fixture_path_exists(root_dir, "public"));
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -982,29 +1127,37 @@ static void test_rejects_duplicate_output(void) {
 // folds to hex, so `caf\xC3\xA9` produces the slug a literal `cafc3a9` also produces. The refused
 // build creates no `output_dir`, because nothing is written before the manifest passes.
 static void test_rejects_colliding_source_names(void) {
-  char root_dir_template[] = "/tmp/sosig-build-source-collision.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/caf\xC3\xA9.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/cafc3a9.md", HELLO_ENTRY) == 0);
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
                "content/cafc3a9.md", "content/caf\xC3\xA9.md", "public/cafc3a9.html");
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-build-source-collision.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/caf\xC3\xA9.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/cafc3a9.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
   // it from the same message with something appended.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
   TEST_CHECK(!fixture_path_exists(root_dir, "public"));
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -1017,13 +1170,20 @@ static void test_reports_bad_template(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"broken.html\"\n") == 0);
-  // The section never closes, so the template is read but fails to compile.
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/broken.html", "{{#title}}{{title}}\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, "content_template = \"broken.html\"\n") == 0)) {
+    goto cleanup;
+  }
+  // The section never closes, so the template is read but fails to compile.
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/broken.html", "{{#title}}{{title}}\n") ==
+                  0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // Exact, not by substring: the expected text is the whole message, so a substring check could not
   // tell it from the same message with something appended.
@@ -1032,8 +1192,9 @@ static void test_reports_bad_template(void) {
                     "section-opening tag has no closer at line 1, column 1 (in 'broken.html') "
                     "(while rendering 'content/hello.md')") == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
-  string_buffer_free(&error_buffer);
 
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -1042,26 +1203,6 @@ static void test_reports_bad_template(void) {
 // growable rather than a fixed buffer: an `append_error` that overwrote, or that dropped the
 // separator and ran two messages together, would still satisfy every single-entry test.
 static void test_reports_one_line_per_failing_entry(void) {
-  char root_dir_template[] = "/tmp/sosig-build-render-failures.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-
-  const char second[] =
-      "+++\n"
-      "title = \"Second\"\n"
-      "date = 2026-07-02T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"missing.html\"\n") == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", second) == 0);
-
-  // No `templates/missing.html`, so the page render fails for both entries.
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   error_system_message(reason, sizeof(reason), ENOENT);
   char expected[ERROR_MESSAGE_SIZE * 2];
@@ -1075,9 +1216,36 @@ static void test_reports_one_line_per_failing_entry(void) {
                "'content/b.md')",
                reason, reason);
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
 
+  char root_dir_template[] = "/tmp/sosig-build-render-failures.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  const char second[] =
+      "+++\n"
+      "title = \"Second\"\n"
+      "date = 2026-07-02T00:00:00Z\n"
+      "+++\n"
+      "Body\n";
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  // No `templates/missing.html`, so the page render fails for both entries.
+  if (!TEST_CHECK(write_site_fixture(root_dir, "content_template = \"missing.html\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/b.md", second) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+
+cleanup:
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
@@ -1086,29 +1254,6 @@ static void test_reports_one_line_per_failing_entry(void) {
 // page is still written. A write failure reported as success would otherwise pass the suite with
 // the page silently missing.
 static void test_reports_unwritable_output(void) {
-  char root_dir_template[] = "/tmp/sosig-build-unwritable.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", HELLO_ENTRY) == 0);
-
-  struct Arena arena;
-  arena_init(&arena);
-  char* output_path = path_join(root_dir, "public/a.html", &arena);
-  TEST_ASSERT(output_path != NULL);
-  if (output_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  // A directory at the page path cannot be opened as a file even by a privileged process.
-  TEST_CHECK(fs_mkdir_p(output_path, NULL, 0) == 0);
-
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   error_system_message(reason, sizeof(reason), EISDIR);
   char expected[ERROR_MESSAGE_SIZE];
@@ -1116,15 +1261,44 @@ static void test_reports_unwritable_output(void) {
       snprintf(expected, sizeof(expected),
                "failed to write output: %s (for 'content/a.md', to 'public/a.html')", reason);
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  string_buffer_free(&error_buffer);
-  arena_free(&arena);
+
+  char root_dir_template[] = "/tmp/sosig-build-unwritable.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  struct Arena arena;
+  arena_init(&arena);
+  char* output_path = NULL;
   char* generated = NULL;
   size_t generated_len = 0;
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/b.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  output_path = path_join(root_dir, "public/a.html", &arena);
+  if (!TEST_CHECK(output_path != NULL)) {
+    goto cleanup;
+  }
+  // A directory at the page path cannot be opened as a file even by a privileged process.
+  TEST_CHECK(fs_mkdir_p(output_path, NULL, 0) == 0);
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_CHECK(read_fixture_file(root_dir, "public/b.html", &generated, &generated_len) == 0);
   TEST_CHECK(generated != NULL && strcmp(generated, "<p>Body</p>\n\n") == 0);
-  free(generated);
 
+cleanup:
+  free(generated);
+  arena_free(&arena);
+  string_buffer_free(&error_buffer);
   remove_fixture_tree(root_dir);
 }
 
