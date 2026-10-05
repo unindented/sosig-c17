@@ -22,10 +22,29 @@
 /** Largest generated file a test reads back, in bytes. Fixture outputs are a few kilobytes. */
 enum { TEST_FILE_LEN_MAX = 1024 * 1024 };
 
+/** Config body every fixture shares. It turns off the aggregate and feed passes. */
+static const char* const SITE_CONFIG =
+    "base_url = \"https://example.com\"\n"
+    "title = \"Site\"\n"
+    "author = \"Author\"\n"
+    "aggregate_templates = []\n"
+    "feed_templates = []\n";
+
+/** Minimal content template, which renders a page as its body alone. */
+static const char* const CONTENT_TEMPLATE = "{{{body}}}\n";
+
+/** One published content entry whose body renders as `<p>Body</p>`. */
+static const char* const HELLO_ENTRY =
+    "+++\n"
+    "title = \"Hello\"\n"
+    "date = 2026-07-01T00:00:00Z\n"
+    "+++\n"
+    "Body\n";
+
 /**
- * @brief Reads one generated file relative to a temporary site root.
+ * @brief Reads one generated file below a fixture root.
  *
- * @param root_dir               Temporary site root directory.
+ * @param root_dir               Fixture root directory.
  * @param relative_path          Relative generated-file path below `root_dir`.
  * @param generated_file_out     Receives allocated file contents on success.
  * @param generated_file_len_out Receives the content length in bytes on success.
@@ -47,7 +66,35 @@ static int read_fixture_file(const char* root_dir,
 }
 
 /**
- * @brief Runs a default build in a temporary fixture directory.
+ * @brief Writes `sosig.toml` and the content template below a fixture root.
+ *
+ * @param root_dir     Fixture root directory.
+ * @param config_extra Config lines placed before the shared body, or `NULL` for the body alone. It
+ *                     must not repeat a key the body sets, because TOML rejects a duplicate key.
+ * @return `0` on success, or `-1` on test-plumbing failure.
+ */
+static int write_site_fixture(const char* root_dir, const char* config_extra) {
+  if (write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) != 0) {
+    return -1;
+  }
+  if (config_extra == NULL) {
+    return write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG);
+  }
+  struct StringBuffer config;
+  string_buffer_init(&config);
+  int rc = string_buffer_append(&config, config_extra) != 0 ||
+                   string_buffer_append(&config, SITE_CONFIG) != 0
+               ? -1
+               : 0;
+  if (rc == 0) {
+    rc = write_fixture_file(root_dir, "sosig.toml", config.data);
+  }
+  string_buffer_free(&config);
+  return rc;
+}
+
+/**
+ * @brief Runs a build in a fixture directory.
  *
  * Use `execute_build_in_dir` when a test must inspect the returned diagnostic.
  *
@@ -65,7 +112,10 @@ static enum ExitCode run_build_in_dir(const char* root_dir) {
 }
 
 /**
- * @brief Executes a default build and collects its diagnostic.
+ * @brief Executes a build in a fixture directory and collects its diagnostic.
+ *
+ * The build resolves `sosig.toml` from the working directory, so this changes into the fixture and
+ * restores the previous directory before returning.
  *
  * @param root_dir  Fixture directory in which to execute the build.
  * @param error_out Buffer that receives any build diagnostic.
@@ -163,27 +213,13 @@ static bool fixture_path_exists(const char* root_dir, const char* relative_path)
 
 // A configured content template name is used instead of the default.
 static void test_honors_configured_content_template(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-content-template.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "content_template = \"content-entry.html\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"content-entry.html\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/content-entry.html",
                                  "<main>{{title}} {{{body}}}</main>\n") == 0);
   TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
@@ -202,12 +238,13 @@ static void test_honors_configured_content_template(void) {
 // A build writes exactly the manifest's intended outputs: content pages, aggregate and feed
 // outputs, and nothing for drafts.
 static void test_writes_exactly_manifest_outputs(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-manifest-outputs.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
+  // The shared config turns off aggregates and feeds, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
       "title = \"Site\"\n"
@@ -237,7 +274,7 @@ static void test_writes_exactly_manifest_outputs(void) {
   TEST_ASSERT(write_fixture_file(root_dir, "content/alpha.md", alpha) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/beta.md", beta) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0);
   TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
@@ -271,28 +308,13 @@ static void test_writes_exactly_manifest_outputs(void) {
 // prefix strip that derives an entry's section compares `<content_dir>/`, so an unnormalized
 // `"content/"` would miss and publish `public/content/post.html`.
 static void test_tolerates_trailing_slash_on_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-trailing-slash.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "content_dir = \"content/\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Post\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/post.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "content_dir = \"content/\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/post.md", HELLO_ENTRY) == 0);
   TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
@@ -315,28 +337,13 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
 // compares that output shape end to end with `tests/expected/site_index_permalink`. What this adds
 // is the assertion at the command boundary, so it stops at the file being readable.
 static void test_honors_custom_permalink(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-permalink.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "permalink = \"/{slug}/\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "permalink = \"/{slug}/\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
   TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
@@ -352,18 +359,12 @@ static void test_honors_custom_permalink(void) {
 // Same-named sources in different directories publish to distinct, non-colliding outputs under the
 // default permalink.
 static void test_distinguishes_same_name_in_different_dirs(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-same-name.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char a[] =
       "+++\n"
       "title = \"A\"\n"
@@ -376,10 +377,9 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "B body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/a/post.md", a) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/b/post.md", b) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
   TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
 
   char* generated_file = NULL;
@@ -399,27 +399,22 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
 // rebuild does not read the first build's outputs back as sources. The aggregate here publishes a
 // `.md` file, which the walk would otherwise parse as a content entry and claim as an input.
 static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-linked-output.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
+  // The shared config turns off aggregates, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
       "title = \"Site\"\n"
       "author = \"Author\"\n"
       "aggregate_templates = [\"notes.md\"]\n"
       "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
   TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/notes.md", "notes\n") == 0);
   struct Arena arena;
   arena_init(&arena);
@@ -461,28 +456,13 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
 // observable from the return value, so it is read off the verbose phase lines, which are the only
 // place the module reports it. Each parallel pass closes with its one-job progress line.
 static void test_honors_requested_worker_count(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-workers.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
-              0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
   const struct BuildOptions options = {.worker_count = 3, .is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
@@ -535,9 +515,7 @@ static void test_honors_requested_worker_count(void) {
   char* generated = NULL;
   size_t generated_len = 0;
   TEST_CHECK(read_fixture_file(root_dir, "public/hello.html", &generated, &generated_len) == 0);
-  if (generated != NULL) {
-    TEST_CHECK(strcmp(generated, "<html><p>Body</p>\n</html>\n") == 0);
-  }
+  TEST_CHECK(generated != NULL && strcmp(generated, "<p>Body</p>\n\n") == 0);
   free(generated);
 
   remove_fixture_tree(root_dir);
@@ -548,28 +526,13 @@ static void test_honors_requested_worker_count(void) {
 // the success path would go unnoticed, since every other test that inspects the buffer is a failure
 // test.
 static void test_leaves_error_buffer_empty_on_success(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-clean.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "<html>{{{body}}}</html>\n") ==
-              0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -585,7 +548,7 @@ static void test_leaves_error_buffer_empty_on_success(void) {
 // test routes failures through `cmd_build_execute` to inspect the message, so without this the
 // boundary itself is unasserted: the exit code and the single print.
 static void test_run_prints_diagnostic_once_and_fails(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-exit.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -602,9 +565,10 @@ static void test_run_prints_diagnostic_once_and_fails(void) {
 
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
-  const int n = snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')\n",
-                         error_system_message(reason, sizeof(reason), ENOENT));
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')\n",
+               error_system_message(reason, sizeof(reason), ENOENT));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   // Compared whole rather than by substring: "exactly once" is the claim, and only a whole-buffer
   // comparison can tell one print from two.
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
@@ -615,28 +579,13 @@ static void test_run_prints_diagnostic_once_and_fails(void) {
 // A permalink that would expand to a path escaping the output directory is rejected at config load,
 // so the build reports it once rather than once per content entry.
 static void test_rejects_unsafe_permalink(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-unsafe-permalink.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "permalink = \"/{slug}/../evil.html\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "permalink = \"/{slug}/../evil.html\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -657,7 +606,7 @@ static void test_rejects_unsafe_permalink(void) {
 
 // A missing `sosig.toml` is reported at the command boundary rather than printed by a helper.
 static void test_reports_missing_config(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-no-config.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -682,19 +631,12 @@ static void test_reports_missing_config(void) {
 
 // An absent content directory is reported through the returned diagnostic.
 static void test_reports_absent_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-no-content.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -719,26 +661,13 @@ static void test_reports_absent_content_dir(void) {
 // component that failed and the caller does not repeat the configured root, so the message is
 // compared whole.
 static void test_reports_unusable_output_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-output-file.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
   // `public` is the default `output_dir`, so a file there is what makes `fs_mkdir_p` fail.
   TEST_ASSERT(write_fixture_file(root_dir, "public", "not a directory") == 0);
 
@@ -759,28 +688,13 @@ static void test_reports_unusable_output_dir(void) {
 // The verbose phase lines show that the build stopped before the content walk, and the refused
 // build creates none of the nested directories.
 static void test_rejects_output_dir_inside_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-nested-output.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "output_dir = \"content/generated/site\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "output_dir = \"content/generated/site\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
   const struct BuildOptions options = {.is_verbose = true};
   char stdout_out[ERROR_MESSAGE_SIZE];
@@ -806,27 +720,20 @@ static void test_rejects_output_dir_inside_content_dir(void) {
 // `cmd_build_execute`'s parse-phase arm never runs and a parse failure that incorrectly returns
 // success would still pass the suite.
 static void test_reports_unparsable_content(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-unparsable.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   // No closing fence, so `frontmatter_split` rejects the file before any key is read.
   const char unterminated[] =
       "+++\n"
       "title = \"X\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", unterminated) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
@@ -843,37 +750,32 @@ static void test_reports_unparsable_content(void) {
 // collision described in the returned diagnostic. The refused build creates no `output_dir`,
 // because nothing is written before the manifest passes.
 static void test_rejects_duplicate_output(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-collision.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
+  // The shared config turns off aggregates, so this fixture writes its own.
   const char config[] =
       "base_url = \"https://example.com\"\n"
       "title = \"Site\"\n"
       "author = \"Author\"\n"
       "aggregate_templates = [\"index.html\"]\n"
       "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Index\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
   TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/index.md", content) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/index.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
 
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char expected[ERROR_MESSAGE_SIZE];
-  const int n =
+  const int expected_len =
       snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
                "content/index.md", "aggregate_templates[0]", "public/index.html");
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
   // it from the same message with something appended.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
@@ -886,28 +788,15 @@ static void test_rejects_duplicate_output(void) {
 // A content entry whose content template cannot be rendered surfaces a per-entry diagnostic through
 // the collected build error.
 static void test_reports_bad_template(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-bad-template.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
+  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"missing.html\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char content[] =
-      "+++\n"
-      "title = \"Hello\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-
-  // No `templates/content.html` exists, so the page render fails for the entry. The diagnostic
+  // No `templates/missing.html` exists, so the page render fails for the entry. The diagnostic
   // names the failing entry and the specific file that could not be read, rather than a generic
   // failure message that cannot be distinguished from an unrelated error.
   struct StringBuffer error_buffer;
@@ -915,11 +804,12 @@ static void test_reports_bad_template(void) {
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   char reason[FS_REASON_SIZE];
   char expected[ERROR_MESSAGE_SIZE];
-  const int n = snprintf(expected, sizeof(expected),
-                         "failed to read template: %s ('templates/content.html') (while rendering "
-                         "'content/hello.md')",
-                         error_system_message(reason, sizeof(reason), ENOENT));
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to read template: %s ('templates/missing.html') (while rendering "
+               "'content/hello.md')",
+               error_system_message(reason, sizeof(reason), ENOENT));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   // Exact: `expected` is the whole message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   string_buffer_free(&error_buffer);
@@ -932,35 +822,23 @@ static void test_reports_bad_template(void) {
 // growable rather than a fixed buffer: an `append_error` that overwrote, or that dropped the
 // separator and ran two messages together, would still satisfy every single-entry test.
 static void test_reports_one_line_per_failing_entry(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-render-failures.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char first[] =
-      "+++\n"
-      "title = \"First\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
   const char second[] =
       "+++\n"
       "title = \"Second\"\n"
       "date = 2026-07-02T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", first) == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"missing.html\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", second) == 0);
 
-  // No `templates/content.html`, so the page render fails for both entries.
+  // No `templates/missing.html`, so the page render fails for both entries.
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
@@ -969,13 +847,14 @@ static void test_reports_one_line_per_failing_entry(void) {
   char expected[ERROR_MESSAGE_SIZE * 2];
   // Sources are walked in sorted order, so `content/a.md` precedes `content/b.md`. Compared whole,
   // with the separator in the middle, so a dropped newline or a lost line both fail here.
-  const int n = snprintf(expected, sizeof(expected),
-                         "failed to read template: %s ('templates/content.html') (while rendering "
-                         "'content/a.md')\n"
-                         "failed to read template: %s ('templates/content.html') (while rendering "
-                         "'content/b.md')",
-                         reason, reason);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to read template: %s ('templates/missing.html') (while rendering "
+               "'content/a.md')\n"
+               "failed to read template: %s ('templates/missing.html') (while rendering "
+               "'content/b.md')",
+               reason, reason);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   string_buffer_free(&error_buffer);
 
@@ -987,28 +866,14 @@ static void test_reports_one_line_per_failing_entry(void) {
 // page is still written. A write failure reported as success would otherwise pass the suite with
 // the page silently missing.
 static void test_reports_unwritable_output(void) {
-  char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-build-unwritable.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  const char entry[] =
-      "+++\n"
-      "title = \"X\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "Body\n";
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", entry) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", entry) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/b.md", HELLO_ENTRY) == 0);
 
   struct Arena arena;
   arena_init(&arena);
@@ -1027,10 +892,10 @@ static void test_reports_unwritable_output(void) {
   char reason[FS_REASON_SIZE];
   error_system_message(reason, sizeof(reason), EISDIR);
   char expected[ERROR_MESSAGE_SIZE];
-  const int n =
+  const int expected_len =
       snprintf(expected, sizeof(expected),
                "failed to write output: %s (for 'content/a.md', to 'public/a.html')", reason);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   string_buffer_free(&error_buffer);
   arena_free(&arena);
