@@ -29,7 +29,7 @@ static struct CliOptions parse(char** argv) {
   return options;
 }
 
-// The `build` command resolves to a run action with no worker override.
+// The `build` command resolves to the run action with no worker override.
 static void test_build_command_runs(void) {
   char* argv[] = {"sosig", "build", NULL};
   struct CliOptions options = parse(argv);
@@ -38,7 +38,7 @@ static void test_build_command_runs(void) {
   TEST_CHECK(options.worker_count == 0);
 }
 
-// The `config` command resolves to a run action.
+// The `config` command resolves to the run action.
 static void test_config_command_runs(void) {
   char* argv[] = {"sosig", "config", NULL};
   struct CliOptions options = parse(argv);
@@ -74,6 +74,7 @@ static void test_workers_long_flag_separate_value(void) {
 static void test_workers_short_flag_separate_value(void) {
   char* argv[] = {"sosig", "build", "-w", "8", NULL};
   struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_RUN);
   TEST_CHECK(options.worker_count == 8);
 }
 
@@ -81,6 +82,7 @@ static void test_workers_short_flag_separate_value(void) {
 static void test_workers_short_flag_attached_value(void) {
   char* argv[] = {"sosig", "build", "-w4", NULL};
   struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_RUN);
   TEST_CHECK(options.worker_count == 4);
 }
 
@@ -88,6 +90,7 @@ static void test_workers_short_flag_attached_value(void) {
 static void test_workers_long_flag_equals_value(void) {
   char* argv[] = {"sosig", "build", "--workers=16", NULL};
   struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_RUN);
   TEST_CHECK(options.worker_count == 16);
 }
 
@@ -138,7 +141,7 @@ static void test_options_after_build_command(void) {
   TEST_CHECK(options.worker_count == 3);
 }
 
-// `--help` with no command resolves to a help action with no command selected.
+// `--help` with no command resolves to the help action with no command selected.
 static void test_help_long_flag(void) {
   char* argv[] = {"sosig", "--help", NULL};
   struct CliOptions options = parse(argv);
@@ -146,7 +149,7 @@ static void test_help_long_flag(void) {
   TEST_CHECK(options.command == CLI_COMMAND_NONE);
 }
 
-// `-h` with no command resolves to a help action with no command selected.
+// `-h` with no command resolves to the help action with no command selected.
 static void test_help_short_flag(void) {
   char* argv[] = {"sosig", "-h", NULL};
   struct CliOptions options = parse(argv);
@@ -154,7 +157,7 @@ static void test_help_short_flag(void) {
   TEST_CHECK(options.command == CLI_COMMAND_NONE);
 }
 
-// `build --help` resolves to a help action scoped to the build command.
+// `build --help` resolves to the help action scoped to the build command.
 static void test_build_command_help(void) {
   char* argv[] = {"sosig", "build", "--help", NULL};
   struct CliOptions options = parse(argv);
@@ -162,7 +165,7 @@ static void test_build_command_help(void) {
   TEST_CHECK(options.command == CLI_COMMAND_BUILD);
 }
 
-// `config --help` resolves to a help action scoped to the config command.
+// `config --help` resolves to the help action scoped to the config command.
 static void test_config_command_help(void) {
   char* argv[] = {"sosig", "config", "--help", NULL};
   struct CliOptions options = parse(argv);
@@ -170,7 +173,7 @@ static void test_config_command_help(void) {
   TEST_CHECK(options.command == CLI_COMMAND_CONFIG);
 }
 
-// `--version` resolves to a version action.
+// `--version` resolves to the version action.
 static void test_version_long_flag(void) {
   char* argv[] = {"sosig", "--version", NULL};
   struct CliOptions options = parse(argv);
@@ -178,7 +181,7 @@ static void test_version_long_flag(void) {
   TEST_CHECK(options.error_message[0] == '\0');
 }
 
-// `-V` resolves to a version action.
+// `-V` resolves to the version action.
 static void test_version_short_flag(void) {
   char* argv[] = {"sosig", "-V", NULL};
   struct CliOptions options = parse(argv);
@@ -204,19 +207,19 @@ static void test_version_flag_wins_over_help(void) {
 // precedence, per `test_attached_value_rejected_on_valueless_short_flags`.
 static void test_informational_flag_clears_diagnostic(void) {
   char* help_argv[] = {"sosig", "--frobnicate", "--help", NULL};
-  struct CliOptions help_options = parse(help_argv);
-  TEST_CHECK(help_options.action == CLI_ACTION_HELP);
-  TEST_CHECK(help_options.error_message[0] == '\0');
+  struct CliOptions options = parse(help_argv);
+  TEST_CHECK(options.action == CLI_ACTION_HELP);
+  TEST_CHECK(options.error_message[0] == '\0');
 
   char* version_argv[] = {"sosig", "--frobnicate", "--version", NULL};
-  struct CliOptions version_options = parse(version_argv);
-  TEST_CHECK(version_options.action == CLI_ACTION_VERSION);
-  TEST_CHECK(version_options.error_message[0] == '\0');
+  options = parse(version_argv);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+  TEST_CHECK(options.error_message[0] == '\0');
 
   char* cluster_argv[] = {"sosig", "-Vx", NULL};
-  struct CliOptions cluster_options = parse(cluster_argv);
-  TEST_CHECK(cluster_options.action == CLI_ACTION_VERSION);
-  TEST_CHECK(cluster_options.error_message[0] == '\0');
+  options = parse(cluster_argv);
+  TEST_CHECK(options.action == CLI_ACTION_VERSION);
+  TEST_CHECK(options.error_message[0] == '\0');
 }
 
 // A valid `--version` wins in either order next to a rejected `--version=1`. The rejected spelling
@@ -326,7 +329,8 @@ static void test_oversize_worker_count_rejected(void) {
   TEST_CHECK(options.error_message[0] == '\0');
 }
 
-// `-w` with no following value is rejected with a diagnostic that it requires a worker count.
+// `-w` with no following value is rejected with a diagnostic that it requires a worker count,
+// naming the short spelling.
 static void test_missing_worker_count_short_flag(void) {
   char* argv[] = {"sosig", "build", "-w", NULL};
   struct CliOptions options = parse(argv);
@@ -335,7 +339,7 @@ static void test_missing_worker_count_short_flag(void) {
 }
 
 // `--workers` with no following value is rejected with a diagnostic that it requires a worker
-// count.
+// count, naming the long spelling.
 static void test_missing_worker_count_long_flag(void) {
   char* argv[] = {"sosig", "build", "--workers", NULL};
   struct CliOptions options = parse(argv);
@@ -350,23 +354,20 @@ static void test_missing_worker_count_long_flag(void) {
 // `test_workers_long_flag_equals_value` test confirms that `--workers=N` still works.
 static void test_attached_value_rejected_on_valueless_flags(void) {
   char* verbose_argv[] = {"sosig", "build", "--verbose=0", NULL};
-  struct CliOptions verbose_options = parse(verbose_argv);
-  TEST_CHECK(verbose_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(!verbose_options.is_verbose);
-  TEST_CHECK(strcmp(verbose_options.error_message, "option does not take a value: '--verbose=0'") ==
-             0);
+  struct CliOptions options = parse(verbose_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(!options.is_verbose);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '--verbose=0'") == 0);
 
   char* help_argv[] = {"sosig", "--help=nope", NULL};
-  struct CliOptions help_options = parse(help_argv);
-  TEST_CHECK(help_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(help_options.error_message, "option does not take a value: '--help=nope'") ==
-             0);
+  options = parse(help_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '--help=nope'") == 0);
 
   char* version_argv[] = {"sosig", "--version=nope", NULL};
-  struct CliOptions version_options = parse(version_argv);
-  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(
-      strcmp(version_options.error_message, "option does not take a value: '--version=nope'") == 0);
+  options = parse(version_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '--version=nope'") == 0);
 }
 
 // The short form of each valueless flag rejects an attached value and names the complete element.
@@ -375,20 +376,20 @@ static void test_attached_value_rejected_on_valueless_flags(void) {
 // `error_message`, so the rejection must prevent `-V` from becoming a version request.
 static void test_attached_value_rejected_on_valueless_short_flags(void) {
   char* verbose_argv[] = {"sosig", "build", "-v=0", NULL};
-  struct CliOptions verbose_options = parse(verbose_argv);
-  TEST_CHECK(verbose_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(!verbose_options.is_verbose);
-  TEST_CHECK(strcmp(verbose_options.error_message, "option does not take a value: '-v=0'") == 0);
+  struct CliOptions options = parse(verbose_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(!options.is_verbose);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '-v=0'") == 0);
 
   char* help_argv[] = {"sosig", "-h=1", NULL};
-  struct CliOptions help_options = parse(help_argv);
-  TEST_CHECK(help_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(help_options.error_message, "option does not take a value: '-h=1'") == 0);
+  options = parse(help_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '-h=1'") == 0);
 
   char* version_argv[] = {"sosig", "-V=1", NULL};
-  struct CliOptions version_options = parse(version_argv);
-  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(version_options.error_message, "option does not take a value: '-V=1'") == 0);
+  options = parse(version_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '-V=1'") == 0);
 }
 
 // A rejected attached value ends its short cluster, so the letters after the `=` are not read as
@@ -396,15 +397,15 @@ static void test_attached_value_rejected_on_valueless_short_flags(void) {
 // help, and either would clear the rejection.
 static void test_attached_value_rejection_ends_short_cluster(void) {
   char* version_argv[] = {"sosig", "-v=V", NULL};
-  struct CliOptions version_options = parse(version_argv);
-  TEST_CHECK(version_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(!version_options.is_verbose);
-  TEST_CHECK(strcmp(version_options.error_message, "option does not take a value: '-v=V'") == 0);
+  struct CliOptions options = parse(version_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(!options.is_verbose);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '-v=V'") == 0);
 
   char* help_argv[] = {"sosig", "-v=h", NULL};
-  struct CliOptions help_options = parse(help_argv);
-  TEST_CHECK(help_options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(help_options.error_message, "option does not take a value: '-v=h'") == 0);
+  options = parse(help_argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "option does not take a value: '-v=h'") == 0);
 }
 
 // An unrecognized short option is rejected with a diagnostic naming the option.
@@ -467,8 +468,9 @@ static void test_print_version_writes_version_line(void) {
   TEST_ASSERT(rc == 0);
 
   char expected[64];
-  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(buf, expected) == 0);
   TEST_CHECK(len == strlen(expected));
   free(buf);

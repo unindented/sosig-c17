@@ -115,8 +115,9 @@ static void test_version_action_reports_ok(void) {
   struct DispatchOutput dispatch_out;
   TEST_CHECK(dispatch_capturing(2, argv, &dispatch_out) == EXIT_CODE_OK);
   char expected[64];
-  const int n = snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(dispatch_out.stdout_out, expected) == 0);
   TEST_CHECK(dispatch_out.stderr_out[0] == '\0');
 }
