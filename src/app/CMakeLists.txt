@@ -3,7 +3,7 @@ target_sources(
   PRIVATE cli.c cli_dispatch.c cmd_build.c cmd_config.c
   PUBLIC FILE_SET HEADERS
          BASE_DIRS "${PROJECT_SOURCE_DIR}/src"
-         FILES cli.h cli_dispatch.h cmd_build.h cmd_config.h exit_code.h sosig_version.h
+         FILES cli.h cli_dispatch.h cmd_build.h cmd_config.h exit_code.h
 )
 
 if(SOSIG_BUILD_TESTING)

@@ -11,8 +11,8 @@
 
 #include "app/cli_dispatch.h"
 #include "app/exit_code.h"
-#include "app/sosig_version.h"
 #include "core/error.h"
+#include "core/sosig_version.h"
 #include "test_support.h"
 
 /**

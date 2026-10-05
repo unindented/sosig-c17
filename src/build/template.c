@@ -9,6 +9,7 @@
 
 #include "core/error.h"
 #include "core/path.h"
+#include "core/sosig_version.h"
 #include "core/text.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
@@ -272,7 +273,9 @@ static void* node_get_root(void* provider_data_ptr);
 /**
  * @brief Resolves a named child of a node.
  *
- * This is installed in `provider` as the by-name lookup callback.
+ * This is installed in `provider` as the by-name lookup callback. At the root a name selects the
+ * `site.*` subtree, the `content_entries` list, the `generator` string that names this tool and its
+ * version, or otherwise a field of the entry being rendered, such as `title`.
  *
  * @param node_ptr          Parent node, as a `struct Node*`.
  * @param name              Requested child name. Not `NUL`-terminated.
@@ -651,6 +654,9 @@ static void* node_get_child_by_name(void* node_ptr,
       }
       if (is_name_equal(name, name_len, "content_entries")) {
         return node_alloc(provider_data, NODE_LIST);
+      }
+      if (is_name_equal(name, name_len, "generator")) {
+        return node_scalar(provider_data, sosig_generator_string());
       }
       return resolve_entry_field(provider_data, provider_data->context->content_entry_current, name,
                                  name_len);

@@ -1,7 +1,11 @@
 /* Generated from `sosig_version.c.in`. Change project(VERSION), not the generated source. */
 
-#include "app/sosig_version.h"
+#include "core/sosig_version.h"
 
 const char* sosig_version_string(void) {
   return "@PROJECT_VERSION@";
+}
+
+const char* sosig_generator_string(void) {
+  return "@PROJECT_NAME@ @PROJECT_VERSION@";
 }

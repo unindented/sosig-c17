@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #include "app/cli.h"
-#include "app/sosig_version.h"
+#include "core/sosig_version.h"
 
 /**
  * @brief Parses a terminated argument vector.

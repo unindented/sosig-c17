@@ -12,6 +12,7 @@
 #include "build/template.h"
 #include "core/error.h"
 #include "core/path.h"
+#include "core/sosig_version.h"
 #include "core/text.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
@@ -135,6 +136,37 @@ static void test_iterates_content_entries_and_tags(void) {
   remove_fixture_tree(root_dir);
   content_entry_free(&second);
   content_entry_free(&first);
+  site_config_free(&site_config);
+}
+
+// `generator` names the tool and its version, at the root and inside a section.
+static void test_renders_generator(void) {
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  TEST_ASSERT(init_fixture_dir(root_dir) != NULL);
+  const char template[] = "{{generator}}|{{#content_entries}}{{generator}}{{/content_entries}}";
+  TEST_ASSERT(write_fixture_file(root_dir, "index.html", template) == 0);
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct ContentEntry entry;
+  init_test_content_entry(&entry);
+  const struct ContentEntry* content_entries[] = {&entry};
+  struct TemplateContext context = {.site_config = &site_config,
+                                    .content_entries = content_entries,
+                                    .content_entry_count = 1,
+                                    .site_updated = SITE_UPDATED};
+  char* rendered_html = template_render_file(root_dir, "index.html", &context, NULL, NULL, 0);
+  TEST_ASSERT(rendered_html != NULL);
+  char expected[64];
+  const int n = snprintf(expected, sizeof(expected), "sosig %s|sosig %s", sosig_version_string(),
+                         sosig_version_string());
+  TEST_ASSERT(n > 0 && (size_t)n < sizeof(expected));
+  TEST_CHECK(strcmp(rendered_html, expected) == 0);
+  TEST_MSG("rendered: '%s'", rendered_html);
+  free(rendered_html);
+
+  remove_fixture_tree(root_dir);
+  content_entry_free(&entry);
   site_config_free(&site_config);
 }
 
@@ -1169,6 +1201,7 @@ static void test_rejects_syntax_error_in_partial(void) {
 TEST_LIST = {
     {"renders escaped title and raw body", test_renders_escaped_title_and_raw_body},
     {"iterates content entries and tags", test_iterates_content_entries_and_tags},
+    {"renders generator", test_renders_generator},
     {"empty tag does not truncate tag list", test_empty_tag_does_not_truncate_tag_list},
     {"nested section reiterates content entries", test_nested_section_reiterates_content_entries},
     {"escapes double brace and leaves triple brace raw",

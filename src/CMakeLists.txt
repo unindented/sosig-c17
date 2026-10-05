@@ -2,10 +2,10 @@
 # implementation.
 
 configure_file(
-  app/sosig_version.c.in "${CMAKE_CURRENT_BINARY_DIR}/app/sosig_version.c" @ONLY
+  core/sosig_version.c.in "${CMAKE_CURRENT_BINARY_DIR}/core/sosig_version.c" @ONLY
 )
 
-add_library(sosig_app STATIC "${CMAKE_CURRENT_BINARY_DIR}/app/sosig_version.c")
+add_library(sosig_app STATIC "${CMAKE_CURRENT_BINARY_DIR}/core/sosig_version.c")
 
 add_subdirectory(app)
 add_subdirectory(build)

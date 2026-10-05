@@ -3,7 +3,7 @@ target_sources(
   PRIVATE error.c grow.c parse.c path.c path_list.c text.c
   PUBLIC FILE_SET HEADERS
          BASE_DIRS "${PROJECT_SOURCE_DIR}/src"
-         FILES ascii.h error.h grow.h parse.h path.h path_list.h text.h
+         FILES ascii.h error.h grow.h parse.h path.h path_list.h sosig_version.h text.h
 )
 
 if(SOSIG_BUILD_TESTING)

@@ -103,7 +103,7 @@ Each golden test uses a separate scratch tree. The CMake script collects expecte
 
 ## Version
 
-CMake stores the numeric release version once in `project(VERSION)`. It generates one source file that defines `sosig_version_string()`. A version change rebuilds this source file and relinks its targets.
+CMake stores the numeric release version once in `project(VERSION)`. It generates one source file that defines `sosig_version_string()` and `sosig_generator_string()`. A version change rebuilds this source file and relinks its targets.
 
 Release versions use `MAJOR.MINOR.PATCH`. The `project(VERSION)` command accepts only numeric components. A prerelease suffix requires a second version value.
 

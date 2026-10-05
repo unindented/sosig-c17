@@ -182,6 +182,7 @@ Available variables:
 
 - `site.*` (all templates): `site.title`, `site.base_url`, `site.author`, and `site.updated`. `site.updated` contains the newest entry date. For an empty site, it contains `1970-01-01T00:00:00Z`.
 - `content_entries` (all templates): This list contains all non-draft entries from newest to oldest. Iterate through it with `{{#content_entries}}`. A feed template receives only the newest `feed_count` entries.
+- `generator` (all templates): The tool name and version, for a tag such as `<meta name="generator" content="{{generator}}">`.
 - Entry fields: A content template can access `title`, `date`, `description`, `slug`, `url`, `body`, and `tags` at the top level. These fields are also available inside a `{{#content_entries}}` section. Iterate through tags with `{{#tags}}{{.}}{{/tags}}`.
 
 A partial reference loads `templates_dir/partials/<name>.html`. The name can contain only letters, digits, `_`, and `-`:

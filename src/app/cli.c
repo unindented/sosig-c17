@@ -9,8 +9,8 @@
 #define COPT_IMPL
 #include <copt.h>
 
-#include "app/sosig_version.h"
 #include "core/parse.h"
+#include "core/sosig_version.h"
 
 /**
  * Largest worker count `--workers` accepts.
@@ -255,7 +255,7 @@ void cli_parse(struct CliOptions* options, int argc, char** argv) {
 }
 
 int cli_print_version(FILE* stream) {
-  fprintf(stream, "sosig %s\n", sosig_version_string());
+  fprintf(stream, "%s\n", sosig_generator_string());
   return flush_stream(stream);
 }
 

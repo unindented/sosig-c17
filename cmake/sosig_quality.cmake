@@ -13,7 +13,6 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/app/cmd_config.h"
     "${PROJECT_SOURCE_DIR}/src/app/exit_code.h"
     "${PROJECT_SOURCE_DIR}/src/app/main.c"
-    "${PROJECT_SOURCE_DIR}/src/app/sosig_version.h"
     "${PROJECT_SOURCE_DIR}/src/app/test_cli.c"
     "${PROJECT_SOURCE_DIR}/src/app/test_cli_dispatch.c"
     "${PROJECT_SOURCE_DIR}/src/app/test_cmd_build.c"
@@ -51,6 +50,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/core/path.h"
     "${PROJECT_SOURCE_DIR}/src/core/path_list.c"
     "${PROJECT_SOURCE_DIR}/src/core/path_list.h"
+    "${PROJECT_SOURCE_DIR}/src/core/sosig_version.h"
     "${PROJECT_SOURCE_DIR}/src/core/test_ascii.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_error.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_grow.c"
@@ -94,7 +94,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/tests/test_support.h"
     "${PROJECT_SOURCE_DIR}/tests/test_test_support.c"
 )
-set(sosig_configured_c_source "${PROJECT_SOURCE_DIR}/src/app/sosig_version.c.in")
+set(sosig_configured_c_source "${PROJECT_SOURCE_DIR}/src/core/sosig_version.c.in")
 
 find_program(SOSIG_CLANG_FORMAT NAMES clang-format-22 clang-format)
 find_program(SOSIG_CLANG_TIDY NAMES clang-tidy-22 clang-tidy)

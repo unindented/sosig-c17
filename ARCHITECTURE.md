@@ -100,6 +100,7 @@ The page and aggregate phases are not transactional. They do not remove outputs 
 - [parse](src/core/parse.h): Parsing of terminated text into scalar values.
 - [path](src/core/path.h): Path construction and validation. `path_relative_below` returns the part of a path below a root by textual comparison. `entry_renderer` derives each entry's `{section}` from the source path below `content_dir`.
 - [path_list](src/core/path_list.h): Growable list of path strings.
+- [sosig_version](src/core/sosig_version.h): The tool name and version fixed when the build tree was configured.
 - [text](src/core/text.h): Text copying, normalization, and validation.
 
 ## Cross-cutting conventions
