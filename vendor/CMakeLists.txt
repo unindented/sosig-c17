@@ -35,8 +35,6 @@ target_include_directories(
 )
 
 foreach(target IN ITEMS sosig_vendor_md4c sosig_vendor_mustache sosig_vendor_tomlc17)
-  target_compile_options(
-    ${target} PRIVATE $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-w> $<$<C_COMPILER_ID:MSVC>:/w>
-  )
+  target_compile_options(${target} PRIVATE $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-w>)
   target_link_libraries(${target} PRIVATE sosig_build_vendor)
 endforeach()
