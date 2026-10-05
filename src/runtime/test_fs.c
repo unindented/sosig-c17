@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,11 +32,14 @@ enum { TEST_FILE_LEN_MAX = 1024 };
  *
  * @param buf          Buffer that receives the terminated reason.
  * @param error_number System error number to describe.
- * @return `buf` containing the system message.
+ * @return `buf` containing the system message, or an empty `buf` after recording a test-plumbing
+ *         failure.
  */
 static const char* expected_errno_reason(char buf[static FS_REASON_SIZE], int error_number) {
   const int reason_len = snprintf(buf, FS_REASON_SIZE, "%s", strerror(error_number));
-  TEST_ASSERT(reason_len > 0 && (size_t)reason_len < FS_REASON_SIZE);
+  if (!TEST_CHECK(reason_len > 0 && (size_t)reason_len < FS_REASON_SIZE)) {
+    buf[0] = '\0';
+  }
   return buf;
 }
 
@@ -249,7 +253,9 @@ static void test_list_files_skips_symlink_cycle(void) {
   char* loop = path_join(root_dir, "loop", &arena);
   TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
   // `loop -> .` resolves to its own directory, so descending into it is a cycle.
-  TEST_ASSERT(symlink(".", loop) == 0);
+  if (!TEST_CHECK(symlink(".", loop) == 0)) {
+    goto cleanup;
+  }
 
   struct PathList paths;
   path_list_init(&paths);
@@ -258,6 +264,7 @@ static void test_list_files_skips_symlink_cycle(void) {
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -278,7 +285,9 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
   TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
   // `sub/up -> ..` resolves to the walk's root, which is `sub`'s parent rather than `sub` itself,
   // so the cycle is one crumb further out than the directory being scanned.
-  TEST_ASSERT(symlink("..", up) == 0);
+  if (!TEST_CHECK(symlink("..", up) == 0)) {
+    goto cleanup;
+  }
 
   struct PathList paths;
   path_list_init(&paths);
@@ -287,6 +296,7 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -306,8 +316,12 @@ static void test_list_files_walks_aliased_dir_once(void) {
   char* alias_a = path_join(root_dir, "a", &arena);
   char* alias_b = path_join(root_dir, "b", &arena);
   TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
-  TEST_ASSERT(symlink("real", alias_a) == 0);
-  TEST_ASSERT(symlink("real", alias_b) == 0);
+  if (!TEST_CHECK(symlink("real", alias_a) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(symlink("real", alias_b) == 0)) {
+    goto cleanup;
+  }
 
   struct PathList paths;
   path_list_init(&paths);
@@ -316,6 +330,7 @@ static void test_list_files_walks_aliased_dir_once(void) {
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -334,6 +349,7 @@ static void test_list_files_walks_alias_chain_once(void) {
   arena_init(&arena);
   char* root_dir = path_join(base_dir, "root", &arena);
   char* level_page = path_join(base_dir, "l3/page.md", &arena);
+  char* expected = path_join(root_dir, "a/x/x/page.md", &arena);
   TEST_CHECK(fs_mkdir_p(root_dir, NULL, 0) == 0);
   TEST_CHECK(fs_mkdir_p(path_join(base_dir, "l1", &arena), NULL, 0) == 0);
   TEST_CHECK(fs_mkdir_p(path_join(base_dir, "l2", &arena), NULL, 0) == 0);
@@ -344,17 +360,19 @@ static void test_list_files_walks_alias_chain_once(void) {
       {"../l2", "l1/y"},   {"../l3", "l2/x"},   {"../l3", "l2/y"},
   };
   for (size_t i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
-    TEST_ASSERT(symlink(links[i][0], path_join(base_dir, links[i][1], &arena)) == 0);
+    if (!TEST_CHECK(symlink(links[i][0], path_join(base_dir, links[i][1], &arena)) == 0)) {
+      goto cleanup;
+    }
   }
 
   struct PathList paths;
   path_list_init(&paths);
   TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
-  char* expected = path_join(root_dir, "a/x/x/page.md", &arena);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], expected) == 0);
   path_list_free(&paths);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(base_dir);
 }
@@ -382,10 +400,12 @@ static void test_list_files_skips_excluded_dir(void) {
   TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
   TEST_CHECK(fs_write_file(excluded_page, "x", 1, NULL, 0) == 0);
   TEST_CHECK(fs_write_file(sibling_page, "x", 1, NULL, 0) == 0);
-  TEST_ASSERT(symlink("public", alias_dir) == 0);
-
   const char* const md_suffixes[] = {".md"};
   const char* const exclusions[] = {excluded_dir, alias_dir};
+  if (!TEST_CHECK(symlink("public", alias_dir) == 0)) {
+    goto cleanup;
+  }
+
   for (size_t i = 0; i < sizeof(exclusions) / sizeof(exclusions[0]); i++) {
     struct PathList paths;
     path_list_init(&paths);
@@ -407,6 +427,7 @@ static void test_list_files_skips_excluded_dir(void) {
              strcmp(paths.items[2], sibling_page) == 0);
   path_list_free(&paths);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -431,21 +452,28 @@ static void test_list_files_walks_tree_deeper_than_open_file_limit(void) {
   TEST_CHECK(fs_write_file(page, "x", 1, NULL, 0) == 0);
 
   struct rlimit limit;
-  TEST_ASSERT(getrlimit(RLIMIT_NOFILE, &limit) == 0);
-  const struct rlimit lowered = {.rlim_cur = OPEN_FILE_LIMIT, .rlim_max = limit.rlim_max};
-  TEST_ASSERT(setrlimit(RLIMIT_NOFILE, &lowered) == 0);
+  struct rlimit lowered;
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  const int rc = list_files(&paths, root_dir, ".md", reason, sizeof(reason));
+  int rc = -1;
+  if (!TEST_CHECK(getrlimit(RLIMIT_NOFILE, &limit) == 0)) {
+    goto cleanup;
+  }
+  lowered = (struct rlimit){.rlim_cur = OPEN_FILE_LIMIT, .rlim_max = limit.rlim_max};
+  if (!TEST_CHECK(setrlimit(RLIMIT_NOFILE, &lowered) == 0)) {
+    goto cleanup;
+  }
+  rc = list_files(&paths, root_dir, ".md", reason, sizeof(reason));
   // Restore the limit before asserting, so a failure cannot starve later tests of descriptors.
   (void)setrlimit(RLIMIT_NOFILE, &limit);
 
   TEST_CHECK(rc == 0);
   TEST_MSG("reason: %s", reason);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
-  path_list_free(&paths);
 
+cleanup:
+  path_list_free(&paths);
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -472,10 +500,13 @@ static void test_list_files_rejects_missing_dir(void) {
   const int expected_len =
       snprintf(expected, sizeof(expected), "cannot inspect directory: %s ('%s')",
                expected_errno_reason(message, ENOENT), missing);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
-  path_list_free(&missing_paths);
 
+cleanup:
+  path_list_free(&missing_paths);
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -504,10 +535,13 @@ static void test_list_files_rejects_file_root(void) {
   char message[FS_REASON_SIZE];
   const int expected_len = snprintf(expected, sizeof(expected), "cannot open directory: %s ('%s')",
                                     expected_errno_reason(message, ENOTDIR), plain);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
-  path_list_free(&paths);
 
+cleanup:
+  path_list_free(&paths);
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -540,8 +574,8 @@ static void test_list_files_rejects_unstatable_entry(void) {
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
   const int rc = list_files(&paths, root_dir, ".md", reason, sizeof(reason));
-  // Restore the mode before asserting: a failing assertion aborts the test, and neither the cleanup
-  // below nor the harness can remove a directory it is not allowed to search.
+  // Restore the mode before checking anything: neither the cleanup below nor the harness can remove
+  // a directory it is not allowed to search.
   (void)chmod(sealed_dir, 0700);
 
   TEST_CHECK(rc == -1);
@@ -551,10 +585,13 @@ static void test_list_files_rejects_unstatable_entry(void) {
   const int expected_len =
       snprintf(expected_entry, sizeof(expected_entry), "cannot inspect entry: %s ('%s')",
                expected_errno_reason(message, EACCES), sealed_md);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected_entry));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected_entry))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected_entry) == 0);
-  path_list_free(&paths);
 
+cleanup:
+  path_list_free(&paths);
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -658,18 +695,21 @@ static void test_read_file_rejects_fifo(void) {
   struct Arena arena;
   arena_init(&arena);
   char* fifo = path_join(root_dir, "fifo.md", &arena);
-  TEST_ASSERT(mkfifo(fifo, 0600) == 0);
-
   char sentinel[] = "unchanged";
   char* file_data = sentinel;
   size_t file_len = 999;
   char reason[FS_REASON_SIZE] = "";
+  if (!TEST_CHECK(mkfifo(fifo, 0600) == 0)) {
+    goto cleanup;
+  }
+
   TEST_CHECK(fs_read_file(fifo, TEST_FILE_LEN_MAX, &file_data, &file_len, reason, sizeof(reason)) ==
              -1);
   TEST_CHECK(file_data == sentinel);
   TEST_CHECK(file_len == 999);
   TEST_CHECK(strcmp(reason, "not a regular file") == 0);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -834,46 +874,70 @@ static void test_write_file_retries_interrupted_write(void) {
   struct Arena arena;
   arena_init(&arena);
   char* fifo = path_join(root_dir, "fifo.html", &arena);
-  TEST_ASSERT(mkfifo(fifo, 0600) == 0);
-  // A read end held open lets the write's `open` return at once, so only its `write` blocks.
-  const int hold_fd = open(fifo, O_RDONLY | O_NONBLOCK);
-  TEST_ASSERT(hold_fd >= 0);
-
   // Larger than any pipe buffer, so the write blocks until the reader drains it.
   static char data[1024 * 1024];
+  int hold_fd = -1;
+  pid_t reader = -1;
+  struct sigaction action = {.sa_handler = count_interrupt};
+  struct sigaction previous_action;
+  const struct itimerval every_millisecond = {.it_interval = {.tv_usec = 1000},
+                                              .it_value = {.tv_usec = 1000}};
+  const struct itimerval stopped = {0};
+  char reason[FS_REASON_SIZE] = "untouched";
+  int rc = -1;
+  int status = 0;
+  if (!TEST_CHECK(mkfifo(fifo, 0600) == 0)) {
+    goto cleanup;
+  }
+  // A read end held open lets the write's `open` return at once, so only its `write` blocks.
+  hold_fd = open(fifo, O_RDONLY | O_NONBLOCK);
+  if (!TEST_CHECK(hold_fd >= 0)) {
+    goto cleanup;
+  }
+
   for (size_t i = 0; i < sizeof(data); i++) {
     data[i] = (char)('a' + i % 26);
   }
 
-  const pid_t reader = fork();
-  TEST_ASSERT(reader >= 0);
+  reader = fork();
+  if (!TEST_CHECK(reader >= 0)) {
+    goto cleanup;
+  }
   if (reader == 0) {
     _exit(drain_fifo(fifo, data, sizeof(data)) == 0 ? 0 : 1);
   }
 
-  struct sigaction action = {.sa_handler = count_interrupt};
   (void)sigemptyset(&action.sa_mask);
-  struct sigaction previous_action;
-  TEST_ASSERT(sigaction(SIGALRM, &action, &previous_action) == 0);
+  if (!TEST_CHECK(sigaction(SIGALRM, &action, &previous_action) == 0)) {
+    goto cleanup;
+  }
   interrupt_count = 0;
-  const struct itimerval every_millisecond = {.it_interval = {.tv_usec = 1000},
-                                              .it_value = {.tv_usec = 1000}};
-  TEST_ASSERT(setitimer(ITIMER_REAL, &every_millisecond, NULL) == 0);
-  char reason[FS_REASON_SIZE] = "untouched";
-  const int rc = fs_write_file(fifo, data, sizeof(data), reason, sizeof(reason));
+  if (!TEST_CHECK(setitimer(ITIMER_REAL, &every_millisecond, NULL) == 0)) {
+    (void)sigaction(SIGALRM, &previous_action, NULL);
+    goto cleanup;
+  }
+  rc = fs_write_file(fifo, data, sizeof(data), reason, sizeof(reason));
   // Stop the timer before restoring the previous action, so no signal reaches the default one.
-  const struct itimerval stopped = {0};
   (void)setitimer(ITIMER_REAL, &stopped, NULL);
   (void)sigaction(SIGALRM, &previous_action, NULL);
-  int status = 0;
   TEST_CHECK(waitpid(reader, &status, 0) == reader);
-  (void)close(hold_fd);
+  reader = -1;
 
   TEST_CHECK(rc == 0);
   TEST_CHECK(strcmp(reason, "untouched") == 0);
   TEST_CHECK(interrupt_count > 0);
   TEST_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
+cleanup:
+  // A reader that never saw a writer would block in its `open` forever, so it is stopped rather
+  // than awaited.
+  if (reader > 0) {
+    (void)kill(reader, SIGKILL);
+    (void)waitpid(reader, NULL, 0);
+  }
+  if (hold_fd >= 0) {
+    (void)close(hold_fd);
+  }
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -897,24 +961,27 @@ static void test_write_file_rejects_file_parent_and_dir_target(void) {
   // from the parent-directory pass and names the component that blocked it.
   char* blocking_file = path_join(root_dir, "plain.txt", &arena);
   char* through_file = path_join(root_dir, "plain.txt/child.html", &arena);
+  char* dir_target = path_join(root_dir, "sub", &arena);
   TEST_CHECK(fs_write_file(blocking_file, "x", 1, NULL, 0) == 0);
   char reason[FS_REASON_SIZE] = "";
   TEST_CHECK(fs_write_file(through_file, "x", 1, reason, sizeof(reason)) == -1);
   char expected[FS_REASON_SIZE];
   const int blocking_expected_len =
       snprintf(expected, sizeof(expected), "exists and is not a directory ('%s')", blocking_file);
-  TEST_ASSERT(blocking_expected_len > 0 && (size_t)blocking_expected_len < sizeof(expected));
+  if (!TEST_CHECK(blocking_expected_len > 0 && (size_t)blocking_expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
 
   // An existing directory as the target has a parent that is already there, so the walk gets past
   // it and the open is what refuses. That is a system error, so it carries the system message.
-  char* dir_target = path_join(root_dir, "sub", &arena);
   TEST_CHECK(fs_mkdir_p(dir_target, NULL, 0) == 0);
   reason[0] = '\0';
   TEST_CHECK(fs_write_file(dir_target, "x", 1, reason, sizeof(reason)) == -1);
   char message[FS_REASON_SIZE];
   TEST_CHECK(strcmp(reason, expected_errno_reason(message, EISDIR)) == 0);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -958,22 +1025,25 @@ static void test_mkdir_p_rejects_file_component(void) {
 
   // `file` is a regular file, so it cannot be the target of `fs_mkdir_p`.
   char* existing_file = path_join(root_dir, "file", &arena);
+  char* path_through_file = path_join(root_dir, "file/child", &arena);
   TEST_CHECK(fs_write_file(existing_file, "x", 1, NULL, 0) == 0);
   char reason[FS_REASON_SIZE] = "";
   TEST_CHECK(fs_mkdir_p(existing_file, reason, sizeof(reason)) == -1);
   char expected[FS_REASON_SIZE];
   const int file_expected_len =
       snprintf(expected, sizeof(expected), "exists and is not a directory ('%s')", existing_file);
-  TEST_ASSERT(file_expected_len > 0 && (size_t)file_expected_len < sizeof(expected));
+  if (!TEST_CHECK(file_expected_len > 0 && (size_t)file_expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
 
   // `file` is a regular file, so it cannot serve as an intermediate path component. The walk stops
   // at that component, so the reason names it rather than the deeper path the caller asked for.
-  char* path_through_file = path_join(root_dir, "file/child", &arena);
   reason[0] = '\0';
   TEST_CHECK(fs_mkdir_p(path_through_file, reason, sizeof(reason)) == -1);
   TEST_CHECK(strcmp(reason, expected) == 0);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -1002,9 +1072,12 @@ static void test_mkdir_p_rejects_unstatable_component(void) {
   const int expected_len =
       snprintf(expected, sizeof(expected), "cannot inspect directory: %s ('%s')",
                expected_errno_reason(message, ENOENT), dangling);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
@@ -1034,9 +1107,8 @@ static void test_mkdir_p_rejects_uncreatable_component(void) {
 
   char reason[FS_REASON_SIZE] = "";
   const int rc = fs_mkdir_p(child_dir, reason, sizeof(reason));
-  // Restore the mode before asserting, as `test_list_files_rejects_unstatable_entry` does: a
-  // failing assertion aborts the test. The cleanup below cannot remove a directory it may not
-  // write.
+  // Restore the mode before checking anything, as `test_list_files_rejects_unstatable_entry` does.
+  // The cleanup below cannot remove a directory it may not write.
   (void)chmod(sealed_dir, 0700);
 
   TEST_CHECK(rc == -1);
@@ -1045,9 +1117,12 @@ static void test_mkdir_p_rejects_uncreatable_component(void) {
   const int expected_len =
       snprintf(expected, sizeof(expected), "cannot create directory: %s ('%s')",
                expected_errno_reason(message, EACCES), child_dir);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reason, expected) == 0);
 
+cleanup:
   arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
