@@ -237,51 +237,6 @@ static void test_valid_version_flag_wins_over_rejected_spelling(void) {
   TEST_CHECK(options.error_message[0] == '\0');
 }
 
-// No arguments at all are reported as an error with a diagnostic message.
-static void test_no_args_rejected(void) {
-  char* argv[] = {"sosig", NULL};
-  struct CliOptions options = parse(argv);
-  TEST_CHECK(options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(options.error_message, "no command specified") == 0);
-}
-
-// The config command rejects a build-only flag like `-v`, naming the command and the flag.
-static void test_config_command_rejects_verbose(void) {
-  char* argv[] = {"sosig", "config", "-v", NULL};
-  struct CliOptions options = parse(argv);
-  TEST_CHECK(options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
-             0);
-}
-
-// The config command rejects a build-only flag like `-w`, naming the command and the flag.
-static void test_config_command_rejects_workers(void) {
-  char* argv[] = {"sosig", "config", "-w", "4", NULL};
-  struct CliOptions options = parse(argv);
-  TEST_CHECK(options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--workers'") ==
-             0);
-}
-
-// With two unsupported flags, the reported one is fixed by the `cli_flags` table order rather than
-// by the order the user typed them. That is the claim the table's own comment makes, and what
-// `reject_unsupported_flags` returning after the first match implements. Both input orders are
-// asserted because correct behavior must not depend on an unspecified detail. Each single-flag test
-// above passes whichever entry comes first.
-static void test_config_command_rejects_first_flag_in_table_order(void) {
-  char* verbose_first[] = {"sosig", "config", "-v", "-w", "4", NULL};
-  struct CliOptions options = parse(verbose_first);
-  TEST_CHECK(options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
-             0);
-
-  char* workers_first[] = {"sosig", "config", "-w", "4", "-v", NULL};
-  options = parse(workers_first);
-  TEST_CHECK(options.action == CLI_ACTION_ERROR);
-  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
-             0);
-}
-
 // A non-numeric worker count is rejected with a diagnostic naming the offending value.
 static void test_invalid_worker_count_rejected(void) {
   char* argv[] = {"sosig", "build", "-w", "abc", NULL};
@@ -431,6 +386,51 @@ static void test_unknown_long_option(void) {
   struct CliOptions options = parse(argv);
   TEST_CHECK(options.action == CLI_ACTION_ERROR);
   TEST_CHECK(strcmp(options.error_message, "unknown option '--frobnicate'") == 0);
+}
+
+// No arguments at all are reported as an error with a diagnostic message.
+static void test_no_args_rejected(void) {
+  char* argv[] = {"sosig", NULL};
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "no command specified") == 0);
+}
+
+// The config command rejects a build-only flag like `-v`, naming the command and the flag.
+static void test_config_command_rejects_verbose(void) {
+  char* argv[] = {"sosig", "config", "-v", NULL};
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
+             0);
+}
+
+// The config command rejects a build-only flag like `-w`, naming the command and the flag.
+static void test_config_command_rejects_workers(void) {
+  char* argv[] = {"sosig", "config", "-w", "4", NULL};
+  struct CliOptions options = parse(argv);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--workers'") ==
+             0);
+}
+
+// With two unsupported flags, the reported one is fixed by the `cli_flags` table order rather than
+// by the order the user typed them. That is the claim the table's own comment makes, and what
+// `reject_unsupported_flags` returning after the first match implements. Both input orders are
+// asserted because correct behavior must not depend on an unspecified detail. Each single-flag test
+// above passes whichever entry comes first.
+static void test_config_command_rejects_first_flag_in_table_order(void) {
+  char* verbose_first[] = {"sosig", "config", "-v", "-w", "4", NULL};
+  struct CliOptions options = parse(verbose_first);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
+             0);
+
+  char* workers_first[] = {"sosig", "config", "-w", "4", "-v", NULL};
+  options = parse(workers_first);
+  TEST_CHECK(options.action == CLI_ACTION_ERROR);
+  TEST_CHECK(strcmp(options.error_message, "command 'config' does not accept option '--verbose'") ==
+             0);
 }
 
 // An unrecognized command is rejected with a diagnostic naming the command.
@@ -605,11 +605,6 @@ TEST_LIST = {
     {"informational flag clears diagnostic", test_informational_flag_clears_diagnostic},
     {"valid version flag wins over rejected spelling",
      test_valid_version_flag_wins_over_rejected_spelling},
-    {"no args rejected", test_no_args_rejected},
-    {"config command rejects verbose", test_config_command_rejects_verbose},
-    {"config command rejects workers", test_config_command_rejects_workers},
-    {"config command rejects first flag in table order",
-     test_config_command_rejects_first_flag_in_table_order},
     {"invalid worker count rejected", test_invalid_worker_count_rejected},
     {"zero worker count rejected", test_zero_worker_count_rejected},
     {"negative worker count rejected", test_negative_worker_count_rejected},
@@ -624,6 +619,11 @@ TEST_LIST = {
     {"unknown short option", test_unknown_short_option},
     {"unknown short option value ends cluster", test_unknown_short_option_value_ends_cluster},
     {"unknown long option", test_unknown_long_option},
+    {"no args rejected", test_no_args_rejected},
+    {"config command rejects verbose", test_config_command_rejects_verbose},
+    {"config command rejects workers", test_config_command_rejects_workers},
+    {"config command rejects first flag in table order",
+     test_config_command_rejects_first_flag_in_table_order},
     {"unknown command", test_unknown_command},
     {"extra positional argument", test_extra_positional_argument},
     {"version accessor present", test_version_accessor_present},
