@@ -421,6 +421,29 @@ static void test_load_rejects_oversize_file(void) {
   remove_fixture_tree(temp_config.root_dir);
 }
 
+// A config file holding an embedded `NUL` is rejected at the read, before the parse, naming the
+// config path. `fs_read_file` rejects it for every caller, because it is the boundary that
+// establishes the `NUL`-free text invariant.
+static void test_load_rejects_nul_in_file(void) {
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, "");
+  static const char config_data[] = "title = \"Site\"\0author = \"Example Author\"\n";
+  TEST_ASSERT(fs_write_file(config_path, config_data, sizeof(config_data) - 1, NULL, 0) == 0);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to read config: contains an embedded NUL byte ('%s')", config_path);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+  site_config_free(&config);
+  remove_fixture_tree(temp_config.root_dir);
+}
+
 // `site_config_load` reports a syntactically malformed config as a parse failure naming the config
 // path, rather than reaching the field pass with an empty table and reporting a false missing-key
 // error.
@@ -1142,6 +1165,7 @@ TEST_LIST = {
     {"load rejects relative base url", test_load_rejects_relative_base_url},
     {"load rejects missing file", test_load_rejects_missing_file},
     {"load rejects oversize file", test_load_rejects_oversize_file},
+    {"load rejects nul in file", test_load_rejects_nul_in_file},
     {"load rejects malformed toml", test_load_rejects_malformed_toml},
     {"load rejects missing required key", test_load_rejects_missing_required_key},
     {"load rejects wrong key type", test_load_rejects_wrong_key_type},
