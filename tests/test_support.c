@@ -3,8 +3,9 @@
 // of `acutest_check_` and `acutest_abort_`. The linker connects both declarations to the
 // definitions in the test executable.
 //
-// A helper here can therefore call `TEST_CHECK` and `TEST_ASSERT`. Acutest reports a failure at
-// this file and line. The test that called the helper then fails.
+// A helper here can therefore call `TEST_CHECK`. Acutest reports a failure at this file and line,
+// and the test that called the helper then fails. No helper here calls `TEST_ASSERT`, because a
+// test may call one while its fixture exists, and the abort would skip the test's cleanup.
 #define TEST_NO_MAIN
 
 #define _XOPEN_SOURCE 700
@@ -224,7 +225,9 @@ int capture_end(struct StreamCapture* capture, char* text_out, size_t text_out_l
 }
 
 int read_capture(FILE* capture, char* text_out, size_t text_out_len) {
-  TEST_ASSERT(text_out_len > 0);
+  if (!TEST_CHECK(text_out_len > 0)) {
+    return -1;
+  }
   if (fseek(capture, 0, SEEK_SET) != 0) {
     TEST_CHECK(false);
     return -1;

@@ -73,19 +73,28 @@ static void test_working_dir_enter_and_leave(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_CHECK(write_fixture_file(root_dir, "marker", "") == 0);
+  const int write_rc = write_fixture_file(root_dir, "marker", "");
   char working_dir_before[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir_before, sizeof(working_dir_before)) != NULL);
+  const bool has_dir_before = getcwd(working_dir_before, sizeof(working_dir_before)) != NULL;
 
   int saved_dir_fd = -1;
-  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
-  TEST_CHECK(access("marker", F_OK) == 0);
-  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
-
+  const int enter_rc = working_dir_enter(root_dir, &saved_dir_fd);
+  int access_rc = -1;
+  int leave_rc = -1;
+  if (enter_rc == 0) {
+    access_rc = access("marker", F_OK);
+    leave_rc = working_dir_leave(saved_dir_fd);
+  }
   char working_dir_after[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir_after, sizeof(working_dir_after)) != NULL);
-  TEST_CHECK(strcmp(working_dir_after, working_dir_before) == 0);
+  const bool has_dir_after = getcwd(working_dir_after, sizeof(working_dir_after)) != NULL;
+  // The tree is removed before any assertion, so a failed one cannot leave it behind.
   remove_fixture_tree(root_dir);
+
+  TEST_CHECK(write_rc == 0);
+  TEST_CHECK(enter_rc == 0);
+  TEST_CHECK(access_rc == 0);
+  TEST_CHECK(leave_rc == 0);
+  TEST_CHECK(has_dir_before && has_dir_after && strcmp(working_dir_after, working_dir_before) == 0);
 }
 
 // A capture receives what the stream writes while redirected, and the stream writes to its original

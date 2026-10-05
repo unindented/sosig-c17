@@ -26,8 +26,8 @@ const char* init_fixture_dir(char root_dir[static 1]);
  * @brief Removes a fixture root and everything below it.
  *
  * Walking the tree keeps cleanup complete without a per-test inventory of the paths a fixture
- * writes or a build generates, and it needs no caller to classify a path as a file or a directory.
- * Each removal is asserted, so a fixture a test leaves behind fails that test rather than
+ * writes or the code under test creates, and it needs no caller to classify a path as a file or a
+ * directory. Each removal is checked, so a fixture a test leaves behind fails that test rather than
  * accumulating under `/tmp`.
  *
  * @param root_dir Fixture root directory to remove. Must not be `NULL`.
