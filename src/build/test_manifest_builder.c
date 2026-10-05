@@ -373,6 +373,45 @@ static void test_rejects_prefix_collision(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A content entry and a configured `index.html` aggregate collide before any writer runs. The entry
+// is labeled by its source path, a real path, rather than a placeholder another entry could share.
+static void test_rejects_entry_aggregate_collision(void) {
+  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
+  struct Arena arena;
+  arena_init(&arena);
+  struct SiteConfig config;
+  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "aggregate") == 0);
+  char* output_path = path_join(config.output_dir, "index.html", &arena);
+  char* source_path = path_join(config.content_dir, "index.md", &arena);
+  TEST_ASSERT(output_path != NULL && source_path != NULL);
+  static const char* const aggregates[] = {"index.html"};
+  config.aggregate_templates = aggregates;
+  config.aggregate_template_count = 1;
+  struct ContentEntry entry = {.output_path = output_path, .source_path = source_path};
+  const struct ContentEntry* entries[] = {&entry};
+  struct PathList empty;
+  path_list_init(&empty);
+  struct Manifest manifest;
+  manifest_init(&manifest);
+  char err[ERROR_MESSAGE_SIZE] = "";
+
+  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 1, err,
+                                       sizeof(err)) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
+               source_path, "aggregate_templates[0]", output_path);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(strcmp(err, expected) == 0);
+
+  manifest_free(&manifest);
+  path_list_free(&empty);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // `manifest_builder_populate` rejects two configured templates that claim one output path. It names
 // each by its list entry rather than by its own name. These two configurations are different
 // mistakes with different fixes. A bare template name reports both as
@@ -960,6 +999,7 @@ TEST_LIST = {
     {"rejects duplicate", test_rejects_duplicate},
     {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
     {"rejects prefix collision", test_rejects_prefix_collision},
+    {"rejects entry aggregate collision", test_rejects_entry_aggregate_collision},
     {"rejects duplicate template", test_rejects_duplicate_template},
     {"rejects input overwrite", test_rejects_input_overwrite},
     {"rejects input overwrite among many inputs", test_rejects_input_overwrite_among_many_inputs},
