@@ -296,10 +296,9 @@ static void test_load_accepts_valid_permalinks(void) {
   }
 }
 
-// Zero is accepted, which is the other side of the negative `feed_count` rejection and the boundary
-// between them. Every other accepting case in this file uses a positive count, so a guard of `<= 0`
-// instead of `< 0` rejects a legal config while still passing all of them. Zero means a feed
-// template sees no entries, which is a configuration a user can ask for.
+// Zero is accepted, which is the boundary below every other accepting case in this file. A guard of
+// `< 1` on `feed_count` would reject a legal config while still passing all of them. Zero means a
+// feed template sees no entries, which is a configuration a user can ask for.
 static void test_load_accepts_zero_feed_count(void) {
   const char toml[] =
       "base_url = \"https://example.com\"\n"
@@ -605,45 +604,12 @@ static void test_load_rejects_invalid_template_arrays(void) {
                      "names: '../evil.html'");
 }
 
-// A negative `feed_count` is rejected, and says the value is out of range rather than mistyped.
-static void test_load_rejects_negative_feed_count(void) {
-  const char toml[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Example Site\"\n"
-      "author = \"Example Author\"\n"
-      "feed_count = -1\n";
-  struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-
-  struct SiteConfig config;
-  site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "config key 'feed_count' must not be negative") == 0);
-
-  site_config_free(&config);
-  remove_fixture_tree(temp_config.root_dir);
-}
-
-// A non-integer `feed_count` is rejected, and fails a different assertion from a negative one: the
+// An integer key rejects a TOML type other than integer and enforces its exact lower bound, which
+// is 0 for `feed_count`. A non-integer fails a different assertion from an out-of-range one: the
 // user has to change the type, not the number.
-static void test_load_rejects_non_integer_feed_count(void) {
-  const char toml[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Example Site\"\n"
-      "author = \"Example Author\"\n"
-      "feed_count = \"ten\"\n";
-  struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-
-  struct SiteConfig config;
-  site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "config key 'feed_count' must be an integer") == 0);
-
-  site_config_free(&config);
-  remove_fixture_tree(temp_config.root_dir);
+static void test_load_rejects_invalid_integer_type_and_minimum(void) {
+  check_load_rejects("feed_count = \"ten\"\n", "config key 'feed_count' must be an integer");
+  check_load_rejects("feed_count = -1\n", "config key 'feed_count' must be at least 0 at -1");
 }
 
 // A TOML escape decoding to `U+0000` is rejected per key. tomlc17 accepts the escape and returns a
@@ -1173,8 +1139,8 @@ TEST_LIST = {
     {"load rejects table values", test_load_rejects_table_values},
     {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
     {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
-    {"load rejects negative feed count", test_load_rejects_negative_feed_count},
-    {"load rejects non-integer feed count", test_load_rejects_non_integer_feed_count},
+    {"load rejects invalid integer type and minimum",
+     test_load_rejects_invalid_integer_type_and_minimum},
     {"load rejects nul in string values", test_load_rejects_nul_in_string_values},
     {"load rejects unsafe permalink", test_load_rejects_unsafe_permalink},
     {"load rejects permalink without slug", test_load_rejects_permalink_without_slug},

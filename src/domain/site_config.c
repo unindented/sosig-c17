@@ -28,6 +28,27 @@ struct SiteConfigStringKey {
   bool is_required;
 };
 
+/** Integer-valued site config key policy. */
+struct SiteConfigIntKey {
+  /** TOML key name. */
+  const char* key;
+
+  /** Address of the `SiteConfig` field this key fills. */
+  size_t* field;
+
+  /** Smallest accepted value, named in the `must be at least` rejection. */
+  size_t value_min;
+
+  /** Largest accepted value. A larger one is rejected as exceeding `limit_name`. */
+  size_t value_max;
+
+  /** Prose name of `value_max` in the overflow diagnostic: `exceeds max feed count`. */
+  const char* limit_name;
+
+  /** Whether absence is a load error rather than leaving the field's current value. */
+  bool is_required;
+};
+
 const char* const SITE_CONFIG_PATH_DEFAULT = "sosig.toml";
 
 static const char* const PERMALINK_DEFAULT = "/{section}/{slug}.html";
@@ -44,9 +65,19 @@ static const char* const FEED_TEMPLATES_DEFAULT[] = {"atom.xml"};
  * listed here.
  */
 static const char* const config_keys[] = {
-    "base_url",   "title",         "author",           "permalink",           "content_dir",
-    "output_dir", "templates_dir", "content_template", "aggregate_templates", "feed_templates",
+    // clang-format off: one key per line, so adding or removing a key is a one-line change.
+    "base_url",
+    "title",
+    "author",
+    "permalink",
+    "content_dir",
+    "output_dir",
+    "templates_dir",
+    "content_template",
+    "aggregate_templates",
+    "feed_templates",
     "feed_count",
+    // clang-format on
 };
 
 /** Default cap on content entries included in a feed when `feed_count` is unset. */
@@ -121,7 +152,7 @@ enum PermalinkVerdict {
  * @param parsed_out  Receives the parsed TOML result on success. Must not be `NULL`.
  * @param err         Buffer for a diagnostic message on failure.
  * @param err_len     Size of `err` in bytes.
- * @return `0` on success, or `-1` on a read, size, or TOML parse error.
+ * @return `0` on success, or `-1` on a read, size, embedded `NUL`, or TOML parse error.
  */
 static int site_config_load_toml(const char* config_path,
                                  toml_result_t* parsed_out,
@@ -193,6 +224,24 @@ static int copy_template_names(toml_datum_t table,
                                size_t* template_name_count_out,
                                char* err,
                                size_t err_len) __attribute__((nonnull(2, 3, 4, 5)));
+
+/**
+ * @brief Validates and copies one bounded non-negative integer key into `spec->field`.
+ *
+ * @param table      Parsed TOML table holding `spec->key`.
+ * @param key_prefix Dotted path of `table` that diagnostics put before `spec->key`, or `""` for the
+ *                   top-level table. Must not be `NULL`.
+ * @param spec       Key policy and target field. Must not be `NULL`.
+ * @param err        Buffer for a diagnostic message on failure.
+ * @param err_len    Size of `err` in bytes.
+ * @return `0` on success or when an optional key is absent, or `-1` on a missing required key, a
+ *         wrong type, a value below `spec->value_min`, or a value exceeding `spec->value_max`.
+ */
+static int copy_size(toml_datum_t table,
+                     const char* key_prefix,
+                     const struct SiteConfigIntKey* spec,
+                     char* err,
+                     size_t err_len) __attribute__((nonnull(2, 3)));
 
 /**
  * @brief Validates `base_url` as an absolute HTTP(S) URL and trims any trailing `/`.
@@ -342,20 +391,6 @@ static enum PermalinkVerdict check_permalink_expansions(
     const char* urls[SECTION_SAMPLE_COUNT][SLUG_SAMPLE_COUNT],
     size_t* expanded_len_out,
     size_t* segment_len_out) __attribute__((nonnull(1, 2, 3)));
-
-/**
- * @brief Validates and applies the optional `feed_count` key.
- *
- * @param site_config Config that receives `feed_count`. Must not be `NULL`.
- * @param table       Parsed TOML table.
- * @param err         Buffer for a diagnostic message on failure.
- * @param err_len     Size of `err` in bytes.
- * @return `0` on success or when the key is absent, or `-1` on a wrong type or negative value.
- */
-static int populate_feed_count(struct SiteConfig* site_config,
-                               toml_datum_t table,
-                               char* err,
-                               size_t err_len) __attribute__((nonnull(1)));
 
 /**
  * @brief Writes one `key = "value"` line, escaping the value as a TOML basic string.
@@ -544,7 +579,14 @@ static int site_config_load_fields(struct SiteConfig* site_config,
     return -1;
   }
 
-  return populate_feed_count(site_config, table, err, err_len);
+  const struct SiteConfigIntKey feed_count = {
+      .key = "feed_count",
+      .field = &site_config->feed_count,
+      // `SIZE_MAX` binds only where `size_t` is narrower than `int64_t`, as on a 32-bit target.
+      .value_max = SIZE_MAX,
+      .limit_name = "feed count",
+  };
+  return copy_size(table, "", &feed_count, err, err_len);
 }
 
 static int copy_string(toml_datum_t table,
@@ -624,6 +666,37 @@ static int copy_template_names(toml_datum_t table,
   // shares them with the render workers.
   *template_names_out = items;
   *template_name_count_out = item_count;
+  return 0;
+}
+
+static int copy_size(toml_datum_t table,
+                     const char* key_prefix,
+                     const struct SiteConfigIntKey* spec,
+                     char* err,
+                     size_t err_len) {
+  const toml_datum_t value = toml_get(table, spec->key);
+  if (value.type == TOML_UNKNOWN) {
+    if (spec->is_required) {
+      return error_report(err, err_len, "missing required config key '%s%s'", key_prefix,
+                          spec->key);
+    }
+    return 0;
+  }
+  if (value.type != TOML_INT64) {
+    return error_report(err, err_len, "config key '%s%s' must be an integer", key_prefix,
+                        spec->key);
+  }
+  if (value.u.int64 < 0 || (uint64_t)value.u.int64 < (uint64_t)spec->value_min) {
+    return error_report(err, err_len, "config key '%s%s' must be at least %zu at %jd", key_prefix,
+                        spec->key, spec->value_min, (intmax_t)value.u.int64);
+  }
+  // One comparison covers both the configured ceiling and the cast below. `value_max` is a
+  // `size_t`, so a value this check accepts fits `size_t` on every target.
+  if ((uint64_t)value.u.int64 > (uint64_t)spec->value_max) {
+    return error_report(err, err_len, "config key '%s%s' exceeds max %s (%zu) at %ju", key_prefix,
+                        spec->key, spec->limit_name, spec->value_max, (uintmax_t)value.u.int64);
+  }
+  *spec->field = (size_t)value.u.int64;
   return 0;
 }
 
@@ -830,31 +903,6 @@ static enum PermalinkVerdict check_permalink_expansions(
     }
   }
   return PERMALINK_VALID;
-}
-
-static int populate_feed_count(struct SiteConfig* site_config,
-                               toml_datum_t table,
-                               char* err,
-                               size_t err_len) {
-  const toml_datum_t feed_count = toml_get(table, "feed_count");
-  if (feed_count.type == TOML_UNKNOWN) {
-    return 0;
-  }
-  if (feed_count.type != TOML_INT64) {
-    return error_report(err, err_len, "config key 'feed_count' must be an integer");
-  }
-  if (feed_count.u.int64 < 0) {
-    return error_report(err, err_len, "config key 'feed_count' must not be negative");
-  }
-#if SIZE_MAX < INT64_MAX
-  // Reachable only where `size_t` is narrower than `int64_t`, as on a 32-bit target.
-  if ((uint64_t)feed_count.u.int64 > (uint64_t)SIZE_MAX) {
-    return error_report(err, err_len, "config key 'feed_count' exceeds max feed count (%zu) at %ju",
-                        (size_t)SIZE_MAX, (uintmax_t)feed_count.u.int64);
-  }
-#endif
-  site_config->feed_count = (size_t)feed_count.u.int64;
-  return 0;
 }
 
 static void site_config_print_key_string(FILE* stream, const char* key, const char* value) {
