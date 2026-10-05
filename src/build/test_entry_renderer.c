@@ -446,7 +446,8 @@ static void test_rejects_unsafe_output_path(void) {
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", "/../{slug}.html", &site_config,
                                   &source_paths, source_entries, &error_buffer) == -1);
-  // Exact: `expected` is the whole message.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
 cleanup:
@@ -808,8 +809,8 @@ static void test_reports_unreadable_source(void) {
   (void)chmod(source_path, 0644);
 
   TEST_CHECK(rc == -1);
-  // Exact: the path trails the cause, which is the shape an errno-sourced failure takes, and only a
-  // whole comparison catches a reordering that puts the path first.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 

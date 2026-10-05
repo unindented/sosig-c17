@@ -783,7 +783,8 @@ static void test_reports_missing_config(void) {
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // Exact: `expected` is the whole message.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
   string_buffer_free(&error_buffer);
@@ -1032,8 +1033,8 @@ static void test_rejects_colliding_source_names(void) {
   }
 
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
-  // it from the same message with something appended.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_CHECK(!fixture_path_exists(root_dir, "public"));
 
@@ -1066,8 +1067,8 @@ static void test_reports_bad_template(void) {
   }
 
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // Exact, not by substring: the expected text is the whole message, so a substring check could not
-  // tell it from the same message with something appended.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
                     "section-opening tag has no closer at line 1, column 1 (in 'broken.html') "
@@ -1202,8 +1203,8 @@ static void test_rejects_unsafe_permalink(void) {
 
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
   // One config diagnostic, not one per entry: the message names the key, and the buffer holds a
-  // single line. Compared exactly rather than by prefix, so that nothing trailing the message can
-  // hide. A prefix needle stays green however the tail is corrupted.
+  // single line. Exact, not by substring: a substring check would also pass for this message with
+  // something appended to it.
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
                     "config key 'permalink' must expand to a safe relative path using only "
@@ -1292,8 +1293,8 @@ static void test_rejects_duplicate_output(void) {
   }
 
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
-  // it from the same message with something appended.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_CHECK(!fixture_path_exists(root_dir, "public"));
 

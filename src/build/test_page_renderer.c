@@ -334,8 +334,8 @@ static void test_reports_missing_template(void) {
   }
 
   TEST_CHECK(render_entry_slots(root_dir, source_entries, 1, 1, &error_buffer) == -1);
-  // Exact, not by substring: `expected` is the whole message, so a substring check would also pass
-  // for that message with something appended to it.
+  // Exact, not by substring: a substring check would also pass for this message with something
+  // appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
   TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 
