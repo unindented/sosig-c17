@@ -26,6 +26,68 @@ static bool is_same_file(int fd, const struct stat* before) {
   return fstat(fd, &after) == 0 && after.st_dev == before->st_dev && after.st_ino == before->st_ino;
 }
 
+// A fixture file lands below the root with its parent directories created and its text intact, and
+// removing the tree deletes the root and everything below it.
+static void test_fixture_tree_write_and_remove(void) {
+  char root_dir_template[] = "/tmp/sosig-test-support.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  const int write_rc = write_fixture_file(root_dir, "nested/deeper/file.txt", "fixture text");
+  char fixture_path[PATH_MAX];
+  const int fixture_path_len =
+      snprintf(fixture_path, sizeof(fixture_path), "%s/nested/deeper/file.txt", root_dir);
+  const bool is_path_complete =
+      fixture_path_len > 0 && (size_t)fixture_path_len < sizeof(fixture_path);
+  FILE* fixture = is_path_complete ? fopen(fixture_path, "rb") : NULL;
+  const bool is_opened = fixture != NULL;
+  char text[64] = "";
+  int read_rc = -1;
+  int close_rc = -1;
+  if (fixture != NULL) {
+    read_rc = read_capture(fixture, text, sizeof(text));
+    close_rc = fclose(fixture);
+  }
+  // The tree is removed before any assertion, so a failed one cannot leave it behind.
+  remove_fixture_tree(root_dir);
+  errno = 0;
+  const int access_rc = access(root_dir, F_OK);
+  const int access_errno = errno;
+
+  TEST_CHECK(root_dir == root_dir_template);
+  TEST_CHECK(write_rc == 0);
+  TEST_CHECK(is_path_complete);
+  TEST_CHECK(is_opened);
+  TEST_CHECK(read_rc == 0);
+  TEST_CHECK(close_rc == 0);
+  TEST_CHECK(strcmp(text, "fixture text") == 0);
+  TEST_CHECK(access_rc == -1 && access_errno == ENOENT);
+}
+
+// Entering a directory makes relative paths resolve below it, and leaving restores the working
+// directory the test started in.
+static void test_working_dir_enter_and_leave(void) {
+  char root_dir_template[] = "/tmp/sosig-test-support.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_CHECK(write_fixture_file(root_dir, "marker", "") == 0);
+  char working_dir_before[PATH_MAX];
+  TEST_ASSERT(getcwd(working_dir_before, sizeof(working_dir_before)) != NULL);
+
+  int saved_dir_fd = -1;
+  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
+  TEST_CHECK(access("marker", F_OK) == 0);
+  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
+
+  char working_dir_after[PATH_MAX];
+  TEST_ASSERT(getcwd(working_dir_after, sizeof(working_dir_after)) != NULL);
+  TEST_CHECK(strcmp(working_dir_after, working_dir_before) == 0);
+  remove_fixture_tree(root_dir);
+}
+
 // A capture receives what the stream writes while redirected, and the stream writes to its original
 // descriptor again once the capture ends.
 static void test_capture_reads_stream_text_and_restores(void) {
@@ -88,35 +150,13 @@ static void test_unwritable_capture_fails_writes_and_discards_them(void) {
   TEST_CHECK(is_same_file(STDOUT_FILENO, &stdout_before));
 }
 
-// Entering a directory makes relative paths resolve below it, and leaving restores the working
-// directory the test started in.
-static void test_working_dir_enter_and_leave(void) {
-  char root_dir_template[] = "/tmp/test-support.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_CHECK(write_fixture_file(root_dir, "marker", "") == 0);
-  char working_dir_before[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir_before, sizeof(working_dir_before)) != NULL);
-
-  int saved_dir_fd = -1;
-  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
-  TEST_CHECK(access("marker", F_OK) == 0);
-  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
-
-  char working_dir_after[PATH_MAX];
-  TEST_ASSERT(getcwd(working_dir_after, sizeof(working_dir_after)) != NULL);
-  TEST_CHECK(strcmp(working_dir_after, working_dir_before) == 0);
-  remove_fixture_tree(root_dir);
-}
-
 TEST_LIST = {
+    {"fixture tree write and remove", test_fixture_tree_write_and_remove},
+    {"working dir enter and leave", test_working_dir_enter_and_leave},
     {"capture reads stream text and restores", test_capture_reads_stream_text_and_restores},
     {"capture flushes buffered text", test_capture_flushes_buffered_text},
     {"capture reads empty text", test_capture_reads_empty_text},
     {"unwritable capture fails writes and discards them",
      test_unwritable_capture_fails_writes_and_discards_them},
-    {"working dir enter and leave", test_working_dir_enter_and_leave},
     {NULL, NULL},
 };
