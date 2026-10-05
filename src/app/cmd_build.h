@@ -36,8 +36,8 @@ enum ExitCode cmd_build_run(const struct BuildOptions* options) __attribute__((n
  * @brief Runs the build pipeline, collecting the failure diagnostic into a growable buffer.
  *
  * Performs no error printing itself so callers can inspect the diagnostic directly. `cmd_build_run`
- * is the boundary that prints it. A single failing phase appends one message. Multiple
- * content-entry render or page-write failures append one line each, so nothing is truncated.
+ * is the boundary that prints it. A single failing phase appends one message. Multiple content
+ * parse, page render, or page write failures append one line each, so nothing is truncated.
  *
  * @param options   Build knobs such as worker count and verbosity. Must not be `NULL`.
  * @param error_out Growable buffer that receives the diagnostic. Must be initialized. Left empty on

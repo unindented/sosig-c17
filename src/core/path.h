@@ -30,7 +30,7 @@ _Static_assert(FILENAME_LEN_MAX > (sizeof(".html") - 1),
 enum { OUTPUT_PATH_RELATIVE_LEN_MAX = 1024 };
 
 _Static_assert((size_t)OUTPUT_PATH_RELATIVE_LEN_MAX >= (size_t)FILENAME_LEN_MAX,
-               "output path limit must fit at least a bare '<slug>.html' filename");
+               "output path limit must fit at least one maximum-length filename");
 
 /** Measurements taken from an output path while checking it against the output-path limits. */
 struct PathOutputMetrics {
