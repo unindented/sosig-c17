@@ -395,6 +395,79 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A second build over a finished output tree succeeds and produces the same set of outputs.
+static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
+  char root_dir_template[] = "/tmp/sosig-build-rebuild.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* output_dir = path_join(root_dir, "public", &arena);
+  TEST_ASSERT(output_dir != NULL);
+  struct PathList outputs;
+  path_list_init(&outputs);
+  static const char* const all_suffixes[] = {""};
+  TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
+                                         0) == 0);
+  // The one content page: the second build adds nothing and removes nothing.
+  TEST_CHECK(outputs.count == 1);
+  TEST_CHECK(has_output_path(&outputs, root_dir, "public/hello.html"));
+  path_list_free(&outputs);
+  arena_free(&arena);
+  string_buffer_free(&error_buffer);
+
+  remove_fixture_tree(root_dir);
+}
+
+// A `content_dir` inside `output_dir` builds, because no output lands inside it: `output_dir = "."`
+// with `content_dir = "content"` puts the site beside its sources. A rebuild succeeds and repeats
+// the same outputs, so the walk does not read the first build's pages back as sources.
+static void test_builds_and_rebuilds_with_output_dir_holding_content_dir(void) {
+  char root_dir_template[] = "/tmp/sosig-build-dot-output.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_site_fixture(root_dir, "output_dir = \".\"\n") == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+
+  static const char* const all_suffixes[] = {""};
+  size_t output_counts[2] = {0, 0};
+  for (size_t i = 0; i < 2; i++) {
+    struct StringBuffer error_buffer;
+    string_buffer_init(&error_buffer);
+    TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+    TEST_CHECK(error_buffer.len == 0);
+    TEST_MSG("build %zu: '%s'", i + 1, error_buffer.data != NULL ? error_buffer.data : "");
+    string_buffer_free(&error_buffer);
+
+    struct PathList outputs;
+    path_list_init(&outputs);
+    TEST_CHECK(fs_list_files_with_suffixes(&outputs, root_dir, NULL, all_suffixes, 1, false, NULL,
+                                           0) == 0);
+    output_counts[i] = outputs.count;
+    path_list_free(&outputs);
+  }
+  // The config, the template, and the source, then the content page.
+  TEST_CHECK(output_counts[0] == 4);
+  TEST_CHECK(output_counts[1] == output_counts[0]);
+  TEST_CHECK(fixture_path_exists(root_dir, "hello.html"));
+
+  remove_fixture_tree(root_dir);
+}
+
 // An `output_dir` that a symlink inside `content_dir` reaches is left out of the content walk, so a
 // rebuild does not read the first build's outputs back as sources. The aggregate here publishes a
 // `.md` file, which the walk would otherwise parse as a content entry and claim as an input.
@@ -837,6 +910,37 @@ static void test_rejects_duplicate_output(void) {
   remove_fixture_tree(root_dir);
 }
 
+// Slugging is lossy, so two different source names can claim one output path. The manifest reports
+// the collision and names both sources instead of letting the second write win. A non-ASCII byte
+// folds to hex, so `caf\xC3\xA9` produces the slug a literal `cafc3a9` also produces. The refused
+// build creates no `output_dir`, because nothing is written before the manifest passes.
+static void test_rejects_colliding_source_names(void) {
+  char root_dir_template[] = "/tmp/sosig-build-source-collision.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/caf\xC3\xA9.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/cafc3a9.md", HELLO_ENTRY) == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
+               "content/cafc3a9.md", "content/caf\xC3\xA9.md", "public/cafc3a9.html");
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
+  // it from the same message with something appended.
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  string_buffer_free(&error_buffer);
+  TEST_CHECK(!fixture_path_exists(root_dir, "public"));
+
+  remove_fixture_tree(root_dir);
+}
+
 // A content entry whose content template cannot be rendered surfaces a per-entry diagnostic through
 // the collected build error.
 static void test_reports_bad_template(void) {
@@ -966,6 +1070,9 @@ TEST_LIST = {
     {"tolerates trailing slash on content_dir", test_tolerates_trailing_slash_on_content_dir},
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
+    {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
+    {"builds and rebuilds with output dir holding content dir",
+     test_builds_and_rebuilds_with_output_dir_holding_content_dir},
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
     {"honors requested worker count", test_honors_requested_worker_count},
@@ -980,6 +1087,7 @@ TEST_LIST = {
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
     {"reports unparsable content", test_reports_unparsable_content},
     {"rejects duplicate output", test_rejects_duplicate_output},
+    {"rejects colliding source names", test_rejects_colliding_source_names},
     {"reports bad template", test_reports_bad_template},
     {"reports one line per failing entry", test_reports_one_line_per_failing_entry},
     {"reports unwritable output", test_reports_unwritable_output},
