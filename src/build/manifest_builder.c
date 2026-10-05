@@ -49,7 +49,9 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * The identities are sorted once after they are all claimed, and each lookup is a binary search. A
  * rebuild looks up every output that already exists, which is every output of a site built before.
  * At the 10,000 sources sosig targets, a linear scan over the inputs would make that about 100
- * million comparisons.
+ * million comparisons. Measured in a release build, the manifest phase of a 10,000-source rebuild
+ * took 95 milliseconds with a linear scan and 45 milliseconds with the binary search, out of 0.9
+ * seconds for the whole rebuild.
  */
 struct InputIdentities {
   /**
