@@ -28,12 +28,12 @@ static void test_init_sets_defaults(void) {
   content_entry_free(&entry);
 }
 
-// Freeing releases arena-owned data and leaves the entry *initialized*, not merely zeroed. That is
-// the contract at `content_entry.h` that lets a caller reuse it without a second
+// Freeing releases arena-owned data and leaves the entry reusable, *initialized* rather than merely
+// zeroed. That is the contract at `content_entry.h` that lets a caller reuse it without a second
 // `content_entry_init`. `description` is what separates the two: it is the one field whose default
 // is non-zero, so asserting it is the only way a zeroing implementation fails here. The arena
 // append after the free exercises the reuse the header promises, with no intervening init.
-static void test_free_clears_fields(void) {
+static void test_free_allows_reuse(void) {
   struct ContentEntry entry;
   content_entry_init(&entry);
 
@@ -148,7 +148,7 @@ static void test_latest_date_uses_newest_or_epoch(void) {
 
 TEST_LIST = {
     {"init sets defaults", test_init_sets_defaults},
-    {"free clears fields", test_free_clears_fields},
+    {"free allows reuse", test_free_allows_reuse},
     {"reinit after free is safe", test_reinit_after_free_is_safe},
     {"sort orders by date then output path", test_sort_orders_by_date_then_output_path},
     {"sort output path tie break is deterministic",
