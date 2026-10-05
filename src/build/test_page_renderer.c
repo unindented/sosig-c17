@@ -24,6 +24,14 @@
 #include "test_render_support.h"
 #include "test_support.h"
 
+/** Config most fixtures share. It turns off the aggregate and feed passes. */
+static const char* const SITE_CONFIG =
+    "base_url = \"https://example.com\"\n"
+    "title = \"Site\"\n"
+    "author = \"Author\"\n"
+    "aggregate_templates = []\n"
+    "feed_templates = []\n";
+
 /**
  * @brief Checks that a page the render pass wrote holds exactly the expected text.
  *
@@ -45,12 +53,6 @@ static void check_output(const char* root_dir, const char* relative_path, const 
  * @param content_template Terminated content-template text to write.
  */
 static void write_multi_source_fixture(const char* root_dir, const char* content_template) {
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char newer[] =
       "+++\n"
       "title = \"Newer\"\n"
@@ -70,7 +72,7 @@ static void write_multi_source_fixture(const char* root_dir, const char* content
       "draft = true\n"
       "+++\n"
       "Draft body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/newer.md", newer) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/older.md", older) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
@@ -82,7 +84,7 @@ static void write_multi_source_fixture(const char* root_dir, const char* content
 // to a different entry than the one being rendered. The end-to-end assertion lives in the golden
 // test suite.
 static void test_renders_site_updated_in_content_template(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-page-site-updated.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -122,7 +124,7 @@ static void test_renders_site_updated_in_content_template(void) {
 // A content template iterates `content_entries` newest-first, and a draft is absent from it. Both
 // follow from the page pass running after the collect-and-sort step.
 static void test_iterates_content_entries_in_content_template(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-page-entries.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -155,7 +157,7 @@ static void test_iterates_content_entries_in_content_template(void) {
 // so a job that took a sibling's `EEXIST` for a failure would drop its page. The `tsan` test preset
 // runs the same path under ThreadSanitizer.
 static void test_writes_pages_sharing_parents_concurrently(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-page-shared-parents.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -216,25 +218,19 @@ static void test_writes_pages_sharing_parents_concurrently(void) {
 
 // A missing content template surfaces a per-entry diagnostic in the collected error buffer.
 static void test_reports_missing_template(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-page-missing-template.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
 
   struct SiteConfig site_config;
@@ -259,6 +255,7 @@ static void test_reports_missing_template(void) {
   // Exact, not by substring: `expected` is the whole message, so a substring check would also pass
   // for that message with something appended to it.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 
   render_job_set_free(&render_jobs);
   string_buffer_free(&error_buffer);
@@ -271,7 +268,7 @@ static void test_reports_missing_template(void) {
 // collected errors, and every other page is still written. A directory at the page path cannot be
 // opened as a file even by a privileged process.
 static void test_reports_write_failure_per_entry(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-page-write-failure.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -310,7 +307,7 @@ static void test_reports_write_failure_per_entry(void) {
                reason, reason);
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
   check_output(root_dir, "public/third.html", "[Third]\n");
 
   render_job_set_free(&render_jobs);

@@ -26,6 +26,14 @@
 #include "test_render_support.h"
 #include "test_support.h"
 
+/** Config most fixtures share. It turns off the aggregate and feed passes. */
+static const char* const SITE_CONFIG =
+    "base_url = \"https://example.com\"\n"
+    "title = \"Site\"\n"
+    "author = \"Author\"\n"
+    "aggregate_templates = []\n"
+    "feed_templates = []\n";
+
 /**
  * @brief Runs the entry-render pass while capturing standard error.
  *
@@ -59,25 +67,19 @@ static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
 
 // A single source renders its frontmatter metadata, body HTML, page output, and output paths.
 static void test_renders_entry_metadata_and_html(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-metadata.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
                                 "<main>{{title}} {{{body}}}</main>\n") == 0);
@@ -117,18 +119,12 @@ static void test_renders_entry_metadata_and_html(void) {
 
 // A draft source is parsed but leaves an empty result slot and writes no page.
 static void test_skips_draft_entry(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-draft.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
@@ -136,7 +132,7 @@ static void test_skips_draft_entry(void) {
       "draft = true\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -170,18 +166,12 @@ static void test_skips_draft_entry(void) {
 // locking outside the pool. This drives it with more workers than one so the lock is contended, and
 // the `tsan` test preset runs the same path under ThreadSanitizer.
 static void test_verbose_prints_one_progress_line_per_job(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-verbose.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char page[] =
       "+++\n"
       "title = \"Hello\"\n"
@@ -195,7 +185,7 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
       "draft = true\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", page) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/second.md", page) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
@@ -250,18 +240,12 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
 // the first segment. Both directory names here need slugifying, so a join that skipped the
 // separator would publish `my-sectionsub-dir` as one directory.
 static void test_nests_output_under_slugified_sections(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-sections.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
@@ -269,7 +253,7 @@ static void test_nests_output_under_slugified_sections(void) {
       "+++\n"
       "Body\n";
   const char* const source_relative_path = "content/My Section/Sub Dir/hello.md";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -333,18 +317,12 @@ static void test_accepts_empty_site(void) {
 // cannot produce either form because its walk starts at `content_dir`. A caller that supplies a
 // source list can produce them, so this function checks the prefix.
 static void test_rejects_source_outside_content_dir(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-outside.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   // Both sources parse cleanly, so each reaches the path-finalizing step where the check lives.
   const char content[] =
       "+++\n"
@@ -352,7 +330,7 @@ static void test_rejects_source_outside_content_dir(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "contentx/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
@@ -393,25 +371,19 @@ static void test_rejects_source_outside_content_dir(void) {
 // expanded path, which config validation can only reason about indirectly. Rejection at load is
 // covered by `test_load_rejects_unsafe_permalink` in the site config tests.
 static void test_rejects_unsafe_output_path(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-unsafe.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -444,7 +416,7 @@ static void test_rejects_unsafe_output_path(void) {
 // segment still fails here. This is the render phase's backstop: `site_config_load` rejects the
 // same pattern up front, asserted by `test_load_rejects_oversize_permalink`.
 static void test_rejects_oversize_output_path(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-oversize-path.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -461,19 +433,13 @@ static void test_rejects_oversize_output_path(void) {
   memcpy(pattern + sizeof(pattern) - sizeof("/{slug}.html"), "/{slug}.html",
          sizeof("/{slug}.html"));
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -528,7 +494,7 @@ static void test_rejects_oversize_output_path(void) {
 // six-byte sample. `<slug>.html` is exactly `FILENAME_LEN_MAX` by construction, so the overflow
 // needs a literal suffix on top of a maximum-length slug.
 static void test_rejects_oversize_path_segment(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-oversize-segment.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -604,19 +570,13 @@ static void test_rejects_oversize_path_segment(void) {
 // buffer. Without this case only the parse branch is covered, and an inversion to
 // `in '<path>': <reason>` breaks no test.
 static void test_reports_missing_frontmatter_fence(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-fence.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "no fence here\n") == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "<main>{{title}}</main>\n") ==
              0);
@@ -649,7 +609,7 @@ static void test_reports_missing_frontmatter_fence(void) {
 // A frontmatter reason survives in full when a long source path overflows the diagnostic, and the
 // overflow itself is marked rather than silent.
 static void test_reports_frontmatter_reason_before_long_source_path(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-long-source.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
@@ -666,19 +626,13 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   _Static_assert(SLUG_LEN_MAX + 2 <= FILENAME_LEN_MAX,
                  "the oversize stem must still be a legal filename");
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -732,25 +686,19 @@ static void test_reports_unreadable_source(void) {
     return;
   }
 
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-unreadable.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
 
@@ -798,19 +746,13 @@ static void test_reports_unreadable_source(void) {
 // limit and the size, rather than read whole and turned away by the converter. The file is sparse,
 // so the fixture costs no disk and a read that loaded it would show only as the wrong diagnostic.
 static void test_rejects_oversize_source(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-oversize-source.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "+++\ntitle = \"Hello\"\n+++\n") ==
              0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
@@ -853,20 +795,13 @@ static void test_rejects_oversize_source(void) {
 // counterpart is `test_reports_one_line_per_failing_entry` in `src/app/test_cmd_build.c`. This one
 // pins it at the module boundary, where the contract is documented.
 static void test_appends_one_error_line_per_failing_source(void) {
-  char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
+  char root_dir_template[] = "/tmp/sosig-entry-error-lines.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = []\n"
-      "feed_templates = []\n";
-  // Both sources omit the required `title`, so each fails in the parse phase with its own
-  // message.
+  // Both sources omit the required `title`, so each fails in the parse phase with its own message.
   const char first[] =
       "+++\n"
       "date = 2026-07-01T00:00:00Z\n"
@@ -877,7 +812,7 @@ static void test_appends_one_error_line_per_failing_source(void) {
       "date = 2026-07-02T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
+  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/a.md", first) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "content/b.md", second) == 0);
   TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
