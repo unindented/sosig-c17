@@ -67,19 +67,19 @@ static const char* write_temp_config(struct TempConfig* temp_config_out, const c
 }
 
 /**
- * @brief Loads a config with the given permalink and checks it fails with one diagnostic.
+ * @brief Loads a config with the given extra TOML and checks it fails with one diagnostic.
  *
- * @param permalink Permalink pattern to load, embedded in an otherwise valid config.
- * @param expected  Exact diagnostic `site_config_load` must report.
+ * @param toml_extra Terminated TOML appended to the required keys of an otherwise valid config.
+ * @param expected   Exact diagnostic `site_config_load` must report.
  */
-static void check_load_rejects_permalink(const char* permalink, const char* expected) {
-  const char toml_format[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Example Site\"\n"
-      "author = \"Example Author\"\n"
-      "permalink = \"%s\"\n";
-  char toml[OUTPUT_PATH_RELATIVE_LEN_MAX + 512];
-  const int n = snprintf(toml, sizeof(toml), toml_format, permalink);
+static void check_load_rejects(const char* toml_extra, const char* expected) {
+  char toml[4096];
+  const int n = snprintf(toml, sizeof(toml),
+                         "base_url = \"https://example.com\"\n"
+                         "title = \"Example Site\"\n"
+                         "author = \"Example Author\"\n"
+                         "%s",
+                         toml_extra);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
@@ -93,6 +93,19 @@ static void check_load_rejects_permalink(const char* permalink, const char* expe
 
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
+}
+
+/**
+ * @brief Loads a config with the given permalink and checks it fails with one diagnostic.
+ *
+ * @param permalink Permalink pattern to load, embedded in an otherwise valid config.
+ * @param expected  Exact diagnostic `site_config_load` must report.
+ */
+static void check_load_rejects_permalink(const char* permalink, const char* expected) {
+  char toml_extra[OUTPUT_PATH_RELATIVE_LEN_MAX + 512];
+  const int n = snprintf(toml_extra, sizeof(toml_extra), "permalink = \"%s\"\n", permalink);
+  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
+  check_load_rejects(toml_extra, expected);
 }
 
 // Loading a file with only the required keys fills the rest from `site_config_init`'s defaults.
@@ -227,6 +240,30 @@ static void test_load_normalizes_base_url(void) {
   }
 }
 
+// Overlapping directories load, because comparing path text cannot tell whether two directories
+// overlap. The build compares them by identity before it walks or writes anything.
+static void test_load_leaves_directory_overlap_to_the_build(void) {
+  const char toml[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Example Site\"\n"
+      "author = \"Example Author\"\n"
+      "content_dir = \"posts\"\n"
+      "output_dir = \"posts/generated\"\n";
+  struct TempConfig temp_config;
+  const char* config_path = write_temp_config(&temp_config, toml);
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  char err[ERROR_MESSAGE_SIZE] = "";
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
+  TEST_CHECK(err[0] == '\0');
+  TEST_CHECK(strcmp(config.content_dir, "posts") == 0);
+  TEST_CHECK(strcmp(config.output_dir, "posts/generated") == 0);
+
+  site_config_free(&config);
+  remove_fixture_tree(temp_config.root_dir);
+}
+
 // Permalink patterns that expand to a safe relative path are accepted, including a directory-style
 // pattern and one that omits the section.
 static void test_load_accepts_valid_permalinks(void) {
@@ -292,25 +329,7 @@ static void test_load_rejects_empty_directory_keys(void) {
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    char toml[256];
-    const int n = snprintf(toml, sizeof(toml),
-                           "base_url = \"https://example.com\"\n"
-                           "title = \"Example Site\"\n"
-                           "author = \"Example Author\"\n"
-                           "%s",
-                           cases[i][0]);
-    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-
-    struct SiteConfig config;
-    site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-
-    site_config_free(&config);
-    remove_fixture_tree(temp_config.root_dir);
+    check_load_rejects(cases[i][0], cases[i][1]);
   }
 }
 
@@ -534,88 +553,33 @@ static void test_load_rejects_table_values(void) {
 // rather than flowing through to the render and failing once per content entry that has no
 // frontmatter `template` of its own. Parent-relative, absolute and empty names are all unsafe.
 static void test_load_rejects_unsafe_content_template(void) {
-  const char base[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Example Site\"\n"
-      "author = \"Example Author\"\n";
   const char* const unsafe_names[] = {"../evil.html", "/etc/passwd", ""};
 
   for (size_t i = 0; i < sizeof(unsafe_names) / sizeof(unsafe_names[0]); i++) {
-    char toml[512];
+    char toml_extra[256];
     const int n =
-        snprintf(toml, sizeof(toml), "%scontent_template = \"%s\"\n", base, unsafe_names[i]);
-    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-    struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-
-    struct SiteConfig config;
-    site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
+        snprintf(toml_extra, sizeof(toml_extra), "content_template = \"%s\"\n", unsafe_names[i]);
+    TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
     char expected[ERROR_MESSAGE_SIZE];
     const int expected_len =
         snprintf(expected, sizeof(expected),
                  "config key 'content_template' must be a safe relative template name: '%s'",
                  unsafe_names[i]);
     TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    TEST_CHECK(strcmp(err, expected) == 0);
-
-    site_config_free(&config);
-    remove_fixture_tree(temp_config.root_dir);
+    check_load_rejects(toml_extra, expected);
   }
 }
 
 // A non-array value, a non-string element, and an unsafe name for a template array key are each
 // rejected.
 static void test_load_rejects_invalid_template_arrays(void) {
-  const char base[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Example Site\"\n"
-      "author = \"Example Author\"\n";
-  char err[ERROR_MESSAGE_SIZE];
-
-  struct TempConfig not_array_temp;
-  char not_array_toml[512];
-  int n = snprintf(not_array_toml, sizeof(not_array_toml),
-                   "%saggregate_templates = \"index.html\"\n", base);
-  TEST_ASSERT(n > 0 && (size_t)n < sizeof(not_array_toml));
-  const char* not_array_path = write_temp_config(&not_array_temp, not_array_toml);
-  struct SiteConfig not_array_config;
-  site_config_init(&not_array_config);
-  TEST_CHECK(site_config_load(&not_array_config, not_array_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "config key 'aggregate_templates' must be an array") == 0);
-  site_config_free(&not_array_config);
-  remove_fixture_tree(not_array_temp.root_dir);
-
-  struct TempConfig non_string_temp;
-  char non_string_toml[512];
-  n = snprintf(non_string_toml, sizeof(non_string_toml), "%saggregate_templates = [1]\n", base);
-  TEST_ASSERT(n > 0 && (size_t)n < sizeof(non_string_toml));
-  const char* non_string_path = write_temp_config(&non_string_temp, non_string_toml);
-  struct SiteConfig non_string_config;
-  site_config_init(&non_string_config);
-  TEST_CHECK(site_config_load(&non_string_config, non_string_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "config key 'aggregate_templates' must contain only strings") == 0);
-  site_config_free(&non_string_config);
-  remove_fixture_tree(non_string_temp.root_dir);
-
-  struct TempConfig unsafe_name_temp;
-  char unsafe_name_toml[512];
-  n = snprintf(unsafe_name_toml, sizeof(unsafe_name_toml),
-               "%saggregate_templates = [\"../evil.html\"]\n", base);
-  TEST_ASSERT(n > 0 && (size_t)n < sizeof(unsafe_name_toml));
-  const char* unsafe_name_path = write_temp_config(&unsafe_name_temp, unsafe_name_toml);
-  struct SiteConfig unsafe_name_config;
-  site_config_init(&unsafe_name_config);
-  TEST_CHECK(site_config_load(&unsafe_name_config, unsafe_name_path, err, sizeof(err)) == -1);
-  char expected_unsafe_name[ERROR_MESSAGE_SIZE];
-  n = snprintf(expected_unsafe_name, sizeof(expected_unsafe_name),
-               "config key '%s' must contain only safe relative template names: '%s'",
-               "aggregate_templates", "../evil.html");
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected_unsafe_name));
-  TEST_CHECK(strcmp(err, expected_unsafe_name) == 0);
-  site_config_free(&unsafe_name_config);
-  remove_fixture_tree(unsafe_name_temp.root_dir);
+  check_load_rejects("aggregate_templates = \"index.html\"\n",
+                     "config key 'aggregate_templates' must be an array");
+  check_load_rejects("aggregate_templates = [1]\n",
+                     "config key 'aggregate_templates' must contain only strings");
+  check_load_rejects("aggregate_templates = [\"../evil.html\"]\n",
+                     "config key 'aggregate_templates' must contain only safe relative template "
+                     "names: '../evil.html'");
 }
 
 // A negative `feed_count` is rejected, and says the value is out of range rather than mistyped.
@@ -1171,6 +1135,7 @@ TEST_LIST = {
     {"load overrides optional keys", test_load_overrides_optional_keys},
     {"load normalizes directory keys", test_load_normalizes_directory_keys},
     {"load normalizes base url", test_load_normalizes_base_url},
+    {"load leaves directory overlap to the build", test_load_leaves_directory_overlap_to_the_build},
     {"load accepts valid permalinks", test_load_accepts_valid_permalinks},
     {"load accepts zero feed count", test_load_accepts_zero_feed_count},
     {"load rejects empty directory keys", test_load_rejects_empty_directory_keys},
