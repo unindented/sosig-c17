@@ -94,24 +94,6 @@ static int write_site_fixture(const char* root_dir, const char* config_extra) {
 }
 
 /**
- * @brief Runs a build in a fixture directory.
- *
- * Use `execute_build_in_dir` when a test must inspect the returned diagnostic.
- *
- * @param root_dir Fixture directory in which to run the build.
- * @return The command exit code, or `TEST_PLUMBING_FAILED` on test-plumbing failure.
- */
-static enum ExitCode run_build_in_dir(const char* root_dir) {
-  int saved_dir_fd = -1;
-  if (working_dir_enter(root_dir, &saved_dir_fd) != 0) {
-    return (enum ExitCode)TEST_PLUMBING_FAILED;
-  }
-  const struct BuildOptions options = {0};
-  const enum ExitCode rc = cmd_build_run(&options);
-  return working_dir_leave(saved_dir_fd) == 0 ? rc : (enum ExitCode)TEST_PLUMBING_FAILED;
-}
-
-/**
  * @brief Executes a build in a fixture directory and collects its diagnostic.
  *
  * The build resolves `sosig.toml` from the working directory, so this changes into the fixture and
@@ -222,14 +204,20 @@ static void test_honors_configured_content_template(void) {
   TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/content-entry.html",
                                  "<main>{{title}} {{{body}}}</main>\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
   TEST_CHECK(
       read_fixture_file(root_dir, "public/hello.html", &generated_file, &generated_file_len) == 0);
-  TEST_CHECK(generated_file_len > 0);
-  TEST_CHECK(generated_file != NULL && strstr(generated_file, "<main>Hello <p>Body</p>") != NULL);
+  TEST_CHECK(generated_file != NULL &&
+             strcmp(generated_file, "<main>Hello <p>Body</p>\n</main>\n") == 0);
   free(generated_file);
 
   remove_fixture_tree(root_dir);
@@ -277,7 +265,13 @@ static void test_writes_exactly_manifest_outputs(void) {
   TEST_ASSERT(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "templates/feed.xml", "feed\n") == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
 
   static const char* expected[] = {"public/alpha.html", "public/beta.html", "public/feed.xml",
                                    "public/index.html"};
@@ -297,6 +291,7 @@ static void test_writes_exactly_manifest_outputs(void) {
   TEST_CHECK(outputs.count == expected_count);
   for (size_t i = 0; i < expected_count; i++) {
     TEST_CHECK(has_output_path(&outputs, root_dir, expected[i]));
+    TEST_MSG("missing: '%s'", expected[i]);
   }
 
   path_list_free(&outputs);
@@ -315,7 +310,13 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
   }
   TEST_ASSERT(write_site_fixture(root_dir, "content_dir = \"content/\"\n") == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/post.md", HELLO_ENTRY) == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -344,7 +345,13 @@ static void test_honors_custom_permalink(void) {
   }
   TEST_ASSERT(write_site_fixture(root_dir, "permalink = \"/{slug}/\"\n") == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
 
   char* generated_file = NULL;
   size_t generated_file_len = 0;
@@ -364,33 +371,18 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   if (root_dir == NULL) {
     return;
   }
-
-  const char a[] =
-      "+++\n"
-      "title = \"A\"\n"
-      "date = 2026-07-02T00:00:00Z\n"
-      "+++\n"
-      "A body\n";
-  const char b[] =
-      "+++\n"
-      "title = \"B\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "+++\n"
-      "B body\n";
   TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/a/post.md", a) == 0);
-  TEST_ASSERT(write_fixture_file(root_dir, "content/b/post.md", b) == 0);
-  TEST_CHECK(run_build_in_dir(root_dir) == EXIT_CODE_OK);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/a/post.md", HELLO_ENTRY) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/b/post.md", HELLO_ENTRY) == 0);
 
-  char* generated_file = NULL;
-  size_t generated_file_len = 0;
-  TEST_CHECK(
-      read_fixture_file(root_dir, "public/a/post.html", &generated_file, &generated_file_len) == 0);
-  free(generated_file);
-  generated_file = NULL;
-  TEST_CHECK(
-      read_fixture_file(root_dir, "public/b/post.html", &generated_file, &generated_file_len) == 0);
-  free(generated_file);
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
+  TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  TEST_CHECK(fixture_path_exists(root_dir, "public/a/post.html"));
+  TEST_CHECK(fixture_path_exists(root_dir, "public/b/post.html"));
+  string_buffer_free(&error_buffer);
 
   remove_fixture_tree(root_dir);
 }
@@ -611,6 +603,7 @@ static void test_leaves_error_buffer_empty_on_success(void) {
   string_buffer_init(&error_buffer);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
   string_buffer_free(&error_buffer);
 
   remove_fixture_tree(root_dir);
@@ -968,6 +961,7 @@ static void test_reports_bad_template(void) {
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   // Exact: `expected` is the whole message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
   string_buffer_free(&error_buffer);
 
   remove_fixture_tree(root_dir);
