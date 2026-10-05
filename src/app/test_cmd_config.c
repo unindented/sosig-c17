@@ -94,16 +94,17 @@ static void test_prints_loaded_config(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
-                                 "base_url = \"https://example.com\"\n"
-                                 "title = \"Test Site\"\n"
-                                 "author = \"Author Name\"\n") == 0);
-
   char stdout_out[8192];
   char stderr_out[8192];
-  const enum ExitCode rc = run_config_capturing(root_dir, stdout_out, sizeof(stdout_out),
-                                                stderr_out, sizeof(stderr_out));
-  TEST_CHECK(rc == EXIT_CODE_OK);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml",
+                                     "base_url = \"https://example.com\"\n"
+                                     "title = \"Test Site\"\n"
+                                     "author = \"Author Name\"\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(run_config_capturing(root_dir, stdout_out, sizeof(stdout_out), stderr_out,
+                                  sizeof(stderr_out)) == EXIT_CODE_OK);
   // The whole capture, not two per-line searches: exact comparison catches a missing, duplicated or
   // reordered key. The empty `stderr_out` below is the routing half: the configuration goes to
   // `stdout`, and the success path says nothing on `stderr`.
@@ -121,6 +122,7 @@ static void test_prints_loaded_config(void) {
                     "feed_templates = [\"atom.xml\"]\n"
                     "feed_count = 10\n") == 0);
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -134,18 +136,19 @@ static void test_prints_empty_template_arrays(void) {
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
-                                 "base_url = \"https://example.com\"\n"
-                                 "title = \"Test Site\"\n"
-                                 "author = \"Author Name\"\n"
-                                 "aggregate_templates = []\n"
-                                 "feed_templates = []\n") == 0);
-
   char stdout_out[8192];
   char stderr_out[8192];
-  const enum ExitCode rc = run_config_capturing(root_dir, stdout_out, sizeof(stdout_out),
-                                                stderr_out, sizeof(stderr_out));
-  TEST_CHECK(rc == EXIT_CODE_OK);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml",
+                                     "base_url = \"https://example.com\"\n"
+                                     "title = \"Test Site\"\n"
+                                     "author = \"Author Name\"\n"
+                                     "aggregate_templates = []\n"
+                                     "feed_templates = []\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(run_config_capturing(root_dir, stdout_out, sizeof(stdout_out), stderr_out,
+                                  sizeof(stderr_out)) == EXIT_CODE_OK);
   // Compared whole, and `stderr` empty, for the reasons at `test_prints_loaded_config`.
   TEST_CHECK(stderr_out[0] == '\0');
   TEST_CHECK(strcmp(stdout_out,
@@ -161,6 +164,7 @@ static void test_prints_empty_template_arrays(void) {
                     "feed_templates = []\n"
                     "feed_count = 10\n") == 0);
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -169,6 +173,13 @@ static void test_prints_empty_template_arrays(void) {
 // from the running libc rather than hardcoded, so the assertion is the whole claim and stays
 // portable.
 static void test_reports_missing_config(void) {
+  char reason[FS_REASON_SIZE];
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')\n",
+               error_system_message(reason, sizeof(reason), ENOENT));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
   char root_dir_template[] = "/tmp/sosig-cmd-config-missing.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -177,15 +188,8 @@ static void test_reports_missing_config(void) {
 
   char stdout_out[8192];
   char stderr_out[8192];
-  const enum ExitCode rc = run_config_capturing(root_dir, stdout_out, sizeof(stdout_out),
-                                                stderr_out, sizeof(stderr_out));
-  TEST_CHECK(rc == EXIT_CODE_FAILURE);
-  char reason[FS_REASON_SIZE];
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "failed to read config: %s ('sosig.toml')\n",
-               error_system_message(reason, sizeof(reason), ENOENT));
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(run_config_capturing(root_dir, stdout_out, sizeof(stdout_out), stderr_out,
+                                  sizeof(stderr_out)) == EXIT_CODE_FAILURE);
   // The diagnostic goes to `stderr`. A failed run prints nothing on `stdout`, so a pipeline
   // redirecting `stdout` to a file does not capture the error into it.
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
@@ -202,19 +206,21 @@ static void test_reports_missing_required_key(void) {
   if (root_dir == NULL) {
     return;
   }
-  // Missing the required `author` key.
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
-                                 "base_url = \"https://example.com\"\n"
-                                 "title = \"Test Site\"\n") == 0);
-
   char stdout_out[8192];
   char stderr_out[8192];
-  const enum ExitCode rc = run_config_capturing(root_dir, stdout_out, sizeof(stdout_out),
-                                                stderr_out, sizeof(stderr_out));
-  TEST_CHECK(rc == EXIT_CODE_FAILURE);
+  // Missing the required `author` key.
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml",
+                                     "base_url = \"https://example.com\"\n"
+                                     "title = \"Test Site\"\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(run_config_capturing(root_dir, stdout_out, sizeof(stdout_out), stderr_out,
+                                  sizeof(stderr_out)) == EXIT_CODE_FAILURE);
   TEST_CHECK(strcmp(stderr_out, "missing required config key 'author'\n") == 0);
   TEST_CHECK(stdout_out[0] == '\0');
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
@@ -225,21 +231,6 @@ static void test_reports_missing_required_key(void) {
 // the writes fail, `site_config_print` reports it. The diagnostic still reaches the captured
 // `stderr`.
 static void test_reports_unwritable_stdout(void) {
-  char root_dir_template[] = "/tmp/sosig-cmd-config-unwritable.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  TEST_ASSERT(write_fixture_file(root_dir, "sosig.toml",
-                                 "base_url = \"https://example.com\"\n"
-                                 "title = \"Test Site\"\n"
-                                 "author = \"Author Name\"\n") == 0);
-
-  char stderr_out[8192];
-  const enum ExitCode rc =
-      run_config_with_unwritable_stdout(root_dir, stderr_out, sizeof(stderr_out));
-
-  TEST_CHECK(rc == EXIT_CODE_FAILURE);
   // `EBADF`: the writes go to a descriptor opened read-only. The reason is derived from the running
   // libc rather than hardcoded, and the whole line is compared so a reworded prefix fails too.
   char reason[ERROR_MESSAGE_SIZE];
@@ -248,8 +239,25 @@ static void test_reports_unwritable_stdout(void) {
       snprintf(expected, sizeof(expected), "failed to write resolved config to 'stdout': %s\n",
                error_system_message(reason, sizeof(reason), EBADF));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-cmd-config-unwritable.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  char stderr_out[8192];
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml",
+                                     "base_url = \"https://example.com\"\n"
+                                     "title = \"Test Site\"\n"
+                                     "author = \"Author Name\"\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(run_config_with_unwritable_stdout(root_dir, stderr_out, sizeof(stderr_out)) ==
+             EXIT_CODE_FAILURE);
   TEST_CHECK(strcmp(stderr_out, expected) == 0);
 
+cleanup:
   remove_fixture_tree(root_dir);
 }
 
