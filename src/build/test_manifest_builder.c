@@ -947,9 +947,9 @@ static void test_derive_template_output_joins_output_dir(void) {
   arena_free(&arena);
 }
 
-// The writing this module guards lives in `site_writer`, whose `write_*` functions are exercised
-// end-to-end by the golden test suite rather than in a unit test. Entry ordering and `site.updated`
-// derivation live in `content_entry` and are tested in `src/domain/test_content_entry.c`.
+// The writing this module guards lives in `site_writer` and is tested in
+// `src/build/test_site_writer.c`. Entry ordering and `site.updated` derivation live in
+// `content_entry` and are tested in `src/domain/test_content_entry.c`.
 
 TEST_LIST = {
     {"registers complete output set", test_registers_complete_output_set},

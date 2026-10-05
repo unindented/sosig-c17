@@ -38,6 +38,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/build/test_render_job.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_render_support.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_render_support.h"
+    "${PROJECT_SOURCE_DIR}/src/build/test_site_writer.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_template.c"
     "${PROJECT_SOURCE_DIR}/src/core/ascii.h"
     "${PROJECT_SOURCE_DIR}/src/core/error.c"

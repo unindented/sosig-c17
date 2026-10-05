@@ -11,7 +11,7 @@ target_link_libraries(sosig_app PRIVATE sosig_vendor_mustache)
 
 if(SOSIG_BUILD_TESTING)
   foreach(module IN ITEMS entry_renderer manifest_builder output_path page_renderer render_job
-                          template
+                          site_writer template
   )
     sosig_add_unit_test(${module})
   endforeach()

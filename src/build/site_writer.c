@@ -11,9 +11,9 @@
 #include "runtime/fs.h"
 #include "shared/arena.h"
 
-// This module's two exported writers are exercised end-to-end by CTest's golden test suite, which
-// builds every fixture site and compares each result with its `tests/expected/<site>` tree, so
-// there is no `src/build/test_site_writer.c`. Collision checks live in `manifest_builder`,
+// This module's two exported writers are unit-tested in `src/build/test_site_writer.c`, and CTest's
+// golden test suite exercises them end to end by building every fixture site and comparing each
+// result with its `tests/expected/<site>` tree. Collision checks live in `manifest_builder`,
 // unit-tested in `src/build/test_manifest_builder.c`.
 
 /**
