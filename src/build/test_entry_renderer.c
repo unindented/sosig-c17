@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 #include "build/entry_renderer.h"
-#include "build/page_renderer.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -279,9 +278,10 @@ static void test_nests_output_under_slugified_sections(void) {
   remove_fixture_tree(root_dir);
 }
 
-// Both parallel phases accept an empty site. Its entry slot array may be `NULL`, which each phase's
-// contract allows for a count of 0, and `job_run` allocates error slots whose count is 0, for which
+// The parse phase accepts an empty site. Its entry slot array may be `NULL`, which its contract
+// allows for a count of 0, and `job_run` allocates error slots whose count is 0, for which
 // `calloc(0, ...)` may also return `NULL`. Neither may be reported as an allocation failure.
+// `test_accepts_empty_entry_set` in `test_page_renderer.c` pins the same for the page phase.
 static void test_accepts_empty_site(void) {
   struct SiteConfig site_config;
   site_config_init(&site_config);
@@ -292,9 +292,6 @@ static void test_accepts_empty_site(void) {
 
   TEST_CHECK(entry_renderer_render_entries(&site_config, &source_paths, 1, false, NULL,
                                            &error_buffer) == 0);
-  TEST_CHECK(error_buffer.len == 0);
-  TEST_CHECK(page_renderer_render_pages(&site_config, NULL, 0, NULL, 0, "1970-01-01T00:00:00Z", 1,
-                                        false, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   entry_renderer_free_entries(NULL, 0);
 

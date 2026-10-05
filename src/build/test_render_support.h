@@ -9,25 +9,6 @@ struct SiteConfig;
 struct StringBuffer;
 
 /**
- * @brief Runs the page phase over entry slots the parse phase filled.
- *
- * Collects, sorts and dates the published entries the way the build does before its page phase.
- *
- * @param site_config        Configuration used for rendering. Must not be `NULL`.
- * @param source_entries     Entry slots filled by the parse phase. Must not be `NULL`.
- * @param source_entry_count Number of slots in `source_entries`.
- * @param worker_count       Worker threads the page phase runs on.
- * @param error_out          Buffer that receives any render diagnostic. Must not be `NULL`.
- * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
- *         failure.
- */
-int render_pages(const struct SiteConfig* site_config,
-                 struct ContentEntry* const* source_entries,
-                 size_t source_entry_count,
-                 size_t worker_count,
-                 struct StringBuffer* error_out);
-
-/**
  * @brief Renders named fixture sources through both parallel phases on one worker.
  *
  * Loads `sosig.toml` from `root_dir` and runs with `root_dir` as the working directory, restoring
