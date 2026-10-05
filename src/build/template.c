@@ -107,16 +107,21 @@ _Static_assert(PARTIAL_PATH_SIZE > sizeof("partials/") - 1 + sizeof(".html") - 1
 enum NodeKind {
   /** Top-level lookup context: `site.*`, `content_entries`, and current entry fields. */
   NODE_ROOT,
+
   /** Site metadata subtree resolving `site.*` names. */
   NODE_SITE,
-  /** The `content_entries` list, iterated by index. */
-  NODE_LIST,
+
   /** One content entry, resolving bare field names. */
   NODE_ENTRY,
-  /** A terminal string value. */
-  NODE_SCALAR,
+
+  /** The `content_entries` list, iterated by index. */
+  NODE_ENTRY_LIST,
+
   /** A content entry's tag list, iterated by index. */
   NODE_TAG_LIST,
+
+  /** A terminal string value. */
+  NODE_SCALAR,
 };
 
 /** A node in the data tree. Nodes are arena-owned and live for one render. */
@@ -128,7 +133,7 @@ struct Node {
   const struct ContentEntry* entry;
 
   /**
-   * Backing string for `NODE_SCALAR`. Never `NULL`. Never empty either when it came from
+   * Borrowed text for `NODE_SCALAR`. Never `NULL`. Never empty either when it came from
    * `node_scalar`, which rejects both so an unset optional field reads as absent. A tag may still
    * be empty, because `node_get_child_by_index` builds tag nodes directly to keep an empty tag from
    * ending the list. Either way `node_dump` may call `strlen` on it unguarded.
@@ -401,9 +406,9 @@ static struct Node* node_scalar(struct ProviderData* provider_data, const char* 
  * @param name_len      Length of `name` in bytes.
  * @return The resolved node, or `NULL` when the name is unmatched or its value is unset.
  */
-static struct Node* resolve_site_field(struct ProviderData* provider_data,
-                                       const char* name,
-                                       size_t name_len) __attribute__((nonnull(1, 2)));
+static struct Node* resolve_site(struct ProviderData* provider_data,
+                                 const char* name,
+                                 size_t name_len) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Resolves a bare field name against a content entry.
@@ -412,12 +417,13 @@ static struct Node* resolve_site_field(struct ProviderData* provider_data,
  * @param entry         Content entry to resolve against, or `NULL`.
  * @param name          Requested field name. Not `NUL`-terminated. Must not be `NULL`.
  * @param name_len      Length of `name` in bytes.
- * @return The resolved node, or `NULL` when unmatched or the entry is `NULL`.
+ * @return The resolved node, or `NULL` when the name is unmatched, the field is absent, or `entry`
+ *         is `NULL`.
  */
-static struct Node* resolve_entry_field(struct ProviderData* provider_data,
-                                        const struct ContentEntry* entry,
-                                        const char* name,
-                                        size_t name_len) __attribute__((nonnull(1, 3)));
+static struct Node* resolve_entry(struct ProviderData* provider_data,
+                                  const struct ContentEntry* entry,
+                                  const char* name,
+                                  size_t name_len) __attribute__((nonnull(1, 3)));
 
 /**
  * @brief Reports whether a length-delimited name equals a terminated literal.
@@ -653,18 +659,18 @@ static void* node_get_child_by_name(void* node_ptr,
         return node_alloc(provider_data, NODE_SITE);
       }
       if (is_name_equal(name, name_len, "content_entries")) {
-        return node_alloc(provider_data, NODE_LIST);
+        return node_alloc(provider_data, NODE_ENTRY_LIST);
       }
       if (is_name_equal(name, name_len, "generator")) {
         return node_scalar(provider_data, sosig_generator_string());
       }
-      return resolve_entry_field(provider_data, provider_data->context->content_entry_current, name,
-                                 name_len);
-    case NODE_ENTRY:
-      return resolve_entry_field(provider_data, node->entry, name, name_len);
+      return resolve_entry(provider_data, provider_data->context->content_entry_current, name,
+                           name_len);
     case NODE_SITE:
-      return resolve_site_field(provider_data, name, name_len);
-    case NODE_LIST:
+      return resolve_site(provider_data, name, name_len);
+    case NODE_ENTRY:
+      return resolve_entry(provider_data, node->entry, name, name_len);
+    case NODE_ENTRY_LIST:
     case NODE_TAG_LIST:
     case NODE_SCALAR:
       return NULL;
@@ -677,15 +683,15 @@ static void* node_get_child_by_name(void* node_ptr,
 static void* node_get_child_by_index(void* node_ptr, unsigned index, void* provider_data_ptr) {
   struct ProviderData* provider_data = provider_data_ptr;
   struct Node* node = node_ptr;
-  if (node->kind == NODE_LIST) {
-    if (index < provider_data->context->content_entry_count) {
-      struct Node* node_entry = node_alloc(provider_data, NODE_ENTRY);
-      if (node_entry != NULL) {
-        node_entry->entry = provider_data->context->content_entries[index];
-      }
-      return node_entry;
+  if (node->kind == NODE_ENTRY_LIST) {
+    if (index >= provider_data->context->content_entry_count) {
+      return NULL;
     }
-    return NULL;
+    struct Node* child = node_alloc(provider_data, NODE_ENTRY);
+    if (child != NULL) {
+      child->entry = provider_data->context->content_entries[index];
+    }
+    return child;
   }
   if (node->kind == NODE_TAG_LIST) {
     const struct ContentEntry* entry = node->entry;
@@ -696,11 +702,11 @@ static void* node_get_child_by_index(void* node_ptr, unsigned index, void* provi
     // is falsey as a section, but here `NULL` is how this callback says end of list, so an empty
     // tag would silently drop every tag after it. A tag list carries an explicit count, so every
     // index below it yields a node whatever the tag holds.
-    struct Node* tag_node = node_alloc(provider_data, NODE_SCALAR);
-    if (tag_node != NULL) {
-      tag_node->scalar = entry->tags[index];
+    struct Node* child = node_alloc(provider_data, NODE_SCALAR);
+    if (child != NULL) {
+      child->scalar = entry->tags[index];
     }
-    return tag_node;
+    return child;
   }
   // `vendor/mustache4c/mustache.h` requires this. Per the Mustache specification a single value is
   // iterable too, so this callback returns the node itself for index 0 and `NULL` for every other
@@ -857,8 +863,7 @@ static struct Node* node_scalar(struct ProviderData* provider_data, const char* 
   // fires. mustache4c decides a section's truthiness by asking for child 0. A non-list node answers
   // with itself, so returning a node here for `""` would make a section over an unset field always
   // render. Interpolation is unchanged. `{{field}}` writes zero bytes whether the node is absent or
-  // holds an empty string. `resolve_entry_field` already applies this same rule to an empty tag
-  // list.
+  // holds an empty string. `resolve_entry` already applies this same rule to an empty tag list.
   if (value == NULL || *value == '\0') {
     return NULL;
   }
@@ -869,18 +874,18 @@ static struct Node* node_scalar(struct ProviderData* provider_data, const char* 
   return node;
 }
 
-static struct Node* resolve_site_field(struct ProviderData* provider_data,
-                                       const char* name,
-                                       size_t name_len) {
+static struct Node* resolve_site(struct ProviderData* provider_data,
+                                 const char* name,
+                                 size_t name_len) {
   const struct SiteConfig* site_config = provider_data->context->site_config;
-  if (is_name_equal(name, name_len, "base_url")) {
-    return node_scalar(provider_data, site_config->base_url);
-  }
   if (is_name_equal(name, name_len, "title")) {
     return node_scalar(provider_data, site_config->title);
   }
   if (is_name_equal(name, name_len, "author")) {
     return node_scalar(provider_data, site_config->author);
+  }
+  if (is_name_equal(name, name_len, "base_url")) {
+    return node_scalar(provider_data, site_config->base_url);
   }
   if (is_name_equal(name, name_len, "updated")) {
     // This is derived from the whole entry set rather than read off the configuration.
@@ -889,10 +894,10 @@ static struct Node* resolve_site_field(struct ProviderData* provider_data,
   return NULL;
 }
 
-static struct Node* resolve_entry_field(struct ProviderData* provider_data,
-                                        const struct ContentEntry* entry,
-                                        const char* name,
-                                        size_t name_len) {
+static struct Node* resolve_entry(struct ProviderData* provider_data,
+                                  const struct ContentEntry* entry,
+                                  const char* name,
+                                  size_t name_len) {
   if (entry == NULL) {
     return NULL;
   }
@@ -918,11 +923,11 @@ static struct Node* resolve_entry_field(struct ProviderData* provider_data,
     if (entry->tag_count == 0) {
       return NULL;
     }
-    struct Node* node = node_alloc(provider_data, NODE_TAG_LIST);
-    if (node != NULL) {
-      node->entry = entry;
+    struct Node* tags = node_alloc(provider_data, NODE_TAG_LIST);
+    if (tags != NULL) {
+      tags->entry = entry;
     }
-    return node;
+    return tags;
   }
   return NULL;
 }
