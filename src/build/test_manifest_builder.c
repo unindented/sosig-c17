@@ -320,6 +320,19 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
+// A configured template's output path is its name joined below `output_dir`, nested directories
+// included. `site_writer` writes to this same path, so it is the one the manifest checked.
+static void test_derive_template_output_joins_output_dir(void) {
+  struct Arena arena;
+  arena_init(&arena);
+  const char* top = manifest_builder_derive_template_output("public", "index.html", &arena);
+  const char* nested = manifest_builder_derive_template_output("public", "feeds/atom.xml", &arena);
+  TEST_ASSERT(top != NULL && nested != NULL);
+  TEST_CHECK(strcmp(top, "public/index.html") == 0);
+  TEST_CHECK(strcmp(nested, "public/feeds/atom.xml") == 0);
+  arena_free(&arena);
+}
+
 // Two entries claiming the same output path are rejected with a diagnostic naming the path.
 static void test_rejects_duplicate(void) {
   char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
@@ -1217,19 +1230,6 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
-// A configured template's output path is its name joined below `output_dir`, nested directories
-// included. `site_writer` writes to this same path, so it is the one the manifest checked.
-static void test_derive_template_output_joins_output_dir(void) {
-  struct Arena arena;
-  arena_init(&arena);
-  const char* top = manifest_builder_derive_template_output("public", "index.html", &arena);
-  const char* nested = manifest_builder_derive_template_output("public", "feeds/atom.xml", &arena);
-  TEST_ASSERT(top != NULL && nested != NULL);
-  TEST_CHECK(strcmp(top, "public/index.html") == 0);
-  TEST_CHECK(strcmp(nested, "public/feeds/atom.xml") == 0);
-  arena_free(&arena);
-}
-
 // The writing this module guards lives in `site_writer` and is tested in
 // `src/build/test_site_writer.c`. Entry ordering and `site.updated` derivation live in
 // `content_entry` and are tested in `src/domain/test_content_entry.c`.
@@ -1240,6 +1240,7 @@ TEST_LIST = {
     {"accepts output beside input roots", test_accepts_output_beside_input_roots},
     {"check output dir accepts dir outside input roots",
      test_check_output_dir_accepts_dir_outside_input_roots},
+    {"derive template output joins output dir", test_derive_template_output_joins_output_dir},
     {"rejects duplicate", test_rejects_duplicate},
     {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
     {"rejects prefix collision", test_rejects_prefix_collision},
@@ -1255,6 +1256,5 @@ TEST_LIST = {
     {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},
     {"rejects oversize template path", test_rejects_oversize_template_path},
     {"rejects oversize template segment", test_rejects_oversize_template_segment},
-    {"derive template output joins output dir", test_derive_template_output_joins_output_dir},
     {NULL, NULL},
 };
