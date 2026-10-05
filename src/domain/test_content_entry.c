@@ -19,11 +19,11 @@ static void test_init_sets_defaults(void) {
   TEST_CHECK(entry.slug == NULL);
   TEST_CHECK(entry.tags == NULL);
   TEST_CHECK(entry.tag_count == 0);
-  TEST_CHECK(entry.is_draft == false);
   TEST_CHECK(entry.template == NULL);
   TEST_CHECK(entry.body_html == NULL);
   TEST_CHECK(entry.url_path == NULL);
   TEST_CHECK(entry.output_path == NULL);
+  TEST_CHECK(entry.is_draft == false);
 
   content_entry_free(&entry);
 }
