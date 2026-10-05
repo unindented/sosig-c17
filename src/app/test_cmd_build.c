@@ -1008,33 +1008,29 @@ static void test_rejects_colliding_source_names(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A content entry whose content template cannot be rendered surfaces a per-entry diagnostic through
-// the collected build error.
+// A content template that fails to parse fails the build at the page phase. The diagnostic carries
+// the parser's cause, its position and the template name, followed by the entry that was being
+// rendered, so a template error reads apart from a template that cannot be read.
 static void test_reports_bad_template(void) {
   char root_dir_template[] = "/tmp/sosig-build-bad-template.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
-  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"missing.html\"\n") == 0);
+  TEST_ASSERT(write_site_fixture(root_dir, "content_template = \"broken.html\"\n") == 0);
+  // The section never closes, so the template is read but fails to compile.
+  TEST_ASSERT(write_fixture_file(root_dir, "templates/broken.html", "{{#title}}{{title}}\n") == 0);
   TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
 
-  // No `templates/missing.html` exists, so the page render fails for the entry. The diagnostic
-  // names the failing entry and the specific file that could not be read, rather than a generic
-  // failure message that cannot be distinguished from an unrelated error.
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
   TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  char reason[FS_REASON_SIZE];
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected),
-               "failed to read template: %s ('templates/missing.html') (while rendering "
-               "'content/hello.md')",
-               error_system_message(reason, sizeof(reason), ENOENT));
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  // Exact: `expected` is the whole message.
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  // Exact, not by substring: the expected text is the whole message, so a substring check could not
+  // tell it from the same message with something appended.
+  TEST_CHECK(error_buffer.data != NULL &&
+             strcmp(error_buffer.data,
+                    "section-opening tag has no closer at line 1, column 1 (in 'broken.html') "
+                    "(while rendering 'content/hello.md')") == 0);
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
   string_buffer_free(&error_buffer);
 
