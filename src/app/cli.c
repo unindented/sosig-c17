@@ -17,10 +17,11 @@
  *
  * The flag needs a ceiling of its own, because `pool_run` clamps only from below (`0` becomes `1`)
  * and against the job count. The job count is the number of content files, which is unbounded.
- * Without a cap, `--workers` is bounded only by how much content a site has. One worker per source
- * is pure loss. On a 3,000-source build, `--workers 3000` cost nine times the system time of the
- * detected default and three times its peak resident memory, for no wall-clock gain. Each worker is
- * a thread with a stack. The work is I/O and parse bound.
+ * Without a cap, `--workers` is bounded only by how much content a site has. Each worker is a
+ * thread with a stack, and the work it drives is I/O and parse bound: reading, parsing, and
+ * rendering content in process. One worker per source is pure loss. On a 3,000-source build,
+ * `--workers 3000` cost nine times the system time of the detected default and three times its peak
+ * resident memory, for no wall-clock gain.
  *
  * 1024 is deliberately unreachable by legitimate use rather than tuned to an optimum. It sits well
  * above the thread count of the largest machine this tool will plausibly run on, so no real
