@@ -60,7 +60,7 @@ The build rejects an input file that is too large before it reads the file: a co
 
 Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.
 
-Before the tool renders page templates or writes files, it rejects an output plan with one of these conflicts:
+Before the tool renders page templates or writes output files, it rejects an output plan with one of these conflicts:
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
@@ -71,8 +71,8 @@ The build creates `output_dir` only after these checks pass, so a rejected build
 
 ```toml
 # Required absolute site URL for feed links. It must be an `http://` or `https://` URL with a host.
-# The tool accepts a port, subpath, and query string. The tool trims any trailing `/`. A template
-# can then join it with an entry's `url` and not produce `//`.
+# The tool accepts a port, subpath, and query string, and trims any trailing `/`. A template can
+# then join it with an entry's `url` and not produce `//`.
 base_url = "https://www.example.com"
 
 # Required site title.
@@ -174,7 +174,7 @@ The renderer permits raw HTML and does not sanitize it. Only use content files t
 
 Templates use [Mustache](https://mustache.github.io/) syntax and live in `templates_dir`. There are three kinds:
 
-- **Content templates** (`content_template`, or a per-entry `template` override): The tool renders one per content entry. You can access that entry's fields in the template.
+- **Content templates** (`content_template`, or a per-entry `template` override): The tool renders one for each content entry. You can access that entry's fields in the template.
 - **Aggregate templates** (`aggregate_templates`): The tool renders each template once. It writes the result to the same relative path below `output_dir`. Entry fields are not available at the top level.
 - **Feed templates** (`feed_templates`): These work like aggregate templates. They can access only the newest `feed_count` entries.
 
@@ -199,6 +199,8 @@ A partial reference loads `templates_dir/partials/<name>.html`. The name can con
 {{> footer}}
 ```
 
+The repository and release archives do not include starter templates. A site project must provide its own.
+
 ## Contributing
 
 ### Prerequisites
@@ -222,7 +224,7 @@ Presets keep every build out of the source tree. The commands below use eight pa
 
 #### Debug build
 
-The debug build enables `AddressSanitizer` and `UndefinedBehaviorSanitizer`. It also runs `clang-tidy` and `cppcheck` during compilation when they are available.
+The debug build enables AddressSanitizer and UndefinedBehaviorSanitizer. It also runs `clang-tidy` and `cppcheck` during compilation when they are available.
 
 ```sh
 cmake --preset debug
@@ -239,7 +241,7 @@ cmake --build --preset lint
 
 #### TSan build
 
-The TSan build uses the `Debug` configuration, and instruments the build for data races using `ThreadSanitizer`.
+The TSan build uses the `Debug` configuration and instruments the build for data races using ThreadSanitizer.
 
 ```sh
 cmake --preset tsan
@@ -320,7 +322,7 @@ The `multi-relwithdebinfo` test preset exercises the same CMake configuration us
 Workflow presets run the complete configure, build, and test sequences used by CI:
 
 - `cmake --workflow --preset ci-debug`: `Debug` build, linting, and all ASan/UBSan tests.
-- `cmake --workflow --preset ci-tsan`: TSan build, and all tests.
+- `cmake --workflow --preset ci-tsan`: TSan build and all TSan tests.
 - `cmake --workflow --preset ci-release`: `RelWithDebInfo` build.
 - `cmake --workflow --preset ci-multi`: `Debug` and `RelWithDebInfo` builds and tests under the `Ninja Multi-Config` generator.
 
