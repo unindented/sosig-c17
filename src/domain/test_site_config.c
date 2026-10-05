@@ -402,9 +402,9 @@ static void test_load_rejects_oversize_file(void) {
   remove_fixture_tree(temp_config.root_dir);
 }
 
-// `site_config_load` reports a syntactically malformed config as a parse failure naming the
-// config path, rather than reaching the field pass with an empty table and reporting a false
-// missing-key error.
+// `site_config_load` reports a syntactically malformed config as a parse failure naming the config
+// path, rather than reaching the field pass with an empty table and reporting a false missing-key
+// error.
 static void test_load_rejects_malformed_toml(void) {
   const char toml[] = "base_url = \n";
   struct TempConfig temp_config;
@@ -930,8 +930,8 @@ static void test_load_prefers_distinctness_over_length(void) {
     patterns[i][0] = '/';
     patterns[i][pattern_sizes[i] - 1] = '\0';
 
-    // The trailing pattern outgrows the buffer, so the expected text goes through `error_report`
-    // to get the same truncation marker.
+    // The trailing pattern outgrows the buffer, so the expected text goes through `error_report` to
+    // get the same truncation marker.
     char expected[ERROR_MESSAGE_SIZE];
     (void)error_report(expected, sizeof(expected),
                        "config key 'permalink' must expand to a distinct path per content entry; "
@@ -941,9 +941,9 @@ static void test_load_prefers_distinctness_over_length(void) {
   }
 }
 
-// A permalink that is unsafe only with an empty `{section}` reports the unsafe expansion ahead of
-// a length limit or a slug collision that the populated section already shows. The populated
-// section is judged first, so a check that ran per expansion reported the later verdict.
+// A permalink that is unsafe only with an empty `{section}` reports the unsafe expansion ahead of a
+// length limit or a slug collision that the populated section already shows. The populated section
+// is judged first, so a check that ran per expansion reported the later verdict.
 static void test_load_prefers_safety_over_length_and_distinctness(void) {
   // With an empty section, `{section}.` expands to a `.` segment, which is unsafe. With the
   // populated sample it expands to `section.`, which is safe.

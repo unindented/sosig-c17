@@ -26,8 +26,8 @@ struct StringBuffer;
  * Call this only after `manifest_builder_populate` accepts every output path. Jobs write
  * concurrently, and the manifest is what guarantees that no two of them target the same file.
  *
- * @param render_jobs         Result set filled by `entry_renderer_render_entries`. A failing
- *                            slot receives its diagnostic. Must not be `NULL`.
+ * @param render_jobs         Result set filled by `entry_renderer_render_entries`. A failing slot
+ *                            receives its diagnostic. Must not be `NULL`.
  * @param site_config         Site configuration supplying `templates_dir` and the default content
  *                            template. Must not be `NULL`.
  * @param content_entries     Non-draft entries, sorted newest-first, visible to every page. May be

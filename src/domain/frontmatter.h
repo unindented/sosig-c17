@@ -52,7 +52,7 @@ int frontmatter_split(const char* markdown,
  *
  * @param entry           Initialized entry that receives the parsed metadata. On failure the parse
  *                        may leave it partially populated, and the caller still owns it. Must not
- * be `NULL`.
+ *                        be `NULL`.
  * @param frontmatter     Frontmatter TOML bytes. Must hold at least `frontmatter_len` bytes. Must
  *                        not be `NULL`.
  * @param frontmatter_len Number of frontmatter bytes.

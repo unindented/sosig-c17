@@ -83,10 +83,10 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * @param content_entry_count Number of entries in `content_entries`.
  * @param err                 Destination buffer for a failure diagnostic.
  * @param err_len             Size of `err` in bytes.
- * @return `0` when every output path is unique, stays out of both input trees, overwrites no
- *         input, and nests under no other, or `-1` on an output inside an input tree, a duplicate,
- *         a prefix collision, an input overwrite, an oversize template path, a failed template
- *         walk, or an allocation failure.
+ * @return `0` when every output path is unique, stays out of both input trees, overwrites no input,
+ *         and nests under no other, or `-1` on an output inside an input tree, a duplicate, a
+ *         prefix collision, an input overwrite, an oversize template path, a failed template walk,
+ *         or an allocation failure.
  */
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,

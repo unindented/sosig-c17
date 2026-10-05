@@ -67,8 +67,7 @@ static bool is_frontmatter_fence_line(const char* line, size_t line_len)
  * @param source_path     Source file path, recorded as tomlc17's document source name. The parser's
  *                        error text carries only a line number, so the path is not in `err`. That
  *                        number counts from the start of the file, not from the start of the
- *                        frontmatter, so a caller may present it to the user alongside
- * the path.
+ *                        frontmatter, so a caller may present it to the user alongside the path.
  * @param parsed_out      Receives the parsed TOML result on success. Must not be `NULL`.
  * @param err             Buffer for a diagnostic message on failure.
  * @param err_len         Size of `err` in bytes.

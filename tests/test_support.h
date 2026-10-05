@@ -6,8 +6,8 @@
 
 /**
  * Result a test wrapper returns when its own setup or teardown fails rather than the call it wraps.
- * It is none of the `0`, `1` and `2` exit codes and neither the `0` nor the `-1` an action
- * returns, so a plumbing failure cannot pass for a result of the call under test.
+ * It is none of the `0`, `1` and `2` exit codes and neither the `0` nor the `-1` an action returns,
+ * so a plumbing failure cannot pass for a result of the call under test.
  */
 enum { TEST_PLUMBING_FAILED = 255 };
 

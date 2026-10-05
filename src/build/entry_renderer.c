@@ -124,7 +124,7 @@ static int render_content_entry_body(struct ContentEntry* entry,
  *                    be `NULL`.
  * @param source_path Source path used to derive the section and for failure diagnostics. Must be
  *                    spelled with `site_config->content_dir` as its literal prefix. Must not be
- * `NULL`.
+ *                    `NULL`.
  * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
  * @return `0` on success, or `-1` when the source is not under `content_dir`, on an unsafe or
  *         oversize path, or on allocation failure.
@@ -180,7 +180,7 @@ static char* render_content_entry_finalize_paths_section(const char* source_rela
  *                    not be `NULL`.
  * @param url_path    Expanded permalink URL with a leading `/`, allocated in `entry->arena`. The
  *                    entry stores it without copying, so it must outlive the entry. Must not be
- * `NULL`.
+ *                    `NULL`.
  * @param source_path Source path used in failure diagnostics. Must not be `NULL`.
  * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
  * @return `0` on success, or `-1` on an unsafe/oversize path or allocation failure.

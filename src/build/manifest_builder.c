@@ -46,16 +46,16 @@ _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
  * what still protects an input outside both trees: the configuration file, and the target of a
  * source or template that is a symlink or hard link to a file elsewhere.
  *
- * The identities are sorted once after they are all claimed, and each lookup is a binary search.
- * A rebuild looks up every output that already exists, which is every output of a site built
- * before. At the 10,000 sources sosig targets, a linear scan over the inputs would make that about
- * 100 million comparisons.
+ * The identities are sorted once after they are all claimed, and each lookup is a binary search. A
+ * rebuild looks up every output that already exists, which is every output of a site built before.
+ * At the 10,000 sources sosig targets, a linear scan over the inputs would make that about 100
+ * million comparisons.
  */
 struct InputIdentities {
   /**
    * Identities owned by this set, allocated once with a slot for every candidate input. In claim
-   * order until `claim_build_inputs` sorts them by device and then inode for
-   * `has_input_identity`'s binary search.
+   * order until `claim_build_inputs` sorts them by device and then inode for `has_input_identity`'s
+   * binary search.
    */
   struct FsIdentity* items;
 
@@ -131,8 +131,8 @@ struct InputRoots {
  *
  * The template tree is listed first, so the set is allocated once with a slot for every candidate.
  *
- * @param inputs       Empty identity set that receives one entry per readable input file. Must
- *                     not be `NULL`.
+ * @param inputs       Empty identity set that receives one entry per readable input file. Must not
+ *                     be `NULL`.
  * @param site_config  Configuration supplying `templates_dir`. Must not be `NULL`.
  * @param config_path  Path the configuration was loaded from. Must not be `NULL`.
  * @param source_paths Every discovered content source path, drafts included. Must not be `NULL`.
@@ -154,8 +154,8 @@ static int claim_build_inputs(struct InputIdentities* inputs,
  * @param template_paths Initialized, empty path list that receives the files. Must not be `NULL`.
  * @param templates_dir  Template directory root to walk. A path with no identity lists nothing.
  *                       Must not be `NULL`.
- * @param output_dir     Output directory the walk leaves out, so a generated file reached through
- *                       a symlink is not claimed as a template. Must not be `NULL`.
+ * @param output_dir     Output directory the walk leaves out, so a generated file reached through a
+ *                       symlink is not claimed as a template. Must not be `NULL`.
  * @param err            Destination buffer for a failure diagnostic.
  * @param err_len        Size of `err` in bytes.
  * @return `0` when every file in the tree was listed or `templates_dir` has no identity, or `-1`
@@ -290,8 +290,8 @@ static int register_template_output(struct Manifest* manifest,
  * @brief Adds one output path to the manifest, reporting a duplicate, an output inside an input
  *        root, an input overwrite, or an allocation failure.
  *
- * This is the one function every intended output path passes through, so the input checks live
- * here rather than in each producer.
+ * This is the one function every intended output path passes through, so the input checks live here
+ * rather than in each producer.
  *
  * @param manifest     Manifest to append to. Must not be `NULL`.
  * @param output_path  Filesystem output path to record, joined onto `roots->output_dir`. Must not
@@ -382,8 +382,8 @@ int manifest_builder_populate(struct Manifest* manifest,
   struct InputIdentities inputs = {0};
   struct InputRoots roots;
 
-  // The build already ran this check before walking any input tree. Running it again here keeps
-  // the protection from depending on the caller, and costs a few `fs_identify` calls.
+  // The build already ran this check before walking any input tree. Running it again here keeps the
+  // protection from depending on the caller, and costs a few `fs_identify` calls.
   int rc = manifest_builder_check_output_dir(site_config, err, err_len);
   claim_input_roots(&roots, site_config);
   if (rc == 0) {

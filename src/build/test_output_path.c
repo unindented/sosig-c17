@@ -13,8 +13,8 @@ static void test_check_limits_accepts_bounded_path(void) {
   TEST_CHECK(err[0] == '\0');
 }
 
-// A path over the whole-path limit names the limit, the measured length, and the producer ahead
-// of the path, so the numbers survive the path being cut off.
+// A path over the whole-path limit names the limit, the measured length, and the producer ahead of
+// the path, so the numbers survive the path being cut off.
 static void test_check_limits_rejects_overlong_path(void) {
   enum { SEGMENT_LEN = 200, SEGMENT_COUNT = 6 };
   char path[SEGMENT_COUNT * (SEGMENT_LEN + 1)];

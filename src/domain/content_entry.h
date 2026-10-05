@@ -24,9 +24,9 @@ enum { SLUG_LEN_MAX = FILENAME_LEN_MAX - (sizeof(".html") - 1) };
 /**
  * Content entry metadata and generated paths for one Markdown source file.
  *
- * Every pointer field except `body_html` is either arena-owned or a string literal, and
- * `body_html` is heap-owned by the entry, so an entry stays valid until `content_entry_free`.
- * Nothing borrows from the source buffer, which the parse job frees before it returns.
+ * Every pointer field except `body_html` is either arena-owned or a string literal, and `body_html`
+ * is heap-owned by the entry, so an entry stays valid until `content_entry_free`. Nothing borrows
+ * from the source buffer, which the parse job frees before it returns.
  *
  * The parse pass fills every field. The page, aggregate and feed passes only read. That is a
  * thread-safety invariant. During the page pass every worker holds pointers to every entry, so a

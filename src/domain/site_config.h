@@ -121,7 +121,7 @@ int site_config_load(struct SiteConfig* site_config,
  * @param stream      Destination stream. Must not be `NULL`.
  * @param site_config Config to serialize. Must be fully populated (as after a successful
  *                    `site_config_load`), with `base_url`, `title`, and `author` non-`NULL`. Must
- * not be `NULL`.
+ *                    not be `NULL`.
  * @return `0` on success, or `-1` if writing to `stream` failed, with `errno` set by the failing
  *         write, or to `EIO` when the stream had latched an error earlier and the original `errno`
  *         is no longer available, so the caller always has a reason to report.

@@ -109,8 +109,7 @@ static int manifest_reserve_buckets(struct Manifest* manifest) __attribute__((no
  *
  * @param buckets     Bucket table to insert into. Must not be `NULL`.
  * @param bucket_mask Power-of-two table length minus one, used to wrap the linear probe.
- * @param output_path Output path whose folded hash selects the starting bucket. Must not be
- *                    `NULL`.
+ * @param output_path Output path whose folded hash selects the starting bucket. Must not be `NULL`.
  * @param index       Zero-based entry index. Stored as `index + 1` so zero stays the empty marker.
  */
 static void manifest_bucket_place(size_t* buckets,

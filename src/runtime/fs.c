@@ -95,12 +95,12 @@ static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
 /**
  * @brief Records one directory identity as visited, reporting whether it was already recorded.
  *
- * @param walk        Walk state whose visited set is searched and extended. Must not be `NULL`.
- * @param identity    Identity of the directory about to be walked or excluded. Must not be `NULL`.
- * @param is_new_out  Receives `true` when `identity` had not been visited and is now recorded, or
- *                    `false` when it had. Written only on success. Must not be `NULL`.
- * @param reason      Receives the failure reason. May be `NULL` only when `reason_len` is 0.
- * @param reason_len  Size of `reason` in bytes.
+ * @param walk       Walk state whose visited set is searched and extended. Must not be `NULL`.
+ * @param identity   Identity of the directory about to be walked or excluded. Must not be `NULL`.
+ * @param is_new_out Receives `true` when `identity` had not been visited and is now recorded, or
+ *                   `false` when it had. Written only on success. Must not be `NULL`.
+ * @param reason     Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ * @param reason_len Size of `reason` in bytes.
  * @return `0` on success, or `-1` on allocation failure.
  */
 static int fs_list_files_with_suffix_record(struct FsWalk* walk,
@@ -454,8 +454,8 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
     return -1;
   }
   if (!is_new) {
-    // This silently skips a directory the walk already reached by another path: a symlink back
-    // into its own ancestry, or a second alias of one directory. Every file below it is already in
+    // This silently skips a directory the walk already reached by another path: a symlink back into
+    // its own ancestry, or a second alias of one directory. Every file below it is already in
     // `paths` under the first path, so nothing is missing. Walking it again would list each file
     // once per path, and a chain of aliased directories multiplies that at every level. The
     // excluded directory is recorded before the walk starts, so it takes this skip on every path.
@@ -549,8 +549,7 @@ static int read_dir_names(struct PathList* names,
   int rc = 0;
   while (rc == 0) {
     // `readdir` returns `NULL` both at end-of-directory and on error, so reset `errno` first to
-    // tell them apart. A `NULL` entry with `errno` unchanged is the end. Otherwise the walk
-    // failed.
+    // tell them apart. A `NULL` entry with `errno` unchanged is the end. Otherwise the walk failed.
     errno = 0;
     const struct dirent* entry = readdir(dp);
     if (entry == NULL) {
@@ -612,8 +611,8 @@ static int visit_matching_entry(struct FsWalk* walk,
   }
   if (S_ISDIR(st.st_mode)) {
     if (is_link) {
-      // A symlinked directory waits until every directory reachable without a symlink is walked,
-      // so the target's own path, when it has one in the tree, is the one that lists its files.
+      // A symlinked directory waits until every directory reachable without a symlink is walked, so
+      // the target's own path, when it has one in the tree, is the one that lists its files.
       return path_list_push(&walk->links, file_path) == 0
                  ? 0
                  : error_report(reason, reason_len, "out of memory");

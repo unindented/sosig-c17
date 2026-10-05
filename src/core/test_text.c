@@ -49,9 +49,9 @@ static void test_nul_free_checks_bounded_bytes(void) {
 
 // `text_is_safe_identifier` accepts only the narrow alphabet used for template partial names, its
 // one caller. Each disallowed class gets its own assertion rather than one input carrying several.
-// A single `"../partial"` passes as long as *either* `.` or `/` is rejected, so it cannot say
-// which rule fired. A regression admitting just one of them would keep it green. This predicate is
-// the only guard on a partial name before the template engine composes it into
+// A single `"../partial"` passes as long as *either* `.` or `/` is rejected, so it cannot say which
+// rule fired. A regression admitting just one of them would keep it green. This predicate is the
+// only guard on a partial name before the template engine composes it into
 // `<templates_dir>/partials/<name>.html`, and mustache4c's own tag validation rejects whitespace
 // and `..` but not `/`. The high byte pins the locale-independence guarantee `core/ascii.h` exists
 // for.
@@ -96,8 +96,7 @@ static void test_slugify_folds_non_ascii_distinctly(void) {
   TEST_CHECK(strcmp(slugify("Plain Title", &arena), "plain-title") == 0);
   TEST_CHECK(strcmp(slugify("Café", &arena), "cafc3a9") == 0);
 
-  // A run of separators still collapses to one dash around a folded byte. The em dash is
-  // E2 80 94.
+  // A run of separators still collapses to one dash around a folded byte. The em dash is E2 80 94.
   TEST_CHECK(strcmp(slugify("a — b", &arena), "a-e28094-b") == 0);
 
   arena_free(&arena);

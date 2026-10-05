@@ -26,8 +26,8 @@
  *
  * @param capacity           Current capacity in slots.
  * @param capacity_min       Capacity to jump to from zero. `0` is rejected.
- * @param elem_size          Size of one slot in bytes. `0` is rejected. The returned capacity
- *                           times this cannot overflow.
+ * @param elem_size          Size of one slot in bytes. `0` is rejected. The returned capacity times
+ *                           this cannot overflow.
  * @param capacity_out       Receives the next capacity on success. Must not be `NULL`.
  * @param capacity_bytes_out Receives that capacity in bytes on success, as
  *                           `*capacity_out * elem_size`. Must not be `NULL`.

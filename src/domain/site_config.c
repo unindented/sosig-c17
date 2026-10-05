@@ -259,7 +259,7 @@ static int normalize_dirs(struct SiteConfig* site_config, char* err, size_t err_
  *
  * @param value   Address of the config field holding the directory. Rewritten only when a trailing
  *                `/` was trimmed, so an already-normalized value costs no allocation. Must not be
- * `NULL`.
+ *                `NULL`.
  * @param key     Config key name used in diagnostics. Must not be `NULL`.
  * @param arena   Arena that owns the trimmed copy. Must not be `NULL`.
  * @param err     Buffer for a diagnostic message on failure.
@@ -335,8 +335,8 @@ static enum PermalinkVerdict check_permalink(const char* pattern,
  *                         `PERMALINK_TOO_LONG`. Untouched on every other path. Must not be `NULL`.
  * @param segment_len_out  Receives the offending segment's length on `PERMALINK_SEGMENT_TOO_LONG`.
  *                         Untouched on every other path. Must not be `NULL`.
- * @return The first verdict that failed in `enum PermalinkVerdict` precedence, or
- *         `PERMALINK_VALID` when every check passed.
+ * @return The first verdict that failed in `enum PermalinkVerdict` precedence, or `PERMALINK_VALID`
+ *         when every check passed.
  */
 static enum PermalinkVerdict check_permalink_expansions(
     const char* urls[SECTION_SAMPLE_COUNT][SLUG_SAMPLE_COUNT],

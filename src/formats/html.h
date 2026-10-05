@@ -29,8 +29,8 @@ struct StringBuffer;
  * @param buffer   Destination buffer to append to. Must not be `NULL`.
  * @param text     Source bytes. Must hold at least `text_len` bytes. May be `NULL` only when
  *                 `text_len` is 0, and must not point into `buffer->data`. It forwards the bytes to
- *                 `string_buffer_append_len`. A growth frees the region `text` points at before
- *                 the copy runs.
+ *                 `string_buffer_append_len`. A growth frees the region `text` points at before the
+ *                 copy runs.
  * @param text_len Number of bytes to escape and append.
  * @return `0` on success, or `-1` on allocation failure. After failure, `buffer` contains only the
  *         text appended before the failed call. Do not reuse it for output. In contrast,

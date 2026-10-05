@@ -43,8 +43,8 @@ struct TemplateContext {
  * @param template_name Safe relative template name within `templates_dir`. Must not be `NULL`.
  * @param context       Borrowed data visible to the template during this render. Must not be
  *                      `NULL`.
- * @param html_len_out  Receives the length of the returned HTML in bytes, excluding its
- *                      terminator, on success. May be `NULL` when the caller does not need it.
+ * @param html_len_out  Receives the length of the returned HTML in bytes, excluding its terminator,
+ *                      on success. May be `NULL` when the caller does not need it.
  * @param err           Buffer receiving a diagnostic that names the specific failure: an unsafe
  *                      name, an unreadable template or partial, or an exceeded limit. May be `NULL`
  *                      only when `err_len` is 0.

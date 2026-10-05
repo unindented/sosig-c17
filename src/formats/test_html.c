@@ -88,8 +88,7 @@ static void test_html_escape_empty_input(void) {
   TEST_CHECK(buf.len == 0);
   TEST_CHECK(buf.data == NULL);
   // The documented `NULL`-with-zero-length form, so `nonnull` covers `buffer` only. This is a
-  // different pointer shape from the empty literal above, and it is the form a caller may rely
-  // on.
+  // different pointer shape from the empty literal above, and it is the form a caller may rely on.
   TEST_CHECK(html_escape_append_len(&buf, NULL, 0) == 0);
   TEST_CHECK(buf.len == 0);
   TEST_CHECK(buf.data == NULL);

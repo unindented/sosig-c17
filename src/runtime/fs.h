@@ -48,9 +48,9 @@ enum { FS_REASON_SIZE = 256 };
  * so a file below a directory reachable by several paths is listed once, not once per path. A
  * symlink back into its own ancestry and a second alias of a directory are both skipped silently,
  * because every file below them is already listed. The listed path is the one reached without
- * following a symlink when the tree has one. Otherwise it is the first path through a symlink, in
- * a walk that visits entries in byte order and each symlinked directory only after every real one.
- * It likewise skips an entry that resolves to nothing: a dangling symlink, one removed since it was
+ * following a symlink when the tree has one. Otherwise it is the first path through a symlink, in a
+ * walk that visits entries in byte order and each symlinked directory only after every real one. It
+ * likewise skips an entry that resolves to nothing: a dangling symlink, one removed since it was
  * read, or a symlink that resolves in a cycle. An entry that exists but cannot be inspected fails
  * the walk instead, so a file this function could not look at is never silently missing from
  * `paths`.
@@ -72,8 +72,8 @@ enum { FS_REASON_SIZE = 256 };
  * @param reason       Receives the failure reason, always naming the exact path the failure
  *                     happened on: the directory that could not be inspected, opened, read or
  *                     closed, or the entry that could not be inspected. A caller must not append
- *                     the root it passed, because the reason is already more precise than that.
- *                     May be `NULL` only when `reason_len` is 0. Untouched on success.
+ *                     the root it passed, because the reason is already more precise than that. May
+ *                     be `NULL` only when `reason_len` is 0. Untouched on success.
  * @param reason_len   Size of `reason` in bytes.
  * @return `0` on success, or `-1` on a directory, entry, or allocation failure.
  */
