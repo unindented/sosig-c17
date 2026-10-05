@@ -248,11 +248,13 @@ static void test_writes_exactly_manifest_outputs(void) {
 
   struct Arena arena;
   arena_init(&arena);
-  char* public_dir = path_join(root_dir, "public", &arena);
+  char* output_dir = path_join(root_dir, "public", &arena);
+  TEST_ASSERT(output_dir != NULL);
   struct PathList outputs;
   path_list_init(&outputs);
-  TEST_CHECK(public_dir != NULL &&
-             fs_list_files_with_suffix(&outputs, public_dir, NULL, "", NULL, 0) == 0);
+  static const char* const all_suffixes[] = {""};
+  TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
+                                         0) == 0);
 
   // Exactly the expected set: matching count plus membership rules out extras and the draft.
   TEST_CHECK(outputs.count == expected_count);
@@ -437,11 +439,13 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
   TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
   string_buffer_free(&error_buffer);
 
-  char* public_dir = path_join(root_dir, "public", &arena);
+  char* output_dir = path_join(root_dir, "public", &arena);
+  TEST_ASSERT(output_dir != NULL);
   struct PathList outputs;
   path_list_init(&outputs);
-  TEST_CHECK(public_dir != NULL &&
-             fs_list_files_with_suffix(&outputs, public_dir, NULL, "", NULL, 0) == 0);
+  static const char* const all_suffixes[] = {""};
+  TEST_CHECK(fs_list_files_with_suffixes(&outputs, output_dir, NULL, all_suffixes, 1, false, NULL,
+                                         0) == 0);
   // The page and the aggregate, and no page rendered from the aggregate's own output.
   TEST_CHECK(outputs.count == 2);
   TEST_CHECK(has_output_path(&outputs, root_dir, "public/hello.html"));

@@ -361,7 +361,7 @@ static const char* render_content_entry_finalize_paths_relative(const char* sour
                                                                 const char* content_dir,
                                                                 struct RenderJob* result) {
   // The `<content_dir>/` prefix is a precondition this pass checks rather than assumes. Every
-  // production caller satisfies it, because `fs_list_files_with_suffix` roots its walk at
+  // production caller satisfies it, because `fs_list_files_with_suffixes` roots its walk at
   // `content_dir` and builds each path down from there, and `site_config_load` has already trimmed
   // any trailing `/`. The function refuses a source from outside that root. Otherwise, the whole
   // path would become the section, so the content directory's own name would land in the entry's

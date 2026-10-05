@@ -479,9 +479,10 @@ static int claim_build_inputs_list_templates(struct PathList* template_paths,
     return 0;
   }
   // An empty suffix matches every filename, so the walk lists the whole tree.
+  static const char* const all_suffixes[] = {""};
   char reason[FS_REASON_SIZE];
-  if (fs_list_files_with_suffix(template_paths, templates_dir, output_dir, "", reason,
-                                sizeof(reason)) != 0) {
+  if (fs_list_files_with_suffixes(template_paths, templates_dir, output_dir, all_suffixes, 1, false,
+                                  reason, sizeof(reason)) != 0) {
     // The reason names the directory or entry that failed, which is more precise than the
     // configured root, so the root is not repeated here.
     return error_report(err, err_len, "failed to list template files: %s", reason);

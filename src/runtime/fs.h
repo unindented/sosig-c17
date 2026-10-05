@@ -1,6 +1,7 @@
 #ifndef SOSIG_FS_H
 #define SOSIG_FS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,10 +40,12 @@ struct FsIdentity {
 enum { FS_REASON_SIZE = 256 };
 
 /**
- * @brief Recursively lists regular files under `root_dir` whose name ends with `suffix`.
+ * @brief Recursively lists regular files under `root_dir` whose name ends with any of `suffixes`.
  *
  * Appends each matching file's path to `paths` and sorts the whole list so builds are reproducible.
- * An empty suffix matches every regular file.
+ * A match may fold ASCII case, which lets `.MD` match `.md` without making behavior
+ * locale-dependent. An empty suffix matches every regular file, and a zero suffix count matches
+ * none.
  *
  * It follows symlinked directories but walks each directory once, identified by device and inode,
  * so a file below a directory reachable by several paths is listed once, not once per path. A
@@ -68,7 +71,10 @@ enum { FS_REASON_SIZE = 256 };
  * @param root_dir     Directory tree to walk. Must not be `NULL`.
  * @param excluded_dir Directory left out of the walk, or `NULL` to walk the whole tree. A path with
  *                     no identity excludes nothing.
- * @param suffix       Literal filename suffix to match, such as `.md`. Must not be `NULL`.
+ * @param suffixes     Array of `suffix_count` terminated suffixes, such as `.md`. Must not be
+ *                     `NULL`.
+ * @param suffix_count Number of suffixes. Zero matches no files.
+ * @param is_fold_case Whether ASCII case differences are ignored when matching a suffix.
  * @param reason       Receives the failure reason, always naming the exact path the failure
  *                     happened on: the directory that could not be inspected, opened, read or
  *                     closed, or the entry that could not be inspected. A caller must not append
@@ -77,12 +83,14 @@ enum { FS_REASON_SIZE = 256 };
  * @param reason_len   Size of `reason` in bytes.
  * @return `0` on success, or `-1` on a directory, entry, or allocation failure.
  */
-int fs_list_files_with_suffix(struct PathList* paths,
-                              const char* root_dir,
-                              const char* excluded_dir,
-                              const char* suffix,
-                              char* reason,
-                              size_t reason_len) __attribute__((nonnull(1, 2, 4)));
+int fs_list_files_with_suffixes(struct PathList* paths,
+                                const char* root_dir,
+                                const char* excluded_dir,
+                                const char* const* suffixes,
+                                size_t suffix_count,
+                                bool is_fold_case,
+                                char* reason,
+                                size_t reason_len) __attribute__((nonnull(1, 2, 4)));
 
 /**
  * @brief Reads a regular file into a freshly allocated, `NUL`-terminated buffer.

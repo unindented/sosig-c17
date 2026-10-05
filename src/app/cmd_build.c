@@ -307,10 +307,12 @@ static int load_build_inputs(struct BuildState* state, char* err, size_t err_len
     return -1;
   }
   build_verbose(state, "discovering content");
+  static const char* const content_suffixes[] = {".md"};
   char reason[FS_REASON_SIZE];
-  if (fs_list_files_with_suffix(&state->source_paths, state->site_config.content_dir,
-                                state->site_config.output_dir, ".md", reason,
-                                sizeof(reason)) != 0) {
+  if (fs_list_files_with_suffixes(&state->source_paths, state->site_config.content_dir,
+                                  state->site_config.output_dir, content_suffixes,
+                                  sizeof(content_suffixes) / sizeof(content_suffixes[0]), false,
+                                  reason, sizeof(reason)) != 0) {
     // The reason names the directory or entry that failed, which is more precise than the
     // configured root, so the root is not repeated here.
     return error_report(err, err_len, "failed to list Markdown files: %s", reason);

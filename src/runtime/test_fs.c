@@ -39,6 +39,27 @@ static const char* expected_errno_reason(char buf[static FS_REASON_SIZE], int er
   return buf;
 }
 
+/**
+ * @brief Lists files under `root_dir` matching one case-sensitive suffix.
+ *
+ * Adapts `fs_list_files_with_suffixes` to the single-suffix shape most tests here need.
+ *
+ * @param paths      Initialized path list that receives the matching paths. Must not be `NULL`.
+ * @param root_dir   Directory tree to walk. Must not be `NULL`.
+ * @param suffix     Literal filename suffix to match, such as `.md`. Must not be `NULL`.
+ * @param reason     Receives the failure reason. May be `NULL` only when `reason_len` is 0.
+ * @param reason_len Size of `reason` in bytes.
+ * @return `0` on success, or `-1` on a directory, entry, or allocation failure.
+ */
+static int list_files(struct PathList* paths,
+                      const char* root_dir,
+                      const char* suffix,
+                      char* reason,
+                      size_t reason_len) {
+  const char* suffixes[] = {suffix};
+  return fs_list_files_with_suffixes(paths, root_dir, NULL, suffixes, 1, false, reason, reason_len);
+}
+
 /** Signals `count_interrupt` has handled since a test last reset it. */
 static volatile sig_atomic_t interrupt_count = 0;
 
@@ -121,7 +142,7 @@ static void test_list_files_matches_suffix(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "untouched";
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason)) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", reason, sizeof(reason)) == 0);
   TEST_CHECK(paths.count == 2);
   TEST_CHECK(strcmp(paths.items[0], root_md) == 0);
   TEST_CHECK(strcmp(paths.items[1], nested_md) == 0);
@@ -149,8 +170,47 @@ static void test_list_files_empty_suffix_matches_all(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, "", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, "", NULL, 0) == 0);
   TEST_CHECK(paths.count == 2);
+  path_list_free(&paths);
+
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
+// A suffix-list walk accepts several extensions, optionally folds ASCII case, and treats an empty
+// list as matching nothing.
+static void test_list_files_matches_suffix_list_and_case(void) {
+  char root_dir_template[] = "/tmp/sosig-fs-suffixes.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+
+  struct Arena arena;
+  arena_init(&arena);
+  char* md = path_join(root_dir, "a.md", &arena);
+  char* markdown = path_join(root_dir, "b.MarkDown", &arena);
+  char* html = path_join(root_dir, "c.HTML", &arena);
+  char* txt = path_join(root_dir, "d.txt", &arena);
+  TEST_CHECK(fs_write_file(md, "a", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(markdown, "b", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(html, "c", 1, NULL, 0) == 0);
+  TEST_CHECK(fs_write_file(txt, "d", 1, NULL, 0) == 0);
+
+  static const char* suffixes[] = {".md", ".markdown", ".html"};
+  struct PathList paths;
+  path_list_init(&paths);
+  TEST_CHECK(fs_list_files_with_suffixes(&paths, root_dir, NULL, suffixes, 3, true, NULL, 0) == 0);
+  TEST_CHECK(paths.count == 3);
+  TEST_CHECK(strcmp(paths.items[0], md) == 0);
+  TEST_CHECK(strcmp(paths.items[1], markdown) == 0);
+  TEST_CHECK(strcmp(paths.items[2], html) == 0);
+  path_list_free(&paths);
+
+  path_list_init(&paths);
+  TEST_CHECK(fs_list_files_with_suffixes(&paths, root_dir, NULL, suffixes, 0, true, NULL, 0) == 0);
+  TEST_CHECK(paths.count == 0);
   path_list_free(&paths);
 
   arena_free(&arena);
@@ -167,7 +227,7 @@ static void test_list_files_accepts_empty_dir(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 0);
   path_list_free(&paths);
 
@@ -193,7 +253,7 @@ static void test_list_files_skips_symlink_cycle(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -222,7 +282,7 @@ static void test_list_files_skips_symlink_cycle_to_ancestor(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -251,7 +311,7 @@ static void test_list_files_walks_aliased_dir_once(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], page) == 0);
   path_list_free(&paths);
@@ -289,7 +349,7 @@ static void test_list_files_walks_alias_chain_once(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", NULL, 0) == 0);
+  TEST_CHECK(list_files(&paths, root_dir, ".md", NULL, 0) == 0);
   TEST_CHECK(paths.count == 1);
   char* expected = path_join(root_dir, "a/x/x/page.md", &arena);
   TEST_CHECK(paths.count == 1 && strcmp(paths.items[0], expected) == 0);
@@ -324,11 +384,13 @@ static void test_list_files_skips_excluded_dir(void) {
   TEST_CHECK(fs_write_file(sibling_page, "x", 1, NULL, 0) == 0);
   TEST_ASSERT(symlink("public", alias_dir) == 0);
 
+  const char* const md_suffixes[] = {".md"};
   const char* const exclusions[] = {excluded_dir, alias_dir};
   for (size_t i = 0; i < sizeof(exclusions) / sizeof(exclusions[0]); i++) {
     struct PathList paths;
     path_list_init(&paths);
-    TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, exclusions[i], ".md", NULL, 0) == 0);
+    TEST_CHECK(fs_list_files_with_suffixes(&paths, root_dir, exclusions[i], md_suffixes, 1, false,
+                                           NULL, 0) == 0);
     TEST_CHECK(paths.count == 2);
     TEST_CHECK(paths.count == 2 && strcmp(paths.items[0], page) == 0 &&
                strcmp(paths.items[1], sibling_page) == 0);
@@ -337,7 +399,8 @@ static void test_list_files_skips_excluded_dir(void) {
 
   struct PathList paths;
   path_list_init(&paths);
-  TEST_CHECK(fs_list_files_with_suffix(&paths, root_dir, missing_dir, ".md", NULL, 0) == 0);
+  TEST_CHECK(fs_list_files_with_suffixes(&paths, root_dir, missing_dir, md_suffixes, 1, false, NULL,
+                                         0) == 0);
   TEST_CHECK(paths.count == 3);
   TEST_CHECK(paths.count == 3 && strcmp(paths.items[0], page) == 0 &&
              strcmp(paths.items[1], excluded_page) == 0 &&
@@ -374,7 +437,7 @@ static void test_list_files_walks_tree_deeper_than_open_file_limit(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  const int rc = fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason));
+  const int rc = list_files(&paths, root_dir, ".md", reason, sizeof(reason));
   // Restore the limit before asserting, so a failure cannot starve later tests of descriptors.
   (void)setrlimit(RLIMIT_NOFILE, &limit);
 
@@ -402,8 +465,7 @@ static void test_list_files_rejects_missing_dir(void) {
   struct PathList missing_paths;
   path_list_init(&missing_paths);
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_list_files_with_suffix(&missing_paths, missing, NULL, ".md", reason,
-                                       sizeof(reason)) == -1);
+  TEST_CHECK(list_files(&missing_paths, missing, ".md", reason, sizeof(reason)) == -1);
   // Every walk failure names its own path, so the reason is self-contained.
   char expected[FS_REASON_SIZE];
   char message[FS_REASON_SIZE];
@@ -436,7 +498,7 @@ static void test_list_files_rejects_file_root(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  TEST_CHECK(fs_list_files_with_suffix(&paths, plain, NULL, ".md", reason, sizeof(reason)) == -1);
+  TEST_CHECK(list_files(&paths, plain, ".md", reason, sizeof(reason)) == -1);
   TEST_CHECK(paths.count == 0);
   char expected[FS_REASON_SIZE];
   char message[FS_REASON_SIZE];
@@ -477,7 +539,7 @@ static void test_list_files_rejects_unstatable_entry(void) {
   struct PathList paths;
   path_list_init(&paths);
   char reason[FS_REASON_SIZE] = "";
-  const int rc = fs_list_files_with_suffix(&paths, root_dir, NULL, ".md", reason, sizeof(reason));
+  const int rc = list_files(&paths, root_dir, ".md", reason, sizeof(reason));
   // Restore the mode before asserting: a failing assertion aborts the test, and neither the cleanup
   // below nor the harness can remove a directory it is not allowed to search.
   (void)chmod(sealed_dir, 0700);
@@ -1036,6 +1098,7 @@ static void test_identify_distinguishes_files_and_rejects_missing(void) {
 TEST_LIST = {
     {"list files matches suffix", test_list_files_matches_suffix},
     {"list files empty suffix matches all", test_list_files_empty_suffix_matches_all},
+    {"list files matches suffix list and case", test_list_files_matches_suffix_list_and_case},
     {"list files accepts empty dir", test_list_files_accepts_empty_dir},
     {"list files skips symlink cycle", test_list_files_skips_symlink_cycle},
     {"list files skips symlink cycle to ancestor", test_list_files_skips_symlink_cycle_to_ancestor},

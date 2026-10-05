@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "core/ascii.h"
 #include "core/error.h"
 #include "core/grow.h"
 #include "core/path.h"
@@ -30,8 +31,14 @@ struct FsWalk {
   /** Path list that receives the matching paths, unsorted until the walk ends. */
   struct PathList* paths;
 
-  /** Literal filename suffix to match. */
-  const char* suffix;
+  /** Array of `suffix_count` terminated suffixes to match. */
+  const char* const* suffixes;
+
+  /** Number of entries in `suffixes`. Zero matches nothing. */
+  size_t suffix_count;
+
+  /** Whether matching folds ASCII case. */
+  bool is_fold_case;
 
   /**
    * Heap array of `visited_capacity` slots. The first `visited_count` hold the identity of every
@@ -72,10 +79,10 @@ struct FsWalk {
  * @return `0` on success, including a skipped directory, or `-1` on a directory or allocation
  *         failure.
  */
-static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
-                                           const char* dir_path,
-                                           char* reason,
-                                           size_t reason_len) __attribute__((nonnull(1, 2)));
+static int fs_list_files_with_suffixes_inner(struct FsWalk* walk,
+                                             const char* dir_path,
+                                             char* reason,
+                                             size_t reason_len) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Records `excluded_dir` as already walked, so every path that reaches it is skipped.
@@ -87,10 +94,10 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
  * @param reason_len   Size of `reason` in bytes.
  * @return `0` on success, or `-1` on allocation failure.
  */
-static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
-                                             const char* excluded_dir,
-                                             char* reason,
-                                             size_t reason_len) __attribute__((nonnull(1)));
+static int fs_list_files_with_suffixes_exclude(struct FsWalk* walk,
+                                               const char* excluded_dir,
+                                               char* reason,
+                                               size_t reason_len) __attribute__((nonnull(1)));
 
 /**
  * @brief Records one directory identity as visited, reporting whether it was already recorded.
@@ -103,11 +110,11 @@ static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
  * @param reason_len Size of `reason` in bytes.
  * @return `0` on success, or `-1` on allocation failure.
  */
-static int fs_list_files_with_suffix_record(struct FsWalk* walk,
-                                            const struct FsIdentity* identity,
-                                            bool* is_new_out,
-                                            char* reason,
-                                            size_t reason_len) __attribute__((nonnull(1, 2, 3)));
+static int fs_list_files_with_suffixes_record(struct FsWalk* walk,
+                                              const struct FsIdentity* identity,
+                                              bool* is_new_out,
+                                              char* reason,
+                                              size_t reason_len) __attribute__((nonnull(1, 2, 3)));
 
 /**
  * @brief Reads every entry name in `dir_path` except `.` and `..`, sorted in byte order.
@@ -157,11 +164,28 @@ static int compare_identities(const struct FsIdentity* a, const struct FsIdentit
 /**
  * @brief Reports whether `text` ends with the literal `suffix`.
  *
- * @param text   Terminated string to test. Must not be `NULL`.
- * @param suffix Terminated suffix to look for. Must not be `NULL`.
+ * @param text         Terminated string to test. Must not be `NULL`.
+ * @param suffix       Terminated suffix to look for. Must not be `NULL`.
+ * @param is_fold_case Whether ASCII case differences are ignored, so `.MD` matches `.md`. Bytes
+ *                     outside ASCII always compare exactly.
  * @return `true` when `text` ends with `suffix`, `false` otherwise.
  */
-static bool has_suffix(const char* text, const char* suffix) __attribute__((nonnull(1, 2)));
+static bool has_suffix(const char* text, const char* suffix, bool is_fold_case)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Reports whether `text` ends with any of `suffixes`.
+ *
+ * @param text         Terminated string to test. Must not be `NULL`.
+ * @param suffixes     Array of `suffix_count` terminated suffixes. Must not be `NULL`.
+ * @param suffix_count Number of entries in `suffixes`. Zero matches nothing.
+ * @param is_fold_case Whether ASCII case differences are ignored, as in `has_suffix`.
+ * @return `true` when `text` ends with at least one suffix, `false` otherwise.
+ */
+static bool has_any_suffix(const char* text,
+                           const char* const* suffixes,
+                           size_t suffix_count,
+                           bool is_fold_case) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Compares two `PathList` item pointers for `qsort`.
@@ -267,22 +291,27 @@ static int fs_reason_path_errno(char* reason,
                                 const char* path,
                                 int error_number) __attribute__((nonnull(3, 4)));
 
-int fs_list_files_with_suffix(struct PathList* paths,
-                              const char* root_dir,
-                              const char* excluded_dir,
-                              const char* suffix,
-                              char* reason,
-                              size_t reason_len) {
-  struct FsWalk walk = {.paths = paths, .suffix = suffix};
+int fs_list_files_with_suffixes(struct PathList* paths,
+                                const char* root_dir,
+                                const char* excluded_dir,
+                                const char* const* suffixes,
+                                size_t suffix_count,
+                                bool is_fold_case,
+                                char* reason,
+                                size_t reason_len) {
+  struct FsWalk walk = {.paths = paths,
+                        .suffixes = suffixes,
+                        .suffix_count = suffix_count,
+                        .is_fold_case = is_fold_case};
   path_list_init(&walk.links);
-  int rc = fs_list_files_with_suffix_exclude(&walk, excluded_dir, reason, reason_len);
+  int rc = fs_list_files_with_suffixes_exclude(&walk, excluded_dir, reason, reason_len);
   if (rc == 0) {
-    rc = fs_list_files_with_suffix_inner(&walk, root_dir, reason, reason_len);
+    rc = fs_list_files_with_suffixes_inner(&walk, root_dir, reason, reason_len);
   }
   // A deferred link can defer more links of its own, so this reads `count` on every iteration
   // rather than once.
   for (size_t i = 0; rc == 0 && i < walk.links.count; i++) {
-    rc = fs_list_files_with_suffix_inner(&walk, walk.links.items[i], reason, reason_len);
+    rc = fs_list_files_with_suffixes_inner(&walk, walk.links.items[i], reason, reason_len);
   }
   free(walk.visited);
   path_list_free(&walk.links);
@@ -437,10 +466,10 @@ int fs_identify(const char* file_path, struct FsIdentity* identity_out) {
   return 0;
 }
 
-static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
-                                           const char* dir_path,
-                                           char* reason,
-                                           size_t reason_len) {
+static int fs_list_files_with_suffixes_inner(struct FsWalk* walk,
+                                             const char* dir_path,
+                                             char* reason,
+                                             size_t reason_len) {
   // This `stat` does not validate the type. `opendir` in `read_dir_names` rejects a non-directory,
   // which only the root can be, because `visit_matching_entry` passes on only entries it found to
   // be directories.
@@ -450,7 +479,7 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
   }
   const struct FsIdentity identity = {.device = (uint64_t)st.st_dev, .inode = (uint64_t)st.st_ino};
   bool is_new = false;
-  if (fs_list_files_with_suffix_record(walk, &identity, &is_new, reason, reason_len) != 0) {
+  if (fs_list_files_with_suffixes_record(walk, &identity, &is_new, reason, reason_len) != 0) {
     return -1;
   }
   if (!is_new) {
@@ -481,23 +510,23 @@ static int fs_list_files_with_suffix_inner(struct FsWalk* walk,
   return rc;
 }
 
-static int fs_list_files_with_suffix_exclude(struct FsWalk* walk,
-                                             const char* excluded_dir,
-                                             char* reason,
-                                             size_t reason_len) {
+static int fs_list_files_with_suffixes_exclude(struct FsWalk* walk,
+                                               const char* excluded_dir,
+                                               char* reason,
+                                               size_t reason_len) {
   struct FsIdentity identity;
   if (excluded_dir == NULL || fs_identify(excluded_dir, &identity) != 0) {
     return 0;
   }
   bool is_new = false;
-  return fs_list_files_with_suffix_record(walk, &identity, &is_new, reason, reason_len);
+  return fs_list_files_with_suffixes_record(walk, &identity, &is_new, reason, reason_len);
 }
 
-static int fs_list_files_with_suffix_record(struct FsWalk* walk,
-                                            const struct FsIdentity* identity,
-                                            bool* is_new_out,
-                                            char* reason,
-                                            size_t reason_len) {
+static int fs_list_files_with_suffixes_record(struct FsWalk* walk,
+                                              const struct FsIdentity* identity,
+                                              bool* is_new_out,
+                                              char* reason,
+                                              size_t reason_len) {
   // Binary search for the first slot not below `identity`, which is where it is or belongs.
   size_t low = 0;
   size_t high = walk->visited_count;
@@ -617,9 +646,10 @@ static int visit_matching_entry(struct FsWalk* walk,
                  ? 0
                  : error_report(reason, reason_len, "out of memory");
     }
-    return fs_list_files_with_suffix_inner(walk, file_path, reason, reason_len);
+    return fs_list_files_with_suffixes_inner(walk, file_path, reason, reason_len);
   }
-  if (S_ISREG(st.st_mode) && has_suffix(entry_name, walk->suffix)) {
+  if (S_ISREG(st.st_mode) &&
+      has_any_suffix(entry_name, walk->suffixes, walk->suffix_count, walk->is_fold_case)) {
     if (path_list_push(walk->paths, file_path) != 0) {
       return error_report(reason, reason_len, "out of memory");
     }
@@ -637,13 +667,36 @@ static int compare_identities(const struct FsIdentity* a, const struct FsIdentit
   return 0;
 }
 
-static bool has_suffix(const char* text, const char* suffix) {
+static bool has_suffix(const char* text, const char* suffix, bool is_fold_case) {
   const size_t text_len = strlen(text);
   const size_t suffix_len = strlen(suffix);
   // The length test must short-circuit the pointer arithmetic. `text_len - suffix_len` wraps when
   // the suffix is the longer string, and `text +` that value forms a pointer far outside the
   // object, which is undefined regardless of whether it is dereferenced.
-  return text_len >= suffix_len && strcmp(text + text_len - suffix_len, suffix) == 0;
+  if (text_len < suffix_len) {
+    return false;
+  }
+  const char* candidate = text + text_len - suffix_len;
+  for (size_t i = 0; i < suffix_len; i++) {
+    const unsigned char left = (unsigned char)candidate[i];
+    const unsigned char right = (unsigned char)suffix[i];
+    if (left != right && (!is_fold_case || ascii_to_lower(left) != ascii_to_lower(right))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool has_any_suffix(const char* text,
+                           const char* const* suffixes,
+                           size_t suffix_count,
+                           bool is_fold_case) {
+  for (size_t i = 0; i < suffix_count; i++) {
+    if (has_suffix(text, suffixes[i], is_fold_case)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 static int compare_paths(const void* a, const void* b) {
