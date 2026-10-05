@@ -24,7 +24,7 @@ struct SiteConfigStringKey {
   /** Address of the `SiteConfig` field this key fills. */
   const char** field;
 
-  /** Whether absence is a load error. */
+  /** Whether absence is a load error rather than leaving the initialized default. */
   bool is_required;
 };
 
@@ -195,7 +195,7 @@ static int copy_template_names(toml_datum_t table,
                                size_t err_len) __attribute__((nonnull(2, 3, 4, 5)));
 
 /**
- * @brief Validates `base_url` as an absolute http(s) URL and trims any trailing `/`.
+ * @brief Validates `base_url` as an absolute HTTP(S) URL and trims any trailing `/`.
  *
  * `copy_string` accepts a relative or scheme-less value, because it checks only presence and type.
  * Such a value then silently produces broken links in every feed and canonical URL. Checking it
@@ -216,7 +216,7 @@ static int normalize_base_url(struct SiteConfig* site_config, char* err, size_t 
     __attribute__((nonnull(1)));
 
 /**
- * @brief Reports whether a URL is absolute: an http(s) scheme followed by a non-empty host.
+ * @brief Reports whether a URL is absolute: an HTTP(S) scheme followed by a non-empty host.
  *
  * @param url URL to check. Must not be `NULL`.
  * @return `true` when `url` has a recognized scheme and a host, `false` otherwise.
@@ -554,7 +554,7 @@ static int copy_string(toml_datum_t table,
                        const char** value_out,
                        char* err,
                        size_t err_len) {
-  toml_datum_t value = toml_get(table, key);
+  const toml_datum_t value = toml_get(table, key);
   if (value.type == TOML_UNKNOWN) {
     if (is_required) {
       return error_report(err, err_len, "missing required config key '%s'", key);
@@ -581,7 +581,7 @@ static int copy_template_names(toml_datum_t table,
                                size_t* template_name_count_out,
                                char* err,
                                size_t err_len) {
-  toml_datum_t value = toml_get(table, key);
+  const toml_datum_t value = toml_get(table, key);
   if (value.type == TOML_UNKNOWN) {
     return 0;
   }
@@ -836,7 +836,7 @@ static int populate_feed_count(struct SiteConfig* site_config,
                                toml_datum_t table,
                                char* err,
                                size_t err_len) {
-  toml_datum_t feed_count = toml_get(table, "feed_count");
+  const toml_datum_t feed_count = toml_get(table, "feed_count");
   if (feed_count.type == TOML_UNKNOWN) {
     return 0;
   }

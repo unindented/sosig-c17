@@ -14,7 +14,7 @@ struct SiteConfig;
 /**
  * @brief Renders and writes configured aggregate templates with all non-draft entries visible.
  *
- * @param site_config         Configuration supplying `output_dir`, `templates_dir` and the
+ * @param site_config         Configuration supplying `output_dir`, `templates_dir`, and the
  *                            aggregate template list. Must not be `NULL`.
  * @param content_entries     Content entries, sorted newest-first, visible to the templates. May be
  *                            `NULL` only when `content_entry_count` is 0.
@@ -23,7 +23,8 @@ struct SiteConfig;
  *                            `NULL`.
  * @param err                 Destination buffer for a failure diagnostic.
  * @param err_len             Size of `err` in bytes.
- * @return `0` on success, or `-1` on the first template that fails to render or write.
+ * @return `0` on success, including when no aggregate is configured, or `-1` on the first template
+ *         that fails to render or write.
  */
 int site_writer_write_aggregates(const struct SiteConfig* site_config,
                                  const struct ContentEntry* const* content_entries,
@@ -44,7 +45,8 @@ int site_writer_write_aggregates(const struct SiteConfig* site_config,
  *                            `NULL`.
  * @param err                 Destination buffer for a failure diagnostic.
  * @param err_len             Size of `err` in bytes.
- * @return `0` on success, or `-1` on the first template that fails to render or write.
+ * @return `0` on success, including when no feed is configured, or `-1` on the first template that
+ *         fails to render or write.
  */
 int site_writer_write_feeds(const struct SiteConfig* site_config,
                             const struct ContentEntry* const* content_entries,

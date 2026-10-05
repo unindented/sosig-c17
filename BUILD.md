@@ -99,7 +99,9 @@ A parent that enables `sosig` tests must call `enable_testing()` in its top-leve
 
 Each unit test links the same `sosig_app` as the executable. No test target compiles an application source a second time with different definitions. The production render limit is 256 MiB, and a failure test at this limit uses too much memory. The template test passes a 64 KiB limit to `template_render_file_limited` instead.
 
-Each golden test uses a separate scratch tree. The CMake script collects expected and actual files after `sosig` runs. These runtime globs are not build inputs. Fixture site changes do not require CMake to configure the project again.
+Each golden test uses a separate scratch tree. It builds the site twice and verifies that the second build leaves every generated file unchanged. The CMake script then compares the output inventory with `tests/expected/<name>` and compares every file byte for byte.
+
+The CMake script collects expected and actual files after `sosig` runs. These runtime globs are not build inputs. Fixture site changes do not require CMake to configure the project again.
 
 ## Version
 

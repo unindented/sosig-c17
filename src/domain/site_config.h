@@ -23,7 +23,7 @@ extern const char* const SITE_CONFIG_PATH_DEFAULT;
 
 /** Site configuration loaded from `sosig.toml`. */
 struct SiteConfig {
-  /** Owns strings copied from configuration. */
+  /** Owns strings and arrays copied from configuration. */
   struct Arena arena;
 
   /** Required absolute base URL used by templates. */
@@ -62,13 +62,13 @@ struct SiteConfig {
    */
   const char* const* aggregate_templates;
 
-  /** Number of entries in `aggregate_templates`. */
+  /** Number of names in `aggregate_templates`. */
   size_t aggregate_template_count;
 
   /** Safe relative template names rendered with feed-limited context. Defaults to `[atom.xml]`. */
   const char* const* feed_templates;
 
-  /** Number of entries in `feed_templates`. */
+  /** Number of names in `feed_templates`. */
   size_t feed_template_count;
 
   /** Maximum number of content entries included in the feed. Defaults to `10`. */
@@ -81,7 +81,7 @@ struct SiteConfig {
  * Prepares the config's arena and sets defaults for optional keys, leaving required keys unset for
  * `site_config_load` to fill.
  *
- * @param site_config Config handle to prepare. Must not be `NULL`.
+ * @param site_config Config handle to prepare. Must not be `NULL` or already own allocations.
  */
 void site_config_init(struct SiteConfig* site_config) __attribute__((nonnull(1)));
 
@@ -105,8 +105,8 @@ void site_config_free(struct SiteConfig* site_config) __attribute__((nonnull(1))
  * @param config_path Path to the TOML configuration file. Must not be `NULL`.
  * @param err         Buffer for a diagnostic message on failure.
  * @param err_len     Size of `err` in bytes.
- * @return `0` on success, or `-1` on a read, parse, or validation error (with a diagnostic in
- *         `err`).
+ * @return `0` on success, or `-1` on a read, parse, allocation, or validation error, with a
+ *         diagnostic in `err`.
  */
 int site_config_load(struct SiteConfig* site_config,
                      const char* config_path,

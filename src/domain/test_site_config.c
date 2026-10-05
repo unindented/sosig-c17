@@ -333,7 +333,7 @@ static void test_load_rejects_empty_directory_keys(void) {
   }
 }
 
-// `site_config_load` rejects a `base_url` that is not an absolute http(s) URL. Without that
+// `site_config_load` rejects a `base_url` that is not an absolute HTTP(S) URL. Without that
 // rejection it is not a load error at all: it silently produces a broken link in every feed entry
 // and canonical URL.
 static void test_load_rejects_relative_base_url(void) {

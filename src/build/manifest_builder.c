@@ -26,8 +26,8 @@
  */
 enum { TEMPLATE_SOURCE_LABEL_SIZE = 64 };
 
-// The longest key plus a decimal `size_t` at its widest, so the labels formatted in
-// `manifest_builder_populate` cannot truncate and their `snprintf` results need no check.
+// The longest key plus a decimal `size_t` at its widest, so a label formatted in
+// `manifest_builder_populate` cannot truncate and its `snprintf` result needs no check.
 _Static_assert(TEMPLATE_SOURCE_LABEL_SIZE >
                    sizeof("aggregate_templates") - 1 + sizeof("[18446744073709551615]") - 1,
                "template source label buffer must hold the longest key and a size_t index");
@@ -217,8 +217,8 @@ static void claim_input_roots(struct InputRoots* roots, const struct SiteConfig*
  *
  * @param roots          Input directory trees to look for. Must not be `NULL`.
  * @param scratch        Arena that owns the ancestor paths. Must not be `NULL`.
- * @param config_key_out Receives the config key of the root holding `output_dir`, or `NULL` when
- *                       neither root does. Must not be `NULL`.
+ * @param config_key_out Receives the config key of the root holding `output_dir`, or `NULL` when no
+ *                       root does. Must not be `NULL`.
  * @return `0` on success, or `-1` on allocation failure.
  */
 static int find_input_root_holding_output_dir(const struct InputRoots* roots,
@@ -251,7 +251,7 @@ static const char* find_nearest_existing_ancestor(const char* dir_path, struct A
  *
  * @param roots    Root set to search. Must not be `NULL`.
  * @param identity Directory identity to look for. Must not be `NULL`.
- * @return The matching root's config key, or `NULL` when `identity` names neither root.
+ * @return The matching root's config key, or `NULL` when `identity` names no root.
  */
 static const char* find_input_root(const struct InputRoots* roots,
                                    const struct FsIdentity* identity)
@@ -275,7 +275,7 @@ static const char* find_input_root(const struct InputRoots* roots,
  *                      `NULL`.
  * @param err           Destination buffer for a failure diagnostic.
  * @param err_len       Size of `err` in bytes.
- * @return `0` on success, or `-1` on a collision or allocation failure.
+ * @return `0` on success, or `-1` on an oversize path, a collision, or allocation failure.
  */
 static int register_template_output(struct Manifest* manifest,
                                     const char* output_dir,
@@ -297,7 +297,8 @@ static int register_template_output(struct Manifest* manifest,
  * @param manifest     Manifest to append to. Must not be `NULL`.
  * @param output_path  Filesystem output path to record, joined onto `roots->output_dir`. Must not
  *                     be `NULL`.
- * @param source_label Diagnostic label for the source producing `output_path`. Must not be `NULL`.
+ * @param source_label Diagnostic label for the source producing `output_path`: a content entry's
+ *                     source path or a configured template list entry. Must not be `NULL`.
  * @param inputs       Identities of this build's input files, which `output_path` must not name.
  *                     Must not be `NULL`.
  * @param roots        Input directory trees `output_path` must not land in. Must not be `NULL`.
@@ -330,7 +331,7 @@ static int register_output_path(struct Manifest* manifest,
  * @param output_path    Output path joined onto `roots->output_dir`. Must not be `NULL`.
  * @param scratch        Arena that owns the truncated copy of `output_path`. Must not be `NULL`.
  * @param config_key_out Receives the config key of the root holding `output_path`, or `NULL` when
- *                       neither root does. Must not be `NULL`.
+ *                       no root does. Must not be `NULL`.
  * @return `0` on success, or `-1` on allocation failure.
  */
 static int find_input_root_holding(const struct InputRoots* roots,
@@ -396,6 +397,7 @@ int manifest_builder_populate(struct Manifest* manifest,
     rc = register_output_path(manifest, entry->output_path, entry->source_path, &inputs, &roots,
                               &scratch, err, err_len);
   }
+
   for (size_t i = 0; rc == 0 && i < site_config->aggregate_template_count; i++) {
     char source_label[TEMPLATE_SOURCE_LABEL_SIZE];
     (void)snprintf(source_label, sizeof(source_label), "aggregate_templates[%zu]", i);
@@ -403,6 +405,7 @@ int manifest_builder_populate(struct Manifest* manifest,
                                   site_config->aggregate_templates[i], source_label, &inputs,
                                   &roots, &scratch, err, err_len);
   }
+
   for (size_t i = 0; rc == 0 && i < site_config->feed_template_count; i++) {
     char source_label[TEMPLATE_SOURCE_LABEL_SIZE];
     (void)snprintf(source_label, sizeof(source_label), "feed_templates[%zu]", i);
@@ -652,10 +655,9 @@ static int register_output_path(struct Manifest* manifest,
                         root_key, source_label, output_path);
   }
 
-  // An output path that names one of this build's own input files would overwrite it with rendered
-  // output, losing the configuration or the target of a linked source or template. Nothing later
-  // in the build would notice or report it. `fs_identify` failing means the path names nothing
-  // yet, which is the ordinary case for an output about to be created.
+  // An output path naming one of this build's own input files would replace that file with
+  // generated output, and nothing later in the build would notice. `fs_identify` failing means the
+  // path names nothing yet, which is the ordinary case for an output about to be created.
   struct FsIdentity identity;
   if (fs_identify(output_path, &identity) == 0 && has_input_identity(inputs, &identity)) {
     // The producer is the actionable part and the path trails it, matching the duplicate message

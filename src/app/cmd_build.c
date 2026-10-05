@@ -31,10 +31,13 @@ struct ReadRoot {
 
 /** Mutable state owned by one `cmd_build_execute` invocation. */
 struct BuildState {
-  /** Loaded site configuration. */
+  /** Loaded site configuration, owning every configured path and template name. */
   struct SiteConfig site_config;
 
-  /** Discovered content entry source paths. */
+  /**
+   * Discovered content entry source paths below `content_dir`, sorted by the walk that produced
+   * them.
+   */
   struct PathList source_paths;
 
   /** Intended output paths for this build, populated before any file is written. */
@@ -93,7 +96,8 @@ static void build_state_free(struct BuildState* state) __attribute__((nonnull(1)
  * The `output_dir` check runs before the content walk, and the walk leaves `output_dir` out, so a
  * file an earlier build generated is never read back as a source.
  *
- * @param state   Build state that receives the config and source paths. Must not be `NULL`.
+ * @param state   Build state that receives the configuration and content entry source paths. Must
+ *                not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
  * @return `0` on success, or `-1` on a configuration, directory, output directory, or listing
@@ -158,13 +162,14 @@ static int collect_content_entries_compact(struct BuildState* state, char* err, 
     __attribute__((nonnull(1)));
 
 /**
- * @brief Records every intended output path, rejecting a collision before anything is rendered.
+ * @brief Records every intended output path, rejecting a collision before anything is written.
  *
  * @param state   Build state whose manifest is populated from the collected entries. Must not be
  *                `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
- * @return `0` when all output paths are unique, or `-1` on a collision or allocation failure.
+ * @return `0` when every output path is unique and names no build input, or `-1` on a collision, an
+ *         input overwrite, or an allocation failure.
  */
 static int populate_output_manifest(struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));
@@ -203,7 +208,7 @@ static int render_content_pages(struct BuildState* state, struct StringBuffer* e
  * @param state   Build state holding the collected entries. Must not be `NULL`.
  * @param err     Destination buffer for a failure diagnostic.
  * @param err_len Size of `err` in bytes.
- * @return `0` on success, or `-1` on a write or render failure.
+ * @return `0` when every output was written, or `-1` on the first render or write failure.
  */
 static int write_generated_site(struct BuildState* state, char* err, size_t err_len)
     __attribute__((nonnull(1)));

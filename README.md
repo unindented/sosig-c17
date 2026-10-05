@@ -19,7 +19,7 @@ Download a prebuilt binary from the [Releases](https://github.com/unindented/sos
 
 `sosig` is command-based:
 
-- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the number of render threads. The value must be from 1 through 1024. By default, the tool uses the detected CPU count. Use `-v, --verbose` to print build progress to `stderr`.
+- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the number of worker threads. The value must be from 1 through 1024. By default, the tool uses the detected CPU count. Use `-v, --verbose` to print build progress to `stderr`.
 - `sosig config`: Print the resolved project configuration as TOML.
 
 Run these commands for help:
