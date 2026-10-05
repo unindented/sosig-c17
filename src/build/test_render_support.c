@@ -38,25 +38,25 @@ static int render_pages(const struct SiteConfig* site_config,
                         size_t source_entry_count,
                         size_t worker_count,
                         struct StringBuffer* error_out) {
-  struct ContentEntry** entries =
-      calloc(source_entry_count > 0 ? source_entry_count : 1, sizeof(*entries));
-  TEST_ASSERT(entries != NULL);
-  if (entries == NULL) {
-    return TEST_PLUMBING_FAILED;
-  }
+  struct ContentEntry** entries = calloc(source_entry_count, sizeof(*entries));
+  int rc = TEST_PLUMBING_FAILED;
   size_t entry_count = 0;
+  const char* site_updated = NULL;
+  if (!TEST_CHECK(entries != NULL || source_entry_count == 0)) {
+    goto cleanup;
+  }
   for (size_t i = 0; i < source_entry_count; i++) {
     if (source_entries[i] != NULL) {
       entries[entry_count++] = source_entries[i];
     }
   }
   content_entry_sort(entries, entry_count);
-  const char* site_updated =
-      content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
-  const int rc =
-      page_renderer_render_pages(site_config, (const struct ContentEntry* const*)source_entries,
-                                 source_entry_count, (const struct ContentEntry* const*)entries,
-                                 entry_count, site_updated, worker_count, false, error_out);
+  site_updated = content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
+  rc = page_renderer_render_pages(site_config, (const struct ContentEntry* const*)source_entries,
+                                  source_entry_count, (const struct ContentEntry* const*)entries,
+                                  entry_count, site_updated, worker_count, false, error_out);
+
+cleanup:
   free(entries);
   return rc;
 }

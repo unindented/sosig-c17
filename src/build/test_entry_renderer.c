@@ -77,11 +77,6 @@ static void test_renders_entry_metadata_and_html(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
-                                "<main>{{title}} {{{body}}}</main>\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -89,11 +84,23 @@ static void test_renders_entry_metadata_and_html(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  const struct ContentEntry* entry = NULL;
+  char* page = NULL;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
+                                     "<main>{{title}} {{{body}}}</main>\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  const struct ContentEntry* entry = source_entries[0];
+  entry = source_entries[0];
   TEST_CHECK(entry != NULL);
   if (entry != NULL) {
     TEST_CHECK(strcmp(entry->title, "Hello") == 0);
@@ -103,10 +110,11 @@ static void test_renders_entry_metadata_and_html(void) {
     TEST_CHECK(strcmp(entry->output_path, "public/hello.html") == 0);
   }
 
-  char* page = read_output(root_dir, "public/hello.html");
+  page = read_output(root_dir, "public/hello.html");
   TEST_CHECK(page != NULL && strstr(page, "<main>Hello <p>Body</p>") != NULL);
-  free(page);
 
+cleanup:
+  free(page);
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -129,10 +137,6 @@ static void test_skips_draft_entry(void) {
       "draft = true\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -140,16 +144,27 @@ static void test_skips_draft_entry(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  char* page = NULL;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
   TEST_CHECK(source_entries[0] == NULL);
 
-  char* page = read_output(root_dir, "public/hello.html");
+  page = read_output(root_dir, "public/hello.html");
   TEST_CHECK(page == NULL);
-  free(page);
 
+cleanup:
+  free(page);
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -181,38 +196,58 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
       "draft = true\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", page) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/second.md", page) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0);
-
-  struct PathList source_paths;
-  path_list_init(&source_paths);
-  TEST_CHECK(path_list_push(&source_paths, "content/hello.md") == 0);
-  TEST_CHECK(path_list_push(&source_paths, "content/second.md") == 0);
-  TEST_CHECK(path_list_push(&source_paths, "content/draft.md") == 0);
-  int saved_dir_fd = -1;
-  TEST_ASSERT(working_dir_enter(root_dir, &saved_dir_fd) == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
-  char config_err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&site_config, "sosig.toml", config_err, sizeof(config_err)) == 0);
+  struct PathList source_paths;
+  path_list_init(&source_paths);
+  struct ContentEntry* source_entries[3] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  char config_err[ERROR_MESSAGE_SIZE] = "";
+  char stderr_out[128] = "";
+  int rc = -1;
+  size_t progress_len = 0;
+  int saved_dir_fd = -1;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", page) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/second.md", page) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/draft.md", draft) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(path_list_push(&source_paths, "content/hello.md") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(path_list_push(&source_paths, "content/second.md") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(path_list_push(&source_paths, "content/draft.md") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(working_dir_enter(root_dir, &saved_dir_fd) == 0)) {
+    goto cleanup;
+  }
 
-  struct ContentEntry* source_entries[3] = {NULL};
-  char stderr_out[128];
-  const int rc = render_entries_capturing_stderr(&site_config, &source_paths, 4, source_entries,
-                                                 &error_buffer, stderr_out, sizeof(stderr_out));
+  if (TEST_CHECK(site_config_load(&site_config, "sosig.toml", config_err, sizeof(config_err)) ==
+                 0)) {
+    rc = render_entries_capturing_stderr(&site_config, &source_paths, 4, source_entries,
+                                         &error_buffer, stderr_out, sizeof(stderr_out));
+  }
+  TEST_MSG("config: %s", config_err);
+  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
 
   TEST_CHECK(rc == 0);
+  TEST_CHECK(error_buffer.len == 0);
   // Three jobs, so three progress lines even though one entry is a draft that produces no output,
   // and one trailing newline closing the line before any later status message. Workers finish in
   // any order, so each count is asserted present once rather than the whole text in sequence.
   static const char* const progress_lines[] = {"\rparsing content 1/3", "\rparsing content 2/3",
                                                "\rparsing content 3/3"};
-  size_t progress_len = 0;
   for (size_t i = 0; i < sizeof(progress_lines) / sizeof(progress_lines[0]); i++) {
     const char* found = strstr(stderr_out, progress_lines[i]);
     TEST_CHECK(found != NULL && strstr(found + 1, progress_lines[i]) == NULL);
@@ -220,9 +255,9 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
   }
   TEST_CHECK(strlen(stderr_out) == progress_len + 1);
   TEST_CHECK(stderr_out[progress_len] == '\n');
+  TEST_MSG("stderr: '%s'", stderr_out);
 
-  TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
-
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -249,10 +284,6 @@ static void test_nests_output_under_slugified_sections(void) {
       "+++\n"
       "Body\n";
   const char* const source_relative_path = "content/My Section/Sub Dir/hello.md";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -260,17 +291,28 @@ static void test_nests_output_under_slugified_sections(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  const struct ContentEntry* entry = NULL;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, source_relative_path, NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  const struct ContentEntry* entry = source_entries[0];
+  entry = source_entries[0];
   TEST_CHECK(entry != NULL);
   if (entry != NULL) {
     TEST_CHECK(strcmp(entry->url_path, "/my-section/sub-dir/hello.html") == 0);
     TEST_CHECK(strcmp(entry->output_path, "public/my-section/sub-dir/hello.html") == 0);
   }
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -320,11 +362,7 @@ static void test_rejects_source_outside_content_dir(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "contentx/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
+  static const char* const sources[] = {"hello.md", "contentx/hello.md"};
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -332,8 +370,19 @@ static void test_rejects_source_outside_content_dir(void) {
   struct ContentEntry* source_entries[2] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "contentx/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
-  static const char* const sources[] = {"hello.md", "contentx/hello.md"};
   TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
                             &site_config, &source_paths, source_entries, &error_buffer) == -1);
   // Compared whole, so a message that merely mentions the source path cannot pass for this one.
@@ -346,6 +395,7 @@ static void test_rejects_source_outside_content_dir(void) {
   TEST_CHECK(source_entries[0] == NULL);
   TEST_CHECK(source_entries[1] == NULL);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -359,6 +409,12 @@ static void test_rejects_source_outside_content_dir(void) {
 // expanded path, which config validation can only reason about indirectly. Rejection at load is
 // covered by `test_load_rejects_unsafe_permalink` in the site config tests.
 static void test_rejects_unsafe_output_path(void) {
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len = snprintf(expected, sizeof(expected),
+                                    "permalink expanded to an unsafe output path for '%s': '%s'",
+                                    "content/hello.md", "../hello.html");
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
   char root_dir_template[] = "/tmp/sosig-entry-unsafe.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -371,10 +427,6 @@ static void test_rejects_unsafe_output_path(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -382,17 +434,22 @@ static void test_rejects_unsafe_output_path(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", "/../{slug}.html", &site_config,
                                   &source_paths, source_entries, &error_buffer) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int n = snprintf(expected, sizeof(expected),
-                         "permalink expanded to an unsafe output path for '%s': '%s'",
-                         "content/hello.md", "../hello.html");
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   // Exact: `expected` is the whole message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -404,6 +461,13 @@ static void test_rejects_unsafe_output_path(void) {
 // segment still fails here. This is the render phase's backstop: `site_config_load` rejects the
 // same pattern up front, asserted by `test_load_rejects_oversize_permalink`.
 static void test_rejects_oversize_output_path(void) {
+  char expected_head[128];
+  const int expected_head_len =
+      snprintf(expected_head, sizeof(expected_head),
+               "output path exceeds max output path length (%zu bytes) at ",
+               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX);
+  TEST_ASSERT(expected_head_len > 0 && (size_t)expected_head_len < sizeof(expected_head));
+
   char root_dir_template[] = "/tmp/sosig-entry-oversize-path.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -420,17 +484,12 @@ static void test_rejects_oversize_output_path(void) {
   pattern[0] = '/';
   memcpy(pattern + sizeof(pattern) - sizeof("/{slug}.html"), "/{slug}.html",
          sizeof("/{slug}.html"));
-
   const char content[] =
       "+++\n"
       "title = \"Hello\"\n"
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -438,6 +497,15 @@ static void test_rejects_oversize_output_path(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", pattern, &site_config,
                                   &source_paths, source_entries, &error_buffer) == -1);
@@ -445,12 +513,6 @@ static void test_rejects_oversize_output_path(void) {
   // whole message is far longer than the diagnostic buffer. The measured length varies with the
   // pattern, so the head is asserted up to it and the entry is asserted separately. Between them
   // they pin every part of the message that is not the pathological value itself.
-  char expected_head[128];
-  const int expected_head_len =
-      snprintf(expected_head, sizeof(expected_head),
-               "output path exceeds max output path length (%zu bytes) at ",
-               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX);
-  TEST_CHECK(expected_head_len > 0 && (size_t)expected_head_len < sizeof(expected_head));
   TEST_CHECK(error_buffer.data != NULL &&
              strncmp(error_buffer.data, expected_head, (size_t)expected_head_len) == 0);
   TEST_CHECK(error_buffer.data != NULL &&
@@ -464,6 +526,7 @@ static void test_rejects_oversize_output_path(void) {
   TEST_CHECK(error_buffer.data != NULL && error_buffer.len >= 3 &&
              strcmp(error_buffer.data + error_buffer.len - 3, "...") == 0);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -482,12 +545,6 @@ static void test_rejects_oversize_output_path(void) {
 // six-byte sample. `<slug>.html` is exactly `FILENAME_LEN_MAX` by construction, so the overflow
 // needs a literal suffix on top of a maximum-length slug.
 static void test_rejects_oversize_path_segment(void) {
-  char root_dir_template[] = "/tmp/sosig-entry-oversize-segment.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-
   // A maximum-length slug plus the pattern's literal suffix, which together exceed
   // `FILENAME_LEN_MAX` while the total path stays inside `OUTPUT_PATH_RELATIVE_LEN_MAX`, so only
   // the per-segment check can reject this.
@@ -497,11 +554,34 @@ static void test_rejects_oversize_path_segment(void) {
   slug[sizeof(slug) - 1] = '\0';
   char segment[SLUG_LEN_MAX + sizeof(suffix)];
   const int segment_len = snprintf(segment, sizeof(segment), "%s%s", slug, suffix);
-  TEST_CHECK(segment_len > 0 && (size_t)segment_len < sizeof(segment));
+  TEST_ASSERT(segment_len > 0 && (size_t)segment_len < sizeof(segment));
   _Static_assert(SLUG_LEN_MAX + sizeof(suffix) - 1 > FILENAME_LEN_MAX,
                  "the slug plus the pattern suffix must exceed the filename limit");
   _Static_assert(SLUG_LEN_MAX + sizeof(suffix) - 1 < OUTPUT_PATH_RELATIVE_LEN_MAX,
                  "the oversize segment must stay within the total output path limit");
+  char content[SLUG_LEN_MAX + 128];
+  const int content_len = snprintf(content, sizeof(content),
+                                   "+++\n"
+                                   "title = \"Hello\"\n"
+                                   "date = 2026-07-01T00:00:00Z\n"
+                                   "slug = \"%s\"\n"
+                                   "+++\n"
+                                   "Body\n",
+                                   slug);
+  TEST_ASSERT(content_len > 0 && (size_t)content_len < sizeof(content));
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "output path segment exceeds max filename length (%zu bytes) at %zu bytes "
+               "(for 'content/hello.md'): '%s'",
+               (size_t)FILENAME_LEN_MAX, strlen(segment), segment);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-entry-oversize-segment.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
 
   const char config[] =
       "base_url = \"https://example.com\"\n"
@@ -510,20 +590,6 @@ static void test_rejects_oversize_path_segment(void) {
       "permalink = \"/{slug}-overflow.html\"\n"
       "aggregate_templates = []\n"
       "feed_templates = []\n";
-  char content[SLUG_LEN_MAX + 128];
-  const int n = snprintf(content, sizeof(content),
-                         "+++\n"
-                         "title = \"Hello\"\n"
-                         "date = 2026-07-01T00:00:00Z\n"
-                         "slug = \"%s\"\n"
-                         "+++\n"
-                         "Body\n",
-                         slug);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(content));
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -531,20 +597,23 @@ static void test_rejects_oversize_path_segment(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == -1);
   // The whole message fits, so it is asserted in full, including the offending segment it names: a
   // length alone would leave the user no way to find which segment of the path was too long.
-  char expected[ERROR_MESSAGE_SIZE];
-  const int n2 =
-      snprintf(expected, sizeof(expected),
-               "output path segment exceeds max filename length (%zu bytes) at %zu bytes "
-               "(for 'content/hello.md'): '%s'",
-               (size_t)FILENAME_LEN_MAX, strlen(segment), segment);
-  TEST_CHECK(n2 > 0 && (size_t)n2 < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -564,11 +633,6 @@ static void test_reports_missing_frontmatter_fence(void) {
     return;
   }
 
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "no fence here\n") == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "<main>{{title}}</main>\n") ==
-             0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -576,13 +640,24 @@ static void test_reports_missing_frontmatter_fence(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "no fence here\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
+                                     "<main>{{title}}</main>\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == -1);
-  TEST_ASSERT(error_buffer.data != NULL);
-  TEST_CHECK(strcmp(error_buffer.data,
+  TEST_CHECK(error_buffer.data != NULL &&
+             strcmp(error_buffer.data,
                     "missing opening '+++' frontmatter fence (in 'content/hello.md')") == 0);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -597,22 +672,29 @@ static void test_reports_missing_frontmatter_fence(void) {
 // A frontmatter reason survives in full when a long source path overflows the diagnostic, and the
 // overflow itself is marked rather than silent.
 static void test_reports_frontmatter_reason_before_long_source_path(void) {
-  char root_dir_template[] = "/tmp/sosig-entry-long-source.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-
   // A stem one byte over `SLUG_LEN_MAX` gives a reason that already carries the path, so composing
   // it behind the path a second time is what overflows `ERROR_MESSAGE_SIZE` and cuts it.
   char stem[SLUG_LEN_MAX + 3];
   memset(stem, 'a', sizeof(stem) - 1);
   stem[sizeof(stem) - 1] = '\0';
   char source_relative_path[SLUG_LEN_MAX + 32];
-  int n = snprintf(source_relative_path, sizeof(source_relative_path), "content/%s.md", stem);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(source_relative_path));
+  const int source_relative_path_len =
+      snprintf(source_relative_path, sizeof(source_relative_path), "content/%s.md", stem);
+  TEST_ASSERT(source_relative_path_len > 0 &&
+              (size_t)source_relative_path_len < sizeof(source_relative_path));
   _Static_assert(SLUG_LEN_MAX + 2 <= FILENAME_LEN_MAX,
                  "the oversize stem must still be a legal filename");
+  char expected_tail[80];
+  const int expected_tail_len = snprintf(expected_tail, sizeof(expected_tail),
+                                         "slug exceeds max slug length (%zu bytes) at %zu bytes: '",
+                                         (size_t)SLUG_LEN_MAX, sizeof(stem) - 1);
+  TEST_ASSERT(expected_tail_len > 0 && (size_t)expected_tail_len < sizeof(expected_tail));
+
+  char root_dir_template[] = "/tmp/sosig-entry-long-source.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
 
   const char content[] =
       "+++\n"
@@ -620,10 +702,6 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -631,6 +709,15 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, source_relative_path, content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, source_relative_path, NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == -1);
@@ -640,11 +727,6 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   // is appended once by the wrapping caller rather than twice: naming it here as well would push
   // this clause out of the buffer for any source path over roughly 465 bytes. The measured length
   // is the stem's, since every byte of the stem slugifies to itself.
-  char expected_tail[80];
-  n = snprintf(expected_tail, sizeof(expected_tail),
-               "slug exceeds max slug length (%zu bytes) at %zu bytes: '", (size_t)SLUG_LEN_MAX,
-               sizeof(stem) - 1);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected_tail));
   TEST_CHECK(error_buffer.data != NULL && strstr(error_buffer.data, expected_tail) != NULL);
 
   // And the cut is marked. Filling the buffer exactly is what proves this case still truncates at
@@ -658,6 +740,7 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   TEST_CHECK(error_buffer.data != NULL && error_buffer.len >= 3 &&
              strcmp(error_buffer.data + error_buffer.len - 3, "...") == 0);
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -674,6 +757,13 @@ static void test_reports_unreadable_source(void) {
     return;
   }
 
+  char reason[FS_REASON_SIZE];
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "failed to read content: %s ('content/hello.md')",
+               error_system_message(reason, sizeof(reason), EACCES));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
   char root_dir_template[] = "/tmp/sosig-entry-unreadable.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -686,15 +776,9 @@ static void test_reports_unreadable_source(void) {
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct Arena arena;
   arena_init(&arena);
-  char* source_path = path_join(root_dir, "content/hello.md", &arena);
-  TEST_CHECK(source_path != NULL && chmod(source_path, 0) == 0);
-
+  char* source_path = NULL;
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -702,31 +786,39 @@ static void test_reports_unreadable_source(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
-
-  const int rc = render_single_source(root_dir, "content/hello.md", NULL, &site_config,
-                                      &source_paths, source_entries, &error_buffer);
-  // Restore the mode before asserting: a failing assertion aborts the test, and the cleanup below
-  // cannot unlink through a path it may not read.
-  if (source_path != NULL) {
-    (void)chmod(source_path, 0644);
+  int rc = 0;
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
   }
-  arena_free(&arena);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
+  source_path = path_join(root_dir, "content/hello.md", &arena);
+  if (!TEST_CHECK(source_path != NULL)) {
+    goto cleanup;
+  }
+  TEST_CHECK(chmod(source_path, 0) == 0);
+
+  rc = render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
+                            source_entries, &error_buffer);
+  // Restore the mode right after the call, so the unreadable source never outlives what it tests.
+  (void)chmod(source_path, 0644);
 
   TEST_CHECK(rc == -1);
-  char reason[FS_REASON_SIZE];
-  char expected[ERROR_MESSAGE_SIZE];
-  const int n =
-      snprintf(expected, sizeof(expected), "failed to read content: %s ('content/hello.md')",
-               error_system_message(reason, sizeof(reason), EACCES));
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   // Exact: the path trails the cause, which is the shape an errno-sourced failure takes, and only a
   // whole comparison catches a reordering that puts the path first.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
+  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -734,24 +826,23 @@ static void test_reports_unreadable_source(void) {
 // limit and the size, rather than read whole and turned away by the converter. The file is sparse,
 // so the fixture costs no disk and a read that loaded it would show only as the wrong diagnostic.
 static void test_rejects_oversize_source(void) {
+  const off_t source_len = (off_t)MARKDOWN_INPUT_LEN_MAX + 1;
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len = snprintf(expected, sizeof(expected),
+                                    "failed to read content: exceeds max file size (%zu bytes) at "
+                                    "%jd bytes ('content/hello.md')",
+                                    (size_t)MARKDOWN_INPUT_LEN_MAX, (intmax_t)source_len);
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
   char root_dir_template[] = "/tmp/sosig-entry-oversize-source.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
     return;
   }
 
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", "+++\ntitle = \"Hello\"\n+++\n") ==
-             0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
   struct Arena arena;
   arena_init(&arena);
-  char* source_path = path_join(root_dir, "content/hello.md", &arena);
-  const off_t source_len = (off_t)MARKDOWN_INPUT_LEN_MAX + 1;
-  TEST_CHECK(source_path != NULL && truncate(source_path, source_len) == 0);
-  arena_free(&arena);
-
+  char* source_path = NULL;
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -759,21 +850,35 @@ static void test_rejects_oversize_source(void) {
   struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(
+          write_fixture_file(root_dir, "content/hello.md", "+++\ntitle = \"Hello\"\n+++\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
+  source_path = path_join(root_dir, "content/hello.md", &arena);
+  if (!TEST_CHECK(source_path != NULL)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(truncate(source_path, source_len) == 0)) {
+    goto cleanup;
+  }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
                                   source_entries, &error_buffer) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int n = snprintf(expected, sizeof(expected),
-                         "failed to read content: exceeds max file size (%zu bytes) at %jd bytes "
-                         "('content/hello.md')",
-                         (size_t)MARKDOWN_INPUT_LEN_MAX, (intmax_t)source_len);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
+  arena_free(&arena);
   remove_fixture_tree(root_dir);
 }
 
@@ -801,11 +906,7 @@ static void test_appends_one_error_line_per_failing_source(void) {
       "date = 2026-07-02T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/a.md", first) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "content/b.md", second) == 0);
-  TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0);
-
+  static const char* const sources[] = {"content/a.md", "content/b.md"};
   struct SiteConfig site_config;
   site_config_init(&site_config);
   struct PathList source_paths;
@@ -813,8 +914,19 @@ static void test_appends_one_error_line_per_failing_source(void) {
   struct ContentEntry* source_entries[2] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", first) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/b.md", second) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
 
-  static const char* const sources[] = {"content/a.md", "content/b.md"};
   TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
                             &site_config, &source_paths, source_entries, &error_buffer) == -1);
   // Compared whole, with the separator in the middle: a dropped separator, a lost line, or a
@@ -823,7 +935,9 @@ static void test_appends_one_error_line_per_failing_source(void) {
              strcmp(error_buffer.data,
                     "missing required frontmatter key 'title' (in 'content/a.md')\n"
                     "missing required frontmatter key 'title' (in 'content/b.md')") == 0);
+  TEST_MSG("errors: %s", error_buffer.data != NULL ? error_buffer.data : "");
 
+cleanup:
   entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
