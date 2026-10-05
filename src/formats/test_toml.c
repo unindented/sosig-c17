@@ -283,9 +283,9 @@ static void test_require_known_keys_rejects_unknown_keys(void) {
   static const char* const known_keys[] = {"title", "date"};
   static const char* const cases[][4] = {
       {"{ title = 1, ttile = 2 }", "config", "", "unknown config key 'ttile'"},
-      {"{ corp = true }", "config", "derivatives.m.", "unknown config key 'derivatives.m.corp'"},
       {"{ titl = 1 }", "frontmatter", "", "unknown frontmatter key 'titl'"},
       {"{ titles = 1 }", "frontmatter", "", "unknown frontmatter key 'titles'"},
+      {"{ titel = true }", "frontmatter", "extra.", "unknown frontmatter key 'extra.titel'"},
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
