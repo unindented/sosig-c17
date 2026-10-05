@@ -3,6 +3,7 @@
 
 #include <acutest.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -34,35 +35,47 @@ struct TempConfig {
  * @param site_config  Configuration to render.
  * @param text_out     Buffer that receives the rendered text.
  * @param text_out_len Size of `text_out` in bytes. Must be non-zero.
+ * @return `0` on success, or `-1` after recording a test failure.
  */
-static void render(const struct SiteConfig* site_config, char* text_out, size_t text_out_len) {
+static int render(const struct SiteConfig* site_config, char* text_out, size_t text_out_len) {
   FILE* stream = tmpfile();
-  TEST_ASSERT(stream != NULL);
+  TEST_CHECK(stream != NULL);
   if (stream == NULL) {
-    return;
+    return -1;
   }
-  TEST_CHECK(site_config_print(stream, site_config) == 0);
+  const bool is_printed = TEST_CHECK(site_config_print(stream, site_config) == 0);
   (void)read_capture(stream, text_out, text_out_len);
   const int close_rc = fclose(stream);
-  TEST_CHECK(close_rc == 0);
+  const bool is_closed = TEST_CHECK(close_rc == 0);
+  return is_printed && is_closed ? 0 : -1;
 }
 
 /**
  * @brief Writes TOML to `sosig.toml` in a fresh fixture root.
  *
- * The caller removes the root with `remove_fixture_tree(temp_config_out->root_dir)`.
+ * On success the caller removes the root with `remove_fixture_tree(temp_config_out->root_dir)`. On
+ * failure no fixture is left behind.
  *
  * @param temp_config_out Receives the fixture root and the config path.
  * @param toml            Terminated TOML text to write.
- * @return The config path, which aliases `temp_config_out->path`.
+ * @return The config path, which aliases `temp_config_out->path`, or `NULL` after recording a
+ *         test-plumbing failure.
  */
 static const char* write_temp_config(struct TempConfig* temp_config_out, const char* toml) {
   memcpy(temp_config_out->root_dir, TEMP_CONFIG_ROOT_TEMPLATE, sizeof(TEMP_CONFIG_ROOT_TEMPLATE));
-  TEST_ASSERT(init_fixture_dir(temp_config_out->root_dir) != NULL);
-  TEST_ASSERT(write_fixture_file(temp_config_out->root_dir, "sosig.toml", toml) == 0);
+  if (init_fixture_dir(temp_config_out->root_dir) == NULL) {
+    return NULL;
+  }
   const int n = snprintf(temp_config_out->path, sizeof(temp_config_out->path), "%s/sosig.toml",
                          temp_config_out->root_dir);
-  TEST_ASSERT(n > 0 && (size_t)n < sizeof(temp_config_out->path));
+  if (!TEST_CHECK(n > 0 && (size_t)n < sizeof(temp_config_out->path))) {
+    remove_fixture_tree(temp_config_out->root_dir);
+    return NULL;
+  }
+  if (!TEST_CHECK(write_fixture_file(temp_config_out->root_dir, "sosig.toml", toml) == 0)) {
+    remove_fixture_tree(temp_config_out->root_dir);
+    return NULL;
+  }
   return temp_config_out->path;
 }
 
@@ -83,6 +96,9 @@ static void check_load_rejects(const char* toml_extra, const char* expected) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -116,6 +132,9 @@ static void test_load_applies_required_and_defaults(void) {
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -130,12 +149,17 @@ static void test_load_applies_required_and_defaults(void) {
   TEST_CHECK(strcmp(config.output_dir, "public") == 0);
   TEST_CHECK(strcmp(config.templates_dir, "templates") == 0);
   TEST_CHECK(strcmp(config.content_template, "content.html") == 0);
-  TEST_ASSERT(config.aggregate_template_count == 1);
+  if (!TEST_CHECK(config.aggregate_template_count == 1)) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(config.aggregate_templates[0], "index.html") == 0);
-  TEST_ASSERT(config.feed_template_count == 1);
+  if (!TEST_CHECK(config.feed_template_count == 1)) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(config.feed_templates[0], "atom.xml") == 0);
   TEST_CHECK(config.feed_count == 10);
 
+cleanup:
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
@@ -156,6 +180,9 @@ static void test_load_overrides_optional_keys(void) {
       "feed_count = 5\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -167,12 +194,15 @@ static void test_load_overrides_optional_keys(void) {
   TEST_CHECK(strcmp(config.output_dir, "dist") == 0);
   TEST_CHECK(strcmp(config.templates_dir, "layouts") == 0);
   TEST_CHECK(strcmp(config.content_template, "post.html") == 0);
-  TEST_ASSERT(config.aggregate_template_count == 2);
+  if (!TEST_CHECK(config.aggregate_template_count == 2)) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(config.aggregate_templates[0], "index.html") == 0);
   TEST_CHECK(strcmp(config.aggregate_templates[1], "archive.html") == 0);
   TEST_CHECK(config.feed_template_count == 0);
   TEST_CHECK(config.feed_count == 5);
 
+cleanup:
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
@@ -191,6 +221,9 @@ static void test_load_normalizes_directory_keys(void) {
       "templates_dir = \"../shared/templates/\"\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -227,6 +260,9 @@ static void test_load_normalizes_base_url(void) {
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, toml);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -251,6 +287,9 @@ static void test_load_leaves_directory_overlap_to_the_build(void) {
       "output_dir = \"posts/generated\"\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -283,6 +322,9 @@ static void test_load_accepts_valid_permalinks(void) {
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, toml);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -307,6 +349,9 @@ static void test_load_accepts_zero_feed_count(void) {
       "feed_count = 0\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -345,20 +390,29 @@ static void test_load_rejects_oversize_file(void) {
   enum { CONFIG_FILE_LEN_MAX = 1024 * 1024 };
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, "title = \"Site\"\n");
+  if (config_path == NULL) {
+    return;
+  }
   const off_t config_len = (off_t)CONFIG_FILE_LEN_MAX + 1;
-  TEST_ASSERT(truncate(config_path, config_len) == 0);
-
   struct SiteConfig config;
   site_config_init(&config);
   char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected),
                "failed to read config: exceeds max file size (%d bytes) at %jd bytes ('%s')",
                CONFIG_FILE_LEN_MAX, (intmax_t)config_len, config_path);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(truncate(config_path, config_len) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
   TEST_CHECK(strcmp(err, expected) == 0);
+
+cleanup:
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
@@ -369,19 +423,28 @@ static void test_load_rejects_oversize_file(void) {
 static void test_load_rejects_nul_in_file(void) {
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, "");
+  if (config_path == NULL) {
+    return;
+  }
   static const char config_data[] = "title = \"Site\"\0author = \"Example Author\"\n";
-  TEST_ASSERT(fs_write_file(config_path, config_data, sizeof(config_data) - 1, NULL, 0) == 0);
-
   struct SiteConfig config;
   site_config_init(&config);
   char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
   char expected[ERROR_MESSAGE_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected),
                "failed to read config: contains an embedded NUL byte ('%s')", config_path);
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(fs_write_file(config_path, config_data, sizeof(config_data) - 1, NULL, 0) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
   TEST_CHECK(strcmp(err, expected) == 0);
+
+cleanup:
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
@@ -393,6 +456,9 @@ static void test_load_rejects_malformed_toml(void) {
   const char toml[] = "base_url = \n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -423,6 +489,9 @@ static void test_load_rejects_missing_required_key(void) {
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -442,6 +511,9 @@ static void test_load_rejects_wrong_key_type(void) {
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -475,6 +547,9 @@ static void test_load_rejects_unknown_keys(void) {
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, cases[i][0]);
+    if (config_path == NULL) {
+      continue;
+    }
     struct SiteConfig config;
     site_config_init(&config);
     char err[ERROR_MESSAGE_SIZE] = "";
@@ -503,6 +578,9 @@ static void test_load_rejects_table_values(void) {
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, cases[i][0]);
+    if (config_path == NULL) {
+      continue;
+    }
     struct SiteConfig config;
     site_config_init(&config);
     char err[ERROR_MESSAGE_SIZE] = "";
@@ -542,6 +620,9 @@ static void test_load_rejects_nul_in_string_values(void) {
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, cases[i][0]);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -592,6 +673,9 @@ static void test_load_rejects_relative_base_url(void) {
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, toml);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -666,6 +750,9 @@ static void test_load_rejects_unsafe_permalink(void) {
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, toml);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -708,6 +795,9 @@ static void test_load_rejects_permalink_without_slug(void) {
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
     const char* config_path = write_temp_config(&temp_config, toml);
+    if (config_path == NULL) {
+      continue;
+    }
 
     struct SiteConfig config;
     site_config_init(&config);
@@ -748,6 +838,9 @@ static void test_load_rejects_oversize_permalink(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -806,6 +899,9 @@ static void test_load_rejects_permalink_oversize_in_populated_section(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -851,6 +947,9 @@ static void test_load_rejects_permalink_with_oversize_segment(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -940,7 +1039,7 @@ static void test_print_defaults(void) {
   config.author = "Example Author";
 
   char config_out[1024];
-  render(&config, config_out, sizeof(config_out));
+  TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
 
   // The whole buffer, not a set of per-line searches: only an exact comparison can catch a key that
   // is missing, duplicated, extra, or emitted in the wrong order.
@@ -971,7 +1070,7 @@ static void test_print_escapes_strings(void) {
   config.author = "a\tA\bB\nC\fD\rE\x01Z\x7FG";
 
   char config_out[1024];
-  render(&config, config_out, sizeof(config_out));
+  TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
 
   // Compared whole, so an escape leaking into a neighboring field cannot hide.
   TEST_CHECK(strcmp(config_out,
@@ -1015,10 +1114,14 @@ static void test_print_load_round_trips(void) {
   config.feed_count = 7;
 
   char config_out[2048];
-  render(&config, config_out, sizeof(config_out));
+  TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
 
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, config_out);
+  if (config_path == NULL) {
+    site_config_free(&config);
+    return;
+  }
 
   struct SiteConfig reloaded;
   site_config_init(&reloaded);
@@ -1033,13 +1136,18 @@ static void test_print_load_round_trips(void) {
   TEST_CHECK(strcmp(reloaded.output_dir, config.output_dir) == 0);
   TEST_CHECK(strcmp(reloaded.templates_dir, config.templates_dir) == 0);
   TEST_CHECK(strcmp(reloaded.content_template, config.content_template) == 0);
-  TEST_ASSERT(reloaded.aggregate_template_count == 2);
+  if (!TEST_CHECK(reloaded.aggregate_template_count == 2)) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reloaded.aggregate_templates[0], "index.html") == 0);
   TEST_CHECK(strcmp(reloaded.aggregate_templates[1], "archive.html") == 0);
-  TEST_ASSERT(reloaded.feed_template_count == 1);
+  if (!TEST_CHECK(reloaded.feed_template_count == 1)) {
+    goto cleanup;
+  }
   TEST_CHECK(strcmp(reloaded.feed_templates[0], "atom.xml") == 0);
   TEST_CHECK(reloaded.feed_count == config.feed_count);
 
+cleanup:
   site_config_free(&reloaded);
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
@@ -1058,20 +1166,29 @@ static void test_print_empty_template_arrays(void) {
       "feed_templates = []\n";
   struct TempConfig temp_config;
   const char* config_path = write_temp_config(&temp_config, toml);
+  if (config_path == NULL) {
+    return;
+  }
 
   struct SiteConfig config;
   site_config_init(&config);
   char err[ERROR_MESSAGE_SIZE] = "";
   TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
   TEST_CHECK(err[0] == '\0');
-  TEST_ASSERT(config.aggregate_template_count == 0);
-  TEST_ASSERT(config.feed_template_count == 0);
+  if (!TEST_CHECK(config.aggregate_template_count == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(config.feed_template_count == 0)) {
+    goto cleanup;
+  }
   // The empty array is a distinct non-`NULL` pointer, which the `nonnull` consumers need.
   TEST_CHECK(config.aggregate_templates != NULL);
   TEST_CHECK(config.feed_templates != NULL);
 
   char config_out[1024];
-  render(&config, config_out, sizeof(config_out));
+  if (render(&config, config_out, sizeof(config_out)) != 0) {
+    goto cleanup;
+  }
   // Compared whole: an empty array must print as `[]` and must not disturb its neighbors.
   TEST_CHECK(strcmp(config_out,
                     "base_url = \"https://example.com\"\n"
@@ -1086,6 +1203,7 @@ static void test_print_empty_template_arrays(void) {
                     "feed_templates = []\n"
                     "feed_count = 10\n") == 0);
 
+cleanup:
   site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
