@@ -21,8 +21,8 @@ struct Arena;
  *
  * TOML permits an escape that decodes to `U+0000`, and tomlc17 encodes it as a `NUL` byte inside an
  * otherwise ordinary string value. Copying such a value would break the codebase's text invariant
- * (see `fs_read_file`) and silently truncate the rendered output at the `NUL`, so every caller that
- * turns a TOML string into an owned string checks this first.
+ * (see `text_is_nul_free`) and silently truncate the rendered output at the `NUL`, so every caller
+ * that turns a TOML string into an owned string checks this first.
  *
  * A datum's bytes are borrowed, not owned. `value.u.str.ptr` points into the `toml_result_t`'s own
  * storage and dies with `toml_free`, and `len` excludes the terminator. A caller that stored that

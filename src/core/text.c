@@ -23,6 +23,10 @@ char* text_strdup(const char* text) {
   return copy;
 }
 
+bool text_is_nul_free(const unsigned char* data, size_t data_len) {
+  return data_len == 0 || memchr(data, '\0', data_len) == NULL;
+}
+
 bool text_is_safe_identifier(const char* name) {
   if (name == NULL || *name == '\0') {
     return false;

@@ -34,6 +34,19 @@ static void test_strdup_yields_independent_copy(void) {
   free(empty);
 }
 
+// `text_is_nul_free` accepts arbitrary nonzero bytes and the empty buffer, but rejects a zero at
+// every position rather than relying on C-string termination.
+static void test_nul_free_checks_bounded_bytes(void) {
+  static const unsigned char clean[] = {'a', 0xFF, 'z'};
+  static const unsigned char leading[] = {'\0', 'a'};
+  static const unsigned char trailing[] = {'a', '\0'};
+
+  TEST_CHECK(text_is_nul_free(NULL, 0));
+  TEST_CHECK(text_is_nul_free(clean, sizeof(clean)));
+  TEST_CHECK(!text_is_nul_free(leading, sizeof(leading)));
+  TEST_CHECK(!text_is_nul_free(trailing, sizeof(trailing)));
+}
+
 // `text_is_safe_identifier` accepts only the narrow alphabet used for template partial names, its
 // one caller. Each disallowed class gets its own assertion rather than one input carrying several.
 // A single `"../partial"` passes as long as *either* `.` or `/` is rejected, so it cannot say
@@ -136,6 +149,7 @@ static void test_slugify_reports_length(void) {
 
 TEST_LIST = {
     {"strdup yields independent copy", test_strdup_yields_independent_copy},
+    {"nul free checks bounded bytes", test_nul_free_checks_bounded_bytes},
     {"safe identifier accepts narrow alphabet", test_safe_identifier_accepts_narrow_alphabet},
     {"slugify normalizes and defaults", test_slugify_normalizes_and_defaults},
     {"slugify folds non-ascii distinctly", test_slugify_folds_non_ascii_distinctly},

@@ -24,10 +24,10 @@ static toml_datum_t parse_value(const char* value, toml_result_t* result_out) {
   return toml_get(result_out->toptab, "x");
 }
 
-// A plain string is text. A string carrying a `NUL` decoded from an escape is not. This is one of
-// the two boundaries where external bytes become an owned `NUL`-free C string, so a datum that
-// passes here is one `strlen` can measure. Without the escape case the check would pass for the
-// wrong reason, since no `NUL` can appear literally in a TOML document.
+// A plain string is text. A string carrying a `NUL` decoded from an escape is not. Every caller
+// that turns a TOML string into an owned C string checks this first, so a datum that passes here is
+// one `strlen` can measure. Without the escape case the check would pass for the wrong reason,
+// since no `NUL` can appear literally in a TOML document.
 static void test_is_text_rejects_embedded_nul(void) {
   toml_result_t result;
   TEST_CHECK(toml_datum_is_text(parse_value("\"plain\"", &result)));

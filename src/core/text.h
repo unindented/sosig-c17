@@ -18,6 +18,19 @@ struct Arena;
 char* text_strdup(const char* text) __attribute__((nonnull(1)));
 
 /**
+ * @brief Reports whether a byte buffer contains no embedded `NUL` byte.
+ *
+ * Text boundaries call this to establish the codebase's `NUL`-free text invariant: `fs_read_file`
+ * for file contents and `toml_datum_is_text` for a decoded TOML string. A zero-length buffer is
+ * text regardless of the pointer value.
+ *
+ * @param data     Bytes to inspect. May be `NULL` only when `data_len` is 0.
+ * @param data_len Number of bytes to inspect.
+ * @return `true` when none of the bytes is zero, or `false` otherwise.
+ */
+bool text_is_nul_free(const unsigned char* data, size_t data_len);
+
+/**
  * @brief Reports whether `name` contains only safe template identifier bytes.
  *
  * A safe identifier is non-empty and made up only of ASCII alphanumerics, `_`, and `-`.

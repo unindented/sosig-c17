@@ -692,7 +692,7 @@ static int fs_read_file_bytes(char* data,
   }
   // Text is the only thing this program reads, and the whole codebase recovers lengths with
   // `strlen`. A `NUL` here would silently truncate the rendered output instead.
-  if (rc == 0 && memchr(data, '\0', nread) != NULL) {
+  if (rc == 0 && !text_is_nul_free((const unsigned char*)data, nread)) {
     (void)error_report(reason, reason_len, "contains an embedded NUL byte");
     rc = -1;
   }

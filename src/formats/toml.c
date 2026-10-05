@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "core/error.h"
+#include "core/text.h"
 #include "shared/arena.h"
 
 /**
@@ -50,7 +51,7 @@ bool toml_datum_is_text(toml_datum_t value) {
   // tomlc17 terminates the string but excludes that terminator from `len`, so scanning exactly
   // `len` bytes finds only a `NUL` that the parser decoded from an escape.
   return value.type == TOML_STRING &&
-         memchr(value.u.str.ptr, '\0', (size_t)value.u.str.len) == NULL;
+         text_is_nul_free((const unsigned char*)value.u.str.ptr, (size_t)value.u.str.len);
 }
 
 int toml_datum_to_epoch(toml_datum_t value, int64_t* epoch_out) {
