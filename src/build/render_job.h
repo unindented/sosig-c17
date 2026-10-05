@@ -10,8 +10,8 @@
 struct StringBuffer;
 
 /**
- * Error slot for one content page render job. `page_renderer_render_pages` allocates the slots, and
- * each job records `error_message` on failure.
+ * Error slot for one render job. The caller allocates the slots, and each job records
+ * `error_message` on failure.
  */
 struct RenderJob {
   /** Render job error reported after the workers finish. */
@@ -37,7 +37,7 @@ enum { RENDER_JOB_ERROR_REPORT_COUNT_MAX = 20 };
  * @brief Runs one render pass across the worker pool, reports progress, and collects its
  *        diagnostics.
  *
- * The page phase runs one job per result slot, so a job index is also its slot index. It runs
+ * Each run executes one job per result slot, so a job index is also its slot index. It runs
  * `render_jobs->count` jobs. `job_fn` writes only its own slot. This function reads every slot's
  * `error_message` after the pool joins and appends each distinct one to `error_out` as its own
  * line, at most `RENDER_JOB_ERROR_REPORT_COUNT_MAX` of them, followed by a count of the remaining

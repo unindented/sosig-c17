@@ -6,7 +6,7 @@
 struct ContentEntry;
 struct SiteConfig;
 
-// These are declared in the order `cmd_build` runs them. The manifest pass in `manifest_builder`
+// These are declared in the order `cmd_build` runs them. The manifest phase in `manifest_builder`
 // claims every intended output path before this module writes anything. Content pages are written
 // earlier, by `page_renderer_render_pages`. Ordering the entries and deriving `site.updated` happen
 // earlier still, in `content_entry` (`content_entry_sort`, `content_entry_latest_date`).

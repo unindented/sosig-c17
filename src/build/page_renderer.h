@@ -21,8 +21,8 @@ struct StringBuffer;
  * held in memory. `NULL` slots are skipped. A failed write is that entry's diagnostic, like a
  * failed render, and leaves the other pages written. Each finished job reports progress when
  * `is_verbose`. Failing jobs' diagnostics go to `error_out` one per line, each distinct message
- * once, up to `RENDER_JOB_ERROR_REPORT_COUNT_MAX` of them plus a count of the rest, so the caller
- * reports them at a single boundary.
+ * once, up to `JOB_ERROR_REPORT_COUNT_MAX` of them plus a count of the rest, so the caller reports
+ * them at a single boundary.
  *
  * Call this only after `manifest_builder_populate` accepts every output path. Jobs write
  * concurrently, and the manifest is what guarantees that no two of them target the same file.

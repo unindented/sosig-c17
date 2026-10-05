@@ -22,7 +22,7 @@
 /** Largest generated file a test reads back, in bytes. Fixture outputs are a few kilobytes. */
 enum { TEST_FILE_LEN_MAX = 1024 * 1024 };
 
-/** Config body every fixture shares. It turns off the aggregate and feed passes. */
+/** Config body every fixture shares. It configures no aggregate or feed templates. */
 static const char* const SITE_CONFIG =
     "base_url = \"https://example.com\"\n"
     "title = \"Site\"\n"
@@ -519,7 +519,7 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
 // A caller-supplied `worker_count` reaches every pool instead of being replaced by the detected
 // default. A build with it produces the same bytes as the default build. The resolved count is not
 // observable from the return value, so it is read off the verbose phase lines, which are the only
-// place the module reports it. Each parallel pass closes with its one-job progress line.
+// place the module reports it. Each parallel phase closes with its one-job progress line.
 static void test_honors_requested_worker_count(void) {
   char root_dir_template[] = "/tmp/sosig-build-workers.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);

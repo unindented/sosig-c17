@@ -51,7 +51,7 @@ static int compare_content_entries(const void* a, const void* b) {
   if (pb->date_epoch < pa->date_epoch) {
     return -1;
   }
-  // The manifest pass later proves that output paths are distinct. A duplicate can compare equal
+  // The manifest phase later proves that output paths are distinct. A duplicate can compare equal
   // here, but that build fails before rendering a template.
   return strcmp(pa->output_path, pb->output_path);
 }

@@ -15,7 +15,7 @@ if(SOSIG_BUILD_TESTING)
   )
     sosig_add_unit_test(${module})
   endforeach()
-  # The entry- and page-renderer tests share the helpers that drive both render passes.
+  # The entry- and page-renderer tests share the helpers that drive both parallel phases.
   target_sources(sosig_unit_entry_renderer PRIVATE test_render_support.c)
   target_sources(sosig_unit_page_renderer PRIVATE test_render_support.c)
 endif()

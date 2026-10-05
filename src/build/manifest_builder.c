@@ -118,11 +118,11 @@ struct InputRoots {
  *
  * The whole template tree is claimed rather than the configured template names, because partials
  * are inputs too. `template.c` resolves them lazily during the render, from names that only appear
- * inside a template's bytes, so no pass that runs before the first write can enumerate the partials
- * a build will read. Claiming every file below `templates_dir` covers them without that list, so an
- * output path aimed inside `templates_dir/partials/` is rejected. It also covers every configured
- * template, the content template, aggregate and feed templates, and entry overrides alike, because
- * each is a safe relative name joined below `templates_dir`.
+ * inside a template's bytes, so no phase that runs before the first write can enumerate the
+ * partials a build will read. Claiming every file below `templates_dir` covers them without that
+ * list, so an output path aimed inside `templates_dir/partials/` is rejected. It also covers every
+ * configured template, the content template, aggregate and feed templates, and entry overrides
+ * alike, because each is a safe relative name joined below `templates_dir`.
  *
  * This skips a path with no identity rather than refusing it. A missing configuration file or
  * source cannot be overwritten, and neither can a missing `templates_dir`, which claims nothing.

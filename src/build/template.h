@@ -8,7 +8,7 @@ struct SiteConfig;
 
 /**
  * Borrowed data visible to templates during one render call. Every pointer is `const`, and that is
- * a thread-safety invariant. During the page pass every worker holds pointers to every entry, and
+ * a thread-safety invariant. During the page phase every worker holds pointers to every entry, and
  * the `const` stops one job allocating into another job's arena. Do not relax it to add a mutable
  * field.
  */

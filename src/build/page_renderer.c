@@ -4,17 +4,15 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-#include "build/render_job.h"
+#include "build/job.h"
 #include "build/template.h"
 #include "core/error.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
-#include "shared/string_buffer.h"
 
 /**
- * Worker context shared by all content entry page render jobs. Every field is read-only to a job
- * except `render_jobs`, where each job writes its own error slot.
+ * Worker context shared by all content entry page render jobs. Every field is read-only to a job.
  */
 struct ContentEntryPageContext {
   /**
@@ -32,22 +30,24 @@ struct ContentEntryPageContext {
 
   /** One entry slot per source path, or `NULL` where no entry was parsed. No entry is written. */
   const struct ContentEntry* const* source_entries;
-
-  /** One error slot per source path. Each render job writes only its index. */
-  struct RenderJob* render_jobs;
 };
 
 /**
- * @brief Renders one parsed content entry's content template and writes it as a worker-pool job.
+ * @brief Renders one parsed content entry's content template and writes its page.
  *
- * Frees the rendered HTML once it is written. A slot left `NULL` by a draft or by a source that was
- * never parsed is skipped.
+ * This is the `JobFn` of the page phase, so it runs concurrently with other indexes and writes only
+ * its own page and its own error slot. Frees the rendered HTML once it is written. A slot left
+ * `NULL` by a draft or by a source that was never parsed is skipped.
  *
+ * @param jobs     Running job set, whose error slot for `index` the job may fill through
+ *                 `job_set_error`. Must not be `NULL`.
  * @param index    Entry slot index this job renders.
  * @param userdata Pointer to the shared `struct ContentEntryPageContext`. Must not be `NULL`.
- * @return `0` on success or a skipped slot, or `-1` on a render or write failure.
+ * @return `0` on success, or a skipped slot, or `-1` after recording the failure through
+ *         `job_set_error`.
  */
-static int render_content_page_job(size_t index, void* userdata) __attribute__((nonnull(2)));
+static int render_content_page_job(struct JobSet* jobs, size_t index, void* userdata)
+    __attribute__((nonnull(1, 3)));
 
 /**
  * @brief Renders one content entry through its configured content template.
@@ -57,14 +57,15 @@ static int render_content_page_job(size_t index, void* userdata) __attribute__((
  *                      not be `NULL`.
  * @param html_len_out  Receives the length of the returned HTML in bytes on success. Must not be
  *                      `NULL`.
- * @param result        Result slot that receives an error message on failure. Must not be `NULL`.
+ * @param jobs          Running job set receiving the failure. Must not be `NULL`.
+ * @param index         Job index whose error slot receives the failure.
  * @return Terminated HTML the caller must `free`, or `NULL` on render failure.
  */
 static char* render_content_page_template(const char* templates_dir,
                                           const struct TemplateContext* context,
                                           size_t* html_len_out,
-                                          struct RenderJob* result)
-    __attribute__((nonnull(1, 2, 3, 4)));
+                                          struct JobSet* jobs,
+                                          size_t index) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
  * @brief Writes one content entry's rendered HTML to its output path.
@@ -76,14 +77,15 @@ static char* render_content_page_template(const char* templates_dir,
  * @param entry             Entry whose `output_path` receives the page. Must not be `NULL`.
  * @param rendered_html     Page HTML to write. Must not be `NULL`.
  * @param rendered_html_len Number of bytes in `rendered_html`.
- * @param result            Result slot that receives an error message on failure. Must not be
- *                          `NULL`.
+ * @param jobs              Running job set receiving the failure. Must not be `NULL`.
+ * @param index             Job index whose error slot receives the failure.
  * @return `0` on success, or `-1` on a write failure.
  */
 static int render_content_page_write(const struct ContentEntry* entry,
                                      const char* rendered_html,
                                      size_t rendered_html_len,
-                                     struct RenderJob* result) __attribute__((nonnull(1, 2, 4)));
+                                     struct JobSet* jobs,
+                                     size_t index) __attribute__((nonnull(1, 2, 4)));
 
 int page_renderer_render_pages(const struct SiteConfig* site_config,
                                const struct ContentEntry* const* source_entries,
@@ -94,12 +96,6 @@ int page_renderer_render_pages(const struct SiteConfig* site_config,
                                size_t worker_count,
                                bool is_verbose,
                                struct StringBuffer* error_out) {
-  struct RenderJobSet render_jobs = {.count = source_entry_count};
-  render_jobs.items = calloc(source_entry_count, sizeof(*render_jobs.items));
-  if (render_jobs.items == NULL && source_entry_count > 0) {
-    (void)string_buffer_append(error_out, "out of memory allocating content page render results");
-    return -1;
-  }
   struct ContentEntryPageContext page_context = {
       .base_context =
           {
@@ -111,18 +107,13 @@ int page_renderer_render_pages(const struct SiteConfig* site_config,
           },
       .templates_dir = site_config->templates_dir,
       .source_entries = source_entries,
-      .render_jobs = render_jobs.items,
   };
-
-  const int rc = render_job_run(&render_jobs, worker_count, render_content_page_job, &page_context,
-                                "rendering content", is_verbose, error_out);
-  render_job_set_free(&render_jobs);
-  return rc;
+  return job_run(source_entry_count, worker_count, render_content_page_job, &page_context,
+                 "rendering content", is_verbose, error_out);
 }
 
-static int render_content_page_job(size_t index, void* userdata) {
+static int render_content_page_job(struct JobSet* jobs, size_t index, void* userdata) {
   struct ContentEntryPageContext* page_context = userdata;
-  struct RenderJob* result = &page_context->render_jobs[index];
   const struct ContentEntry* entry = page_context->source_entries[index];
 
   int rc = 0;
@@ -138,9 +129,9 @@ static int render_content_page_job(size_t index, void* userdata) {
     context.content_entry_current = entry;
     size_t rendered_html_len = 0;
     char* rendered_html = render_content_page_template(page_context->templates_dir, &context,
-                                                       &rendered_html_len, result);
+                                                       &rendered_html_len, jobs, index);
     rc = rendered_html != NULL
-             ? render_content_page_write(entry, rendered_html, rendered_html_len, result)
+             ? render_content_page_write(entry, rendered_html, rendered_html_len, jobs, index)
              : -1;
     free(rendered_html);
   }
@@ -150,7 +141,8 @@ static int render_content_page_job(size_t index, void* userdata) {
 static char* render_content_page_template(const char* templates_dir,
                                           const struct TemplateContext* context,
                                           size_t* html_len_out,
-                                          struct RenderJob* result) {
+                                          struct JobSet* jobs,
+                                          size_t index) {
   const struct ContentEntry* entry = context->content_entry_current;
   const char* template_name =
       entry->template != NULL ? entry->template : context->site_config->content_template;
@@ -162,7 +154,7 @@ static char* render_content_page_template(const char* templates_dir,
     // Parenthesize the attribution. The callee's message may itself end in a `: <reason>` clause. A
     // bare `for '%s'` suffix would read as part of that reason rather than as the entry the render
     // was for.
-    render_job_set_error(result, "%s (while rendering '%s')", error_message, entry->source_path);
+    job_set_error(jobs, index, "%s (while rendering '%s')", error_message, entry->source_path);
   }
   return rendered_html;
 }
@@ -170,12 +162,13 @@ static char* render_content_page_template(const char* templates_dir,
 static int render_content_page_write(const struct ContentEntry* entry,
                                      const char* rendered_html,
                                      size_t rendered_html_len,
-                                     struct RenderJob* result) {
+                                     struct JobSet* jobs,
+                                     size_t index) {
   char reason[FS_REASON_SIZE];
   if (fs_write_file(entry->output_path, rendered_html, rendered_html_len, reason, sizeof(reason)) !=
       0) {
-    render_job_set_error(result, "failed to write output: %s (for '%s', to '%s')", reason,
-                         entry->source_path, entry->output_path);
+    job_set_error(jobs, index, "failed to write output: %s (for '%s', to '%s')", reason,
+                  entry->source_path, entry->output_path);
     return -1;
   }
   return 0;

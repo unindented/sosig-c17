@@ -29,11 +29,11 @@ struct FsIdentity {
  *
  * These actions report a reason fragment, not a whole diagnostic, because the caller owns the
  * operation and the attribution. One failed `fs_write_file` is `failed to write output` from the
- * content pass and `failed to write template output` from the aggregate and feed passes.
- * First-party fragments are lowercase and unquoted. Operating-system messages keep their original
- * spelling. Both compose as `<caller's operation>: <reason>`, with any unbounded path trailing the
- * reason, never leading it. `ERROR_MESSAGE_SIZE` is smaller than a path may be, so a leading path
- * would truncate the cause off the end. This is sized for a system message plus a directory path of
+ * page phase and `failed to write template output` from the aggregate and feed phases. First-party
+ * fragments are lowercase and unquoted. Operating-system messages keep their original spelling.
+ * Both compose as `<caller's operation>: <reason>`, with any unbounded path trailing the reason,
+ * never leading it. `ERROR_MESSAGE_SIZE` is smaller than a path may be, so a leading path would
+ * truncate the cause off the end. This is sized for a system message plus a directory path of
  * ordinary depth, because the caller cannot name the failing component. Only the walk knows how
  * deep it got.
  */

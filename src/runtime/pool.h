@@ -30,7 +30,7 @@ size_t pool_resolve_worker_count(void);
  * successfully.
  *
  * `pool_run` joins every worker it started before it returns. Once it returns, the caller may read
- * whatever the jobs wrote with no further synchronization. `render_job.c` reads its result slots
+ * whatever the jobs wrote with no further synchronization. `job.c` reads its error slots
  * unsynchronized after the run, and `cmd_build.c` reasons from it about `stderr` interleaving.
  * Detaching the workers, or returning before the join, would make those claims false while this
  * contract still looked satisfied.
@@ -41,7 +41,7 @@ size_t pool_resolve_worker_count(void);
  *                     threads, so it must be thread-safe. Must not be `NULL`.
  * @param userdata     Opaque pointer forwarded to every `job_fn` call. Every worker receives the
  *                     same pointer, so any mutation through it is the caller's to make safe. The
- *                     render passes partition by index, one result slot per job.
+ *                     parallel phases partition by index, one result slot per job.
  * @return `0` when every job succeeded, or `-1` if any job failed or no worker could be created.
  */
 int pool_run(size_t job_count, size_t worker_count, PoolJobFn job_fn, void* userdata)

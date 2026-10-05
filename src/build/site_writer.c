@@ -23,7 +23,7 @@
  * @param output_dir    Output directory the template name is rooted under. Must not be `NULL`.
  * @param template_name Safe relative template name to render. `manifest_builder_populate` already
  *                      checked it against the output-path limits, because every call site runs the
- *                      manifest pass over the same configured lists first. This pass does not
+ *                      manifest phase over the same configured lists first. This function does not
  *                      re-check, so an overlong name reaching here fails as an opaque write error
  *                      from the OS rather than with a diagnostic naming the limit. Must not be
  *                      `NULL`.

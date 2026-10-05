@@ -28,10 +28,10 @@ enum { SLUG_LEN_MAX = FILENAME_LEN_MAX - (sizeof(".html") - 1) };
  * is heap-owned by the entry, so an entry stays valid until `content_entry_free`. Nothing borrows
  * from the source buffer, which the parse job frees before it returns.
  *
- * The parse pass fills every field. The page, aggregate and feed passes only read. That is a
- * thread-safety invariant. During the page pass every worker holds pointers to every entry, so a
+ * The parse phase fills every field. The page, aggregate and feed phases only read. That is a
+ * thread-safety invariant. During the page phase every worker holds pointers to every entry, so a
  * write would race, and allocating from `arena` would put one job's bytes in another job's arena.
- * Do not add a field that a later pass fills in place.
+ * Do not add a field that a later phase fills in place.
  */
 struct ContentEntry {
   /** Owns copied metadata and generated strings for this content entry. */
@@ -77,8 +77,8 @@ struct ContentEntry {
   /**
    * Rendered HTML body, heap-owned by the entry and released by `content_entry_free`. It is the
    * Markdown conversion's own buffer, adopted rather than copied into `arena`, so a large body is
-   * never resident twice. Never `NULL` on an entry the page pass sees. A draft, or an entry that
-   * failed any step, is freed before its result slot is filled, so no half-built entry is ever
+   * never resident twice. Never `NULL` on an entry the page phase sees. A draft, or an entry that
+   * failed any step, is freed before its entry slot is filled, so no half-built entry is ever
    * published.
    */
   char* body_html;
@@ -126,8 +126,8 @@ void content_entry_free(struct ContentEntry* entry) __attribute__((nonnull(1)));
  * @brief Sorts content entries by newest date, then output path.
  *
  * Orders the array in place so templates see the newest entries first. Because output paths are
- * distinct in any build that gets past the manifest pass, the ordering is total and does not depend
- * on how `qsort` happens to arrange equal-comparing elements.
+ * distinct in any build that gets past the manifest phase, the ordering is total and does not
+ * depend on how `qsort` happens to arrange equal-comparing elements.
  *
  * @param content_entries     Array of content entry pointers to sort in place. Each entry must have
  *                            `date_epoch` and `output_path` set. May be `NULL` only when
