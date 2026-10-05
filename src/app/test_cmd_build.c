@@ -801,6 +801,48 @@ static void test_reports_unusable_output_dir(void) {
   remove_fixture_tree(root_dir);
 }
 
+// An `output_dir` that is a dangling symlink is reported once the manifest has passed, where the
+// build creates `output_dir`, before any page is written. A dangling symlink has no identity, so
+// the manifest sees nothing there, and `fs_mkdir_p` then fails the `stat` that follows `mkdir`'s
+// `EEXIST`. The message is compared whole.
+static void test_reports_dangling_output_dir_symlink(void) {
+  char root_dir_template[] = "/tmp/sosig-build-output-symlink.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  TEST_ASSERT(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0);
+  // `public` is the default `output_dir`, so a dangling symlink there is what makes `fs_mkdir_p`
+  // fail.
+  struct Arena arena;
+  arena_init(&arena);
+  char* output_dir = path_join(root_dir, "public", &arena);
+  TEST_ASSERT(output_dir != NULL);
+  if (output_dir == NULL) {
+    arena_free(&arena);
+    return;
+  }
+  TEST_ASSERT(symlink("missing", output_dir) == 0);
+
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  char reason[FS_REASON_SIZE];
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected),
+               "failed to prepare output directory: cannot inspect directory: %s ('public')",
+               error_system_message(reason, sizeof(reason), ENOENT));
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_MSG("actual: '%s'", error_buffer.data != NULL ? error_buffer.data : "");
+  string_buffer_free(&error_buffer);
+  arena_free(&arena);
+
+  remove_fixture_tree(root_dir);
+}
+
 // An `output_dir` below `content_dir` is refused before content is discovered, so no earlier
 // build's output can be read back as a source, and it is refused although it does not exist yet.
 // The verbose phase lines show that the build stopped before the content walk, and the refused
@@ -1078,6 +1120,7 @@ TEST_LIST = {
     {"reports absent templates dir", test_reports_absent_templates_dir},
     {"reports templates dir that is a file", test_reports_templates_dir_that_is_a_file},
     {"reports unusable output dir", test_reports_unusable_output_dir},
+    {"reports dangling output dir symlink", test_reports_dangling_output_dir_symlink},
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
     {"reports unparsable content", test_reports_unparsable_content},
     {"rejects duplicate output", test_rejects_duplicate_output},
