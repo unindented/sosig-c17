@@ -12,11 +12,11 @@ struct StringBuffer;
 /**
  * @brief Turns every discovered content source into a rendered `ContentEntry`.
  *
- * This is the first of the two parallel phases. Each job reads its source, splits and parses the
- * frontmatter, converts the Markdown body to HTML, and finalizes the entry's URL and output paths.
- * It deliberately leaves page rendering to `page_renderer_render_pages`, because a content template
- * can read `site.updated` and `content_entries`, and neither is known until every entry is parsed
- * and sorted.
+ * This is the first of the two parallel phases. When `source_paths->count` is 0, it runs no job and
+ * returns `0`. Each job reads its source, splits and parses the frontmatter, converts the Markdown
+ * body to HTML, and finalizes the entry's URL and output paths. It deliberately leaves page
+ * rendering to `page_renderer_render_pages`, because a content template can read `site.updated` and
+ * `content_entries`, and neither is known until every entry is parsed and sorted.
  *
  * One job runs per source path and fills that path's slot in `source_entries` with a rendered
  * `ContentEntry` on success. It parses draft entries but does not publish them, so their slot stays

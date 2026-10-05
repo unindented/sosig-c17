@@ -279,10 +279,9 @@ static void test_nests_output_under_slugified_sections(void) {
   remove_fixture_tree(root_dir);
 }
 
-// Both parallel phases accept an empty site. Its entry slot array may be `NULL`, as
-// `calloc(0, ...)` may return in the build, and `job_run` allocates error slots whose count is 0,
-// for which `calloc(0, ...)` may also return `NULL`. Neither may be reported as an allocation
-// failure.
+// Both parallel phases accept an empty site. Its entry slot array may be `NULL`, which each phase's
+// contract allows for a count of 0, and `job_run` allocates error slots whose count is 0, for which
+// `calloc(0, ...)` may also return `NULL`. Neither may be reported as an allocation failure.
 static void test_accepts_empty_site(void) {
   struct SiteConfig site_config;
   site_config_init(&site_config);

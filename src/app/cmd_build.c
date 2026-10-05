@@ -135,14 +135,16 @@ static int require_read_roots(const struct BuildState* state, char* err, size_t 
 /**
  * @brief Parses every discovered content entry source, dispatching jobs across worker threads.
  *
- * Allocates `source_entries`, one slot per source path, before the parse phase fills it.
+ * Allocates `source_entries`, one slot per source path, before the parse phase fills it. A site
+ * with no sources skips the phase, so it prints no status line and starts no pool. `source_entries`
+ * then stays `NULL`.
  *
  * @param state     Build state holding the sources, whose `source_entries` receives the parsed
  *                  entries. Must not be `NULL`.
  * @param error_out Growable buffer that receives the collected parse diagnostics. Must not be
  *                  `NULL`.
- * @return `0` when every job succeeded, or `-1` when the slots could not be allocated or any parse
- *         job failed.
+ * @return `0` when every job succeeded or there are no sources, or `-1` when the slots could not be
+ *         allocated or any parse job failed.
  */
 static int render_content_entries(struct BuildState* state, struct StringBuffer* error_out)
     __attribute__((nonnull(1, 2)));
@@ -206,12 +208,13 @@ static int prepare_output_dir(const struct BuildState* state, char* err, size_t 
  * @brief Renders and writes every content entry's page, dispatching jobs across worker threads.
  *
  * Runs after the entries are collected and sorted, so a content template sees the whole entry set
- * and the site's last-updated timestamp. Runs after the manifest, so no two jobs write one file.
+ * and the site's last-updated timestamp. Runs after the manifest, so no two jobs write one file. A
+ * site with no sources skips the phase, so it prints no status line and starts no pool.
  *
  * @param state     Build state holding the parsed and sorted entries. Must not be `NULL`.
  * @param error_out Growable buffer that receives the collected render diagnostics. Must not be
  *                  `NULL`.
- * @return `0` when every job succeeded, or `-1` when any render job failed.
+ * @return `0` when every job succeeded or there are no sources, or `-1` when any render job failed.
  */
 static int render_content_pages(struct BuildState* state, struct StringBuffer* error_out)
     __attribute__((nonnull(1, 2)));
@@ -385,10 +388,10 @@ static int require_read_roots(const struct BuildState* state, char* err, size_t 
 }
 
 static int render_content_entries(struct BuildState* state, struct StringBuffer* error_out) {
+  if (state->source_paths.count == 0) {
+    return 0;
+  }
   build_verbose(state, "parsing content, workers: %zu", state->worker_count);
-  // `calloc` fails rather than wrapping when the product overflows, so it carries the bound. It may
-  // also return `NULL` for an empty site, which is not a failure, because the parse phase then runs
-  // no job.
   state->source_entries = calloc(state->source_paths.count, sizeof(*state->source_entries));
   if (state->source_entries == NULL && state->source_paths.count > 0) {
     (void)string_buffer_append(error_out, "out of memory allocating content entry slots");
@@ -460,6 +463,9 @@ static int prepare_output_dir(const struct BuildState* state, char* err, size_t 
 }
 
 static int render_content_pages(struct BuildState* state, struct StringBuffer* error_out) {
+  if (state->source_paths.count == 0) {
+    return 0;
+  }
   build_verbose(state, "rendering content, workers: %zu", state->worker_count);
   return page_renderer_render_pages(
       &state->site_config, (const struct ContentEntry* const*)state->source_entries,

@@ -11,10 +11,11 @@ struct StringBuffer;
 /**
  * @brief Renders each parsed content entry through its content template and writes its page.
  *
- * This is the second of the two parallel phases. It runs only after `entry_renderer_render_entries`
- * succeeds and the entries are collected and sorted. Every entry's template sees the whole sorted
- * entry set and the site's last-updated timestamp, so a content template resolves `site.updated`
- * and `{{#content_entries}}` exactly as an aggregate template does.
+ * This is the second of the two parallel phases. When `source_entry_count` is 0, it runs no job and
+ * returns `0`. It runs only after `entry_renderer_render_entries` succeeds and the entries are
+ * collected and sorted. Every entry's template sees the whole sorted entry set and the site's
+ * last-updated timestamp, so a content template resolves `site.updated` and `{{#content_entries}}`
+ * exactly as an aggregate template does.
  *
  * One job runs per slot of `source_entries`. Each job writes its entry's page to the entry's
  * `output_path` and frees the HTML before the next job starts, so at most one page per worker is

@@ -586,6 +586,38 @@ static void test_honors_requested_worker_count(void) {
   remove_fixture_tree(root_dir);
 }
 
+// A site with no content sources skips the parse and render phases, so the verbose log carries no
+// status or progress line for either. A phase with no jobs returns before it prints, so an empty
+// site does not report a worker count for work it never starts.
+static void test_skips_empty_phases_in_verbose_output(void) {
+  char root_dir_template[] = "/tmp/sosig-build-empty.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  TEST_ASSERT(write_site_fixture(root_dir, NULL) == 0);
+  // A file that is not a source keeps `content_dir` present while the site holds no sources.
+  TEST_ASSERT(write_fixture_file(root_dir, "content/notes.txt", "not a source\n") == 0);
+
+  const struct BuildOptions options = {.worker_count = 3, .is_verbose = true};
+  char stdout_out[ERROR_MESSAGE_SIZE];
+  char stderr_out[ERROR_MESSAGE_SIZE * 4];
+  TEST_CHECK(run_build_capturing(root_dir, &options, stdout_out, sizeof(stdout_out), stderr_out,
+                                 sizeof(stderr_out)) == EXIT_CODE_OK);
+  TEST_CHECK(stdout_out[0] == '\0');
+  TEST_CHECK(strcmp(stderr_out,
+                    "loading config\n"
+                    "discovering content\n"
+                    "collecting content entries\n"
+                    "building output manifest\n"
+                    "rendering aggregate templates\n"
+                    "rendering feed templates\n"
+                    "build complete\n") == 0);
+  TEST_MSG("actual: '%s'", stderr_out);
+
+  remove_fixture_tree(root_dir);
+}
+
 // A build that succeeds leaves the collected diagnostic buffer empty, which is the other half of
 // `cmd_build_execute`'s `error_out` contract. Without this a phase that appended to `error_out` on
 // the success path would go unnoticed, since every other test that inspects the buffer is a failure
@@ -1112,6 +1144,7 @@ TEST_LIST = {
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
     {"honors requested worker count", test_honors_requested_worker_count},
+    {"skips empty phases in verbose output", test_skips_empty_phases_in_verbose_output},
     {"leaves error buffer empty on success", test_leaves_error_buffer_empty_on_success},
     {"run prints diagnostic once and fails", test_run_prints_diagnostic_once_and_fails},
     {"rejects unsafe permalink", test_rejects_unsafe_permalink},
