@@ -473,6 +473,67 @@ static void test_rejects_input_overwrite(void) {
   remove_fixture_tree(root_dir);
 }
 
+// The input check finds an aimed-at source wherever it falls among many claimed inputs, and still
+// accepts an existing output that is not an input. The sources are created in reverse name order,
+// so the order they are claimed in differs from the order their identities sort in. Each aimed-at
+// output is a hard link to its source, for the reason `test_rejects_input_overwrite` gives.
+static void test_rejects_input_overwrite_among_many_inputs(void) {
+  enum { SOURCE_COUNT = 32 };
+  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
+  struct Arena arena;
+  arena_init(&arena);
+  struct SiteConfig config;
+  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
+  TEST_ASSERT(write_fixture_file(root_dir, "public/existing.html", "output") == 0);
+  char* existing_output = path_join(config.output_dir, "existing.html", &arena);
+  TEST_ASSERT(existing_output != NULL);
+  for (size_t i = SOURCE_COUNT; i > 0; i--) {
+    char relative[32];
+    (void)snprintf(relative, sizeof(relative), "content/%02zu.md", i - 1);
+    TEST_ASSERT(write_fixture_file(root_dir, relative, "source") == 0);
+  }
+  struct PathList sources;
+  path_list_init(&sources);
+  for (size_t i = 0; i < SOURCE_COUNT; i++) {
+    char name[16];
+    (void)snprintf(name, sizeof(name), "%02zu.md", i);
+    char* source_path = path_join(config.content_dir, name, &arena);
+    TEST_ASSERT(source_path != NULL && path_list_push(&sources, source_path) == 0);
+  }
+
+  static const size_t targets[] = {0, SOURCE_COUNT / 2, SOURCE_COUNT - 1};
+  for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++) {
+    const char* target = sources.items[targets[i]];
+    char name[16];
+    (void)snprintf(name, sizeof(name), "%02zu.html", targets[i]);
+    char* output = path_join(config.output_dir, name, &arena);
+    TEST_ASSERT(output != NULL && link(target, output) == 0);
+    // The existing output comes first, so a lookup that wrongly matched it would name it instead.
+    struct ContentEntry existing = {.output_path = existing_output, .source_path = "content/x.md"};
+    struct ContentEntry aimed = {.output_path = output, .source_path = target};
+    const struct ContentEntry* entries[] = {&existing, &aimed};
+    struct Manifest manifest;
+    manifest_init(&manifest);
+    char err[ERROR_MESSAGE_SIZE] = "";
+
+    TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &sources, entries, 2, err,
+                                         sizeof(err)) == -1);
+    char expected[ERROR_MESSAGE_SIZE];
+    const int expected_len =
+        snprintf(expected, sizeof(expected),
+                 "output path would overwrite build input for '%s': '%s'", target, output);
+    TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+    TEST_CHECK(strcmp(err, expected) == 0);
+    TEST_MSG("target %zu: '%s'", targets[i], err);
+    manifest_free(&manifest);
+  }
+
+  path_list_free(&sources);
+  site_config_free(&config);
+  arena_free(&arena);
+  remove_fixture_tree(root_dir);
+}
+
 // The config file is an input like any other, so an output path naming it is rejected. Without this
 // the build would overwrite the file that configured it and still report success: `output_dir` at
 // the project root plus an aggregate template named `sosig.toml` is all it takes, and the loss is
@@ -901,6 +962,7 @@ TEST_LIST = {
     {"rejects prefix collision", test_rejects_prefix_collision},
     {"rejects duplicate template", test_rejects_duplicate_template},
     {"rejects input overwrite", test_rejects_input_overwrite},
+    {"rejects input overwrite among many inputs", test_rejects_input_overwrite_among_many_inputs},
     {"rejects config overwrite", test_rejects_config_overwrite},
     {"rejects template overwrite", test_rejects_template_overwrite},
     {"check output dir rejects dir in input root", test_check_output_dir_rejects_dir_in_input_root},
