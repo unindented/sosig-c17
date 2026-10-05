@@ -764,39 +764,6 @@ static void test_run_prints_diagnostic_once_and_fails(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A permalink that would expand to a path escaping the output directory is rejected at config load,
-// so the build reports it once rather than once per content entry.
-static void test_rejects_unsafe_permalink(void) {
-  char root_dir_template[] = "/tmp/sosig-build-unsafe-permalink.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  if (!TEST_CHECK(write_site_fixture(root_dir, "permalink = \"/{slug}/../evil.html\"\n") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
-    goto cleanup;
-  }
-
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // One config diagnostic, not one per entry: the message names the key, and the buffer holds a
-  // single line. Compared exactly rather than by prefix, so that nothing trailing the message can
-  // hide. A prefix needle stays green however the tail is corrupted.
-  TEST_CHECK(error_buffer.data != NULL &&
-             strcmp(error_buffer.data,
-                    "config key 'permalink' must expand to a safe relative path using only "
-                    "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
-                    "with no empty, '.' or '..' path segment: '/{slug}/../evil.html'") == 0);
-  TEST_CHECK(error_buffer.data != NULL && strchr(error_buffer.data, '\n') == NULL);
-
-cleanup:
-  string_buffer_free(&error_buffer);
-  remove_fixture_tree(root_dir);
-}
-
 // A missing `sosig.toml` is reported at the command boundary rather than printed by a helper.
 static void test_reports_missing_config(void) {
   // The cause is part of the claim: a missing config must not read like an unreadable one.
@@ -1036,92 +1003,6 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
-// A content entry that cannot be parsed fails the build at the parse phase and its diagnostic
-// reaches the command boundary. This is a different wiring from
-// `test_reports_one_line_per_failing_entry`, which fails at the *page* phase: the two failures
-// travel through separate entry points, `entry_renderer_render_entries` and
-// `page_renderer_render_pages`, so neither test covers the other's propagation. Without this,
-// `cmd_build_execute`'s parse-phase arm never runs and a parse failure that incorrectly returns
-// success would still pass the suite.
-static void test_reports_unparsable_content(void) {
-  char root_dir_template[] = "/tmp/sosig-build-unparsable.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  // No closing fence, so `frontmatter_split` rejects the file before any key is read.
-  const char unterminated[] =
-      "+++\n"
-      "title = \"X\"\n"
-      "date = 2026-07-01T00:00:00Z\n"
-      "Body\n";
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", unterminated) == 0)) {
-    goto cleanup;
-  }
-
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  TEST_CHECK(error_buffer.data != NULL &&
-             strcmp(error_buffer.data,
-                    "missing closing '+++' frontmatter fence (in 'content/a.md')") == 0);
-
-cleanup:
-  string_buffer_free(&error_buffer);
-  remove_fixture_tree(root_dir);
-}
-
-// A configured aggregate output that collides with a content entry output is rejected, with the
-// collision described in the returned diagnostic. The refused build creates no `output_dir`,
-// because nothing is written before the manifest passes.
-static void test_rejects_duplicate_output(void) {
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               "content/index.md", "aggregate_templates[0]", "public/index.html");
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-
-  char root_dir_template[] = "/tmp/sosig-build-collision.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
-    return;
-  }
-  // The shared config turns off aggregates, so this fixture writes its own.
-  const char config[] =
-      "base_url = \"https://example.com\"\n"
-      "title = \"Site\"\n"
-      "author = \"Author\"\n"
-      "aggregate_templates = [\"index.html\"]\n"
-      "feed_templates = []\n";
-  struct StringBuffer error_buffer;
-  string_buffer_init(&error_buffer);
-  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/index.md", HELLO_ENTRY) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0)) {
-    goto cleanup;
-  }
-
-  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
-  // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
-  // it from the same message with something appended.
-  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
-  TEST_CHECK(!fixture_path_exists(root_dir, "public"));
-
-cleanup:
-  string_buffer_free(&error_buffer);
-  remove_fixture_tree(root_dir);
-}
-
 // Slugging is lossy, so two different source names can claim one output path. The manifest reports
 // the collision and names both sources instead of letting the second write win. A non-ASCII byte
 // folds to hex, so `caf\xC3\xA9` produces the slug a literal `cafc3a9` also produces. The refused
@@ -1302,6 +1183,125 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
+// A permalink that would expand to a path escaping the output directory is rejected at config load,
+// so the build reports it once rather than once per content entry.
+static void test_rejects_unsafe_permalink(void) {
+  char root_dir_template[] = "/tmp/sosig-build-unsafe-permalink.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, "permalink = \"/{slug}/../evil.html\"\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  // One config diagnostic, not one per entry: the message names the key, and the buffer holds a
+  // single line. Compared exactly rather than by prefix, so that nothing trailing the message can
+  // hide. A prefix needle stays green however the tail is corrupted.
+  TEST_CHECK(error_buffer.data != NULL &&
+             strcmp(error_buffer.data,
+                    "config key 'permalink' must expand to a safe relative path using only "
+                    "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
+                    "with no empty, '.' or '..' path segment: '/{slug}/../evil.html'") == 0);
+  TEST_CHECK(error_buffer.data != NULL && strchr(error_buffer.data, '\n') == NULL);
+
+cleanup:
+  string_buffer_free(&error_buffer);
+  remove_fixture_tree(root_dir);
+}
+
+// A content entry that cannot be parsed fails the build at the parse phase and its diagnostic
+// reaches the command boundary. This is a different wiring from
+// `test_reports_one_line_per_failing_entry`, which fails at the *page* phase: the two failures
+// travel through separate entry points, `entry_renderer_render_entries` and
+// `page_renderer_render_pages`, so neither test covers the other's propagation. Without this,
+// `cmd_build_execute`'s parse-phase arm never runs and a parse failure that incorrectly returns
+// success would still pass the suite.
+static void test_reports_unparsable_content(void) {
+  char root_dir_template[] = "/tmp/sosig-build-unparsable.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  // No closing fence, so `frontmatter_split` rejects the file before any key is read.
+  const char unterminated[] =
+      "+++\n"
+      "title = \"X\"\n"
+      "date = 2026-07-01T00:00:00Z\n"
+      "Body\n";
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_site_fixture(root_dir, NULL) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", unterminated) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  TEST_CHECK(error_buffer.data != NULL &&
+             strcmp(error_buffer.data,
+                    "missing closing '+++' frontmatter fence (in 'content/a.md')") == 0);
+
+cleanup:
+  string_buffer_free(&error_buffer);
+  remove_fixture_tree(root_dir);
+}
+
+// A configured aggregate output that collides with a content entry output is rejected, with the
+// collision described in the returned diagnostic. The refused build creates no `output_dir`,
+// because nothing is written before the manifest passes.
+static void test_rejects_duplicate_output(void) {
+  char expected[ERROR_MESSAGE_SIZE];
+  const int expected_len =
+      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
+               "content/index.md", "aggregate_templates[0]", "public/index.html");
+  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
+
+  char root_dir_template[] = "/tmp/sosig-build-collision.XXXXXX";
+  const char* root_dir = init_fixture_dir(root_dir_template);
+  if (root_dir == NULL) {
+    return;
+  }
+  // The shared config turns off aggregates, so this fixture writes its own.
+  const char config[] =
+      "base_url = \"https://example.com\"\n"
+      "title = \"Site\"\n"
+      "author = \"Author\"\n"
+      "aggregate_templates = [\"index.html\"]\n"
+      "feed_templates = []\n";
+  struct StringBuffer error_buffer;
+  string_buffer_init(&error_buffer);
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", config) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/index.md", HELLO_ENTRY) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", CONTENT_TEMPLATE) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(execute_build_in_dir(root_dir, &error_buffer) == -1);
+  // Exact, not by substring: `expected` is the whole message, so a substring check could not tell
+  // it from the same message with something appended.
+  TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
+  TEST_CHECK(!fixture_path_exists(root_dir, "public"));
+
+cleanup:
+  string_buffer_free(&error_buffer);
+  remove_fixture_tree(root_dir);
+}
+
 TEST_LIST = {
     {"honors configured content template", test_honors_configured_content_template},
     {"writes exactly manifest outputs", test_writes_exactly_manifest_outputs},
@@ -1317,7 +1317,6 @@ TEST_LIST = {
     {"skips empty phases in verbose output", test_skips_empty_phases_in_verbose_output},
     {"leaves error buffer empty on success", test_leaves_error_buffer_empty_on_success},
     {"run prints diagnostic once and fails", test_run_prints_diagnostic_once_and_fails},
-    {"rejects unsafe permalink", test_rejects_unsafe_permalink},
     {"reports missing config", test_reports_missing_config},
     {"reports absent content dir", test_reports_absent_content_dir},
     {"reports absent templates dir", test_reports_absent_templates_dir},
@@ -1325,11 +1324,12 @@ TEST_LIST = {
     {"reports unusable output dir", test_reports_unusable_output_dir},
     {"reports dangling output dir symlink", test_reports_dangling_output_dir_symlink},
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
-    {"reports unparsable content", test_reports_unparsable_content},
-    {"rejects duplicate output", test_rejects_duplicate_output},
     {"rejects colliding source names", test_rejects_colliding_source_names},
     {"reports bad template", test_reports_bad_template},
     {"reports one line per failing entry", test_reports_one_line_per_failing_entry},
     {"reports unwritable output", test_reports_unwritable_output},
+    {"rejects unsafe permalink", test_rejects_unsafe_permalink},
+    {"reports unparsable content", test_reports_unparsable_content},
+    {"rejects duplicate output", test_rejects_duplicate_output},
     {NULL, NULL},
 };
