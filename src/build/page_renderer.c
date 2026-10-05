@@ -10,16 +10,17 @@
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "shared/string_buffer.h"
 
 /**
  * Worker context shared by all content entry page render jobs. Every field is read-only to a job
- * except `render_jobs`, where each job writes its own slot.
+ * except `render_jobs`, where each job writes its own error slot.
  */
 struct ContentEntryPageContext {
   /**
    * Template context every page render starts from, fully populated here so a job varies only
    * `content_entry_current`. Leaving a field zeroed would make `site.updated` render empty. That
-   * every pointer in `TemplateContext` is `const` is a thread-safety invariant. During this pass
+   * every pointer in `TemplateContext` is `const` is a thread-safety invariant. During this phase
    * every worker holds pointers to every entry. The `const` prevents one job from allocating into
    * another job's arena, because `template.c` can only allocate into its own per-call scratch
    * arena. Do not relax it to add a mutable field.
@@ -29,17 +30,20 @@ struct ContentEntryPageContext {
   /** Template directory root shared by every render job. */
   const char* templates_dir;
 
-  /** One result slot per source path. Each render job writes only its index. */
+  /** One entry slot per source path, or `NULL` where no entry was parsed. No entry is written. */
+  const struct ContentEntry* const* source_entries;
+
+  /** One error slot per source path. Each render job writes only its index. */
   struct RenderJob* render_jobs;
 };
 
 /**
  * @brief Renders one parsed content entry's content template and writes it as a worker-pool job.
  *
- * Frees the rendered HTML once it is written. A slot left empty by a draft or by a source that was
+ * Frees the rendered HTML once it is written. A slot left `NULL` by a draft or by a source that was
  * never parsed is skipped.
  *
- * @param index    Result slot index this job renders.
+ * @param index    Entry slot index this job renders.
  * @param userdata Pointer to the shared `struct ContentEntryPageContext`. Must not be `NULL`.
  * @return `0` on success or a skipped slot, or `-1` on a render or write failure.
  */
@@ -81,14 +85,21 @@ static int render_content_page_write(const struct ContentEntry* entry,
                                      size_t rendered_html_len,
                                      struct RenderJob* result) __attribute__((nonnull(1, 2, 4)));
 
-int page_renderer_render_pages(struct RenderJobSet* render_jobs,
-                               const struct SiteConfig* site_config,
+int page_renderer_render_pages(const struct SiteConfig* site_config,
+                               const struct ContentEntry* const* source_entries,
+                               size_t source_entry_count,
                                const struct ContentEntry* const* content_entries,
                                size_t content_entry_count,
                                const char* site_updated,
                                size_t worker_count,
                                bool is_verbose,
                                struct StringBuffer* error_out) {
+  struct RenderJobSet render_jobs = {.count = source_entry_count};
+  render_jobs.items = calloc(source_entry_count, sizeof(*render_jobs.items));
+  if (render_jobs.items == NULL && source_entry_count > 0) {
+    (void)string_buffer_append(error_out, "out of memory allocating content page render results");
+    return -1;
+  }
   struct ContentEntryPageContext page_context = {
       .base_context =
           {
@@ -99,33 +110,37 @@ int page_renderer_render_pages(struct RenderJobSet* render_jobs,
               .site_updated = site_updated,
           },
       .templates_dir = site_config->templates_dir,
-      .render_jobs = render_jobs->items,
+      .source_entries = source_entries,
+      .render_jobs = render_jobs.items,
   };
 
-  return render_job_run(render_jobs, worker_count, render_content_page_job, &page_context,
-                        "rendering content", is_verbose, error_out);
+  const int rc = render_job_run(&render_jobs, worker_count, render_content_page_job, &page_context,
+                                "rendering content", is_verbose, error_out);
+  render_job_set_free(&render_jobs);
+  return rc;
 }
 
 static int render_content_page_job(size_t index, void* userdata) {
   struct ContentEntryPageContext* page_context = userdata;
   struct RenderJob* result = &page_context->render_jobs[index];
+  const struct ContentEntry* entry = page_context->source_entries[index];
 
   int rc = 0;
-  if (result->entry != NULL) {
-    // A worker of the entry pass wrote `result->entry`. Reading it from a different thread here is
-    // not a race. That pass's `pool_run` joined its workers before returning, and this pass's
+  if (entry != NULL) {
+    // A worker of the parse phase wrote `entry`. Reading it from a different thread here is not a
+    // race. That phase's `pool_run` joined its workers before returning, and this phase's
     // `pthread_create` happens after, so the write is already published to this thread.
 
     // Copy the shared context before setting `content_entry_current`. Every page job reads
     // `base_context` concurrently, so mutating it in place would be a data race, which is undefined
     // behavior. The copy lives on this job's stack, so no other job can observe a change to it.
     struct TemplateContext context = page_context->base_context;
-    context.content_entry_current = result->entry;
+    context.content_entry_current = entry;
     size_t rendered_html_len = 0;
     char* rendered_html = render_content_page_template(page_context->templates_dir, &context,
                                                        &rendered_html_len, result);
     rc = rendered_html != NULL
-             ? render_content_page_write(result->entry, rendered_html, rendered_html_len, result)
+             ? render_content_page_write(entry, rendered_html, rendered_html_len, result)
              : -1;
     free(rendered_html);
   }

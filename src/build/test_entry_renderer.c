@@ -13,7 +13,6 @@
 
 #include "build/entry_renderer.h"
 #include "build/page_renderer.h"
-#include "build/render_job.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -26,7 +25,7 @@
 #include "test_render_support.h"
 #include "test_support.h"
 
-/** Config most fixtures share. It turns off the aggregate and feed passes. */
+/** Config most fixtures share. It turns off the aggregate and feed phases. */
 static const char* const SITE_CONFIG =
     "base_url = \"https://example.com\"\n"
     "title = \"Site\"\n"
@@ -35,23 +34,23 @@ static const char* const SITE_CONFIG =
     "feed_templates = []\n";
 
 /**
- * @brief Runs the entry-render pass while capturing standard error.
+ * @brief Runs the parse phase while capturing standard error.
  *
  * Restores standard error before returning.
  *
- * @param site_config     Configuration used for rendering.
- * @param source_paths    Source paths to render.
- * @param worker_count    Number of worker threads to request.
- * @param render_jobs_out Receives the allocated render-job slots.
- * @param error_out       Buffer that receives render diagnostics.
- * @param stderr_out      Buffer that receives terminated standard error.
- * @param stderr_out_len  Size of `stderr_out` in bytes. Must be non-zero.
+ * @param site_config    Configuration used for rendering.
+ * @param source_paths   Source paths to render.
+ * @param worker_count   Number of worker threads to request.
+ * @param source_entries One `NULL`-initialized entry slot per source path.
+ * @param error_out      Buffer that receives render diagnostics.
+ * @param stderr_out     Buffer that receives terminated standard error.
+ * @param stderr_out_len Size of `stderr_out` in bytes. Must be non-zero.
  * @return The renderer result, or `TEST_PLUMBING_FAILED` on test-plumbing failure.
  */
 static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
                                            const struct PathList* source_paths,
                                            size_t worker_count,
-                                           struct RenderJobSet* render_jobs_out,
+                                           struct ContentEntry** source_entries,
                                            struct StringBuffer* error_out,
                                            char* stderr_out,
                                            size_t stderr_out_len) {
@@ -61,7 +60,7 @@ static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
     return TEST_PLUMBING_FAILED;
   }
   const int rc = entry_renderer_render_entries(site_config, source_paths, worker_count, true,
-                                               render_jobs_out, error_out);
+                                               source_entries, error_out);
   return capture_end(&stderr_capture, stderr_out, stderr_out_len) == 0 ? rc : TEST_PLUMBING_FAILED;
 }
 
@@ -88,36 +87,35 @@ static void test_renders_entry_metadata_and_html(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == 0);
+                                  source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  if (render_jobs.items != NULL) {
-    const struct ContentEntry* entry = render_jobs.items[0].entry;
-    TEST_CHECK(entry != NULL);
-    if (entry != NULL) {
-      TEST_CHECK(strcmp(entry->title, "Hello") == 0);
-      TEST_CHECK(strcmp(entry->slug, "hello") == 0);
-      TEST_CHECK(strstr(entry->body_html, "<p>Body</p>") != NULL);
-      TEST_CHECK(strcmp(entry->url_path, "/hello.html") == 0);
-      TEST_CHECK(strcmp(entry->output_path, "public/hello.html") == 0);
-    }
+  const struct ContentEntry* entry = source_entries[0];
+  TEST_CHECK(entry != NULL);
+  if (entry != NULL) {
+    TEST_CHECK(strcmp(entry->title, "Hello") == 0);
+    TEST_CHECK(strcmp(entry->slug, "hello") == 0);
+    TEST_CHECK(strstr(entry->body_html, "<p>Body</p>") != NULL);
+    TEST_CHECK(strcmp(entry->url_path, "/hello.html") == 0);
+    TEST_CHECK(strcmp(entry->output_path, "public/hello.html") == 0);
   }
+
   char* page = read_output(root_dir, "public/hello.html");
   TEST_CHECK(page != NULL && strstr(page, "<main>Hello <p>Body</p>") != NULL);
   free(page);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
   remove_fixture_tree(root_dir);
 }
 
-// A draft source is parsed but leaves an empty result slot and writes no page.
+// A draft source is parsed but leaves its entry slot `NULL` and writes no page.
 static void test_skips_draft_entry(void) {
   char root_dir_template[] = "/tmp/sosig-entry-draft.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -140,28 +138,27 @@ static void test_skips_draft_entry(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == 0);
+                                  source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  if (render_jobs.items != NULL) {
-    TEST_CHECK(render_jobs.items[0].entry == NULL);
-  }
+  TEST_CHECK(source_entries[0] == NULL);
+
   char* page = read_output(root_dir, "public/hello.html");
   TEST_CHECK(page == NULL);
   free(page);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
   remove_fixture_tree(root_dir);
 }
 
-// A verbose pass prints one progress line per finished job, drafts included, then closes the line.
+// A verbose phase prints one progress line per finished job, drafts included, then closes the line.
 // The lines are written from worker threads under `stderr`'s lock, which is the only hand-written
 // locking outside the pool. This drives it with more workers than one so the lock is contended, and
 // the `tsan` test preset runs the same path under ThreadSanitizer.
@@ -205,9 +202,9 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[3] = {NULL};
   char stderr_out[128];
-  const int rc = render_entries_capturing_stderr(&site_config, &source_paths, 4, &render_jobs,
+  const int rc = render_entries_capturing_stderr(&site_config, &source_paths, 4, source_entries,
                                                  &error_buffer, stderr_out, sizeof(stderr_out));
 
   TEST_CHECK(rc == 0);
@@ -227,7 +224,7 @@ static void test_verbose_prints_one_progress_line_per_job(void) {
 
   TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -261,31 +258,31 @@ static void test_nests_output_under_slugified_sections(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, source_relative_path, NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == 0);
+                                  source_entries, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-  if (render_jobs.items != NULL) {
-    const struct ContentEntry* entry = render_jobs.items[0].entry;
-    TEST_CHECK(entry != NULL);
-    if (entry != NULL) {
-      TEST_CHECK(strcmp(entry->url_path, "/my-section/sub-dir/hello.html") == 0);
-      TEST_CHECK(strcmp(entry->output_path, "public/my-section/sub-dir/hello.html") == 0);
-    }
+  const struct ContentEntry* entry = source_entries[0];
+  TEST_CHECK(entry != NULL);
+  if (entry != NULL) {
+    TEST_CHECK(strcmp(entry->url_path, "/my-section/sub-dir/hello.html") == 0);
+    TEST_CHECK(strcmp(entry->output_path, "public/my-section/sub-dir/hello.html") == 0);
   }
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
   remove_fixture_tree(root_dir);
 }
 
-// Both render passes accept an empty site. The entry pass allocates a set whose `count` is 0, for
-// which `calloc(0, ...)` may return `NULL`, and it must not report that as an allocation failure.
+// Both parallel phases accept an empty site. Its entry slot array may be `NULL`, as
+// `calloc(0, ...)` may return in the build, and `job_run` allocates error slots whose count is 0,
+// for which `calloc(0, ...)` may also return `NULL`. Neither may be reported as an allocation
+// failure.
 static void test_accepts_empty_site(void) {
   struct SiteConfig site_config;
   site_config_init(&site_config);
@@ -294,16 +291,13 @@ static void test_accepts_empty_site(void) {
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
-  struct RenderJobSet empty = {0};
-  TEST_CHECK(entry_renderer_render_entries(&site_config, &source_paths, 1, false, &empty,
+  TEST_CHECK(entry_renderer_render_entries(&site_config, &source_paths, 1, false, NULL,
                                            &error_buffer) == 0);
-  TEST_CHECK(empty.count == 0);
   TEST_CHECK(error_buffer.len == 0);
-  TEST_CHECK(page_renderer_render_pages(&empty, &site_config, NULL, 0, "1970-01-01T00:00:00Z", 1,
+  TEST_CHECK(page_renderer_render_pages(&site_config, NULL, 0, NULL, 0, "1970-01-01T00:00:00Z", 1,
                                         false, &error_buffer) == 0);
   TEST_CHECK(error_buffer.len == 0);
-
-  render_job_set_free(&empty);
+  entry_renderer_free_entries(NULL, 0);
 
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
@@ -339,13 +333,13 @@ static void test_rejects_source_outside_content_dir(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[2] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"hello.md", "contentx/hello.md"};
   TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
-                            &site_config, &source_paths, &render_jobs, &error_buffer) == -1);
+                            &site_config, &source_paths, source_entries, &error_buffer) == -1);
   // Compared whole, so a message that merely mentions the source path cannot pass for this one.
   TEST_CHECK(error_buffer.data != NULL &&
              strcmp(error_buffer.data,
@@ -353,12 +347,10 @@ static void test_rejects_source_outside_content_dir(void) {
                     "content source must be under the configured 'content_dir': "
                     "'contentx/hello.md'") == 0);
   // No entry was published, so nothing downstream can read a section derived from a bad path.
-  if (render_jobs.items != NULL) {
-    TEST_CHECK(render_jobs.items[0].entry == NULL);
-    TEST_CHECK(render_jobs.items[1].entry == NULL);
-  }
+  TEST_CHECK(source_entries[0] == NULL);
+  TEST_CHECK(source_entries[1] == NULL);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -391,12 +383,12 @@ static void test_rejects_unsafe_output_path(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", "/../{slug}.html", &site_config,
-                                  &source_paths, &render_jobs, &error_buffer) == -1);
+                                  &source_paths, source_entries, &error_buffer) == -1);
   char expected[ERROR_MESSAGE_SIZE];
   const int n = snprintf(expected, sizeof(expected),
                          "permalink expanded to an unsafe output path for '%s': '%s'",
@@ -405,7 +397,7 @@ static void test_rejects_unsafe_output_path(void) {
   // Exact: `expected` is the whole message.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -447,12 +439,12 @@ static void test_rejects_oversize_output_path(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", pattern, &site_config,
-                                  &source_paths, &render_jobs, &error_buffer) == -1);
+                                  &source_paths, source_entries, &error_buffer) == -1);
   // The limit leads and the offending path trails, so the limit clause survives even though the
   // whole message is far longer than the diagnostic buffer. The measured length varies with the
   // pattern, so the head is asserted up to it and the entry is asserted separately. Between them
@@ -476,7 +468,7 @@ static void test_rejects_oversize_output_path(void) {
   TEST_CHECK(error_buffer.data != NULL && error_buffer.len >= 3 &&
              strcmp(error_buffer.data + error_buffer.len - 3, "...") == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -540,12 +532,12 @@ static void test_rejects_oversize_path_segment(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == -1);
+                                  source_entries, &error_buffer) == -1);
   // The whole message fits, so it is asserted in full, including the offending segment it names: a
   // length alone would leave the user no way to find which segment of the path was too long.
   char expected[ERROR_MESSAGE_SIZE];
@@ -557,7 +549,7 @@ static void test_rejects_oversize_path_segment(void) {
   TEST_CHECK(n2 > 0 && (size_t)n2 < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -585,17 +577,17 @@ static void test_reports_missing_frontmatter_fence(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == -1);
+                                  source_entries, &error_buffer) == -1);
   TEST_ASSERT(error_buffer.data != NULL);
   TEST_CHECK(strcmp(error_buffer.data,
                     "missing opening '+++' frontmatter fence (in 'content/hello.md')") == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -640,12 +632,12 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, source_relative_path, NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == -1);
+                                  source_entries, &error_buffer) == -1);
   // The reason leads, so the clause naming the limit and the measured length is present even though
   // the composed message is longer than the buffer. The prefix assertion verifies this ordering.
   // The slug itself trails, so truncation removes the value rather than the reason. The source path
@@ -670,7 +662,7 @@ static void test_reports_frontmatter_reason_before_long_source_path(void) {
   TEST_CHECK(error_buffer.data != NULL && error_buffer.len >= 3 &&
              strcmp(error_buffer.data + error_buffer.len - 3, "...") == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -711,12 +703,12 @@ static void test_reports_unreadable_source(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   const int rc = render_single_source(root_dir, "content/hello.md", NULL, &site_config,
-                                      &source_paths, &render_jobs, &error_buffer);
+                                      &source_paths, source_entries, &error_buffer);
   // Restore the mode before asserting: a failing assertion aborts the test, and the cleanup below
   // cannot unlink through a path it may not read.
   if (source_path != NULL) {
@@ -735,7 +727,7 @@ static void test_reports_unreadable_source(void) {
   // whole comparison catches a reordering that puts the path first.
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -768,12 +760,12 @@ static void test_rejects_oversize_source(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", NULL, &site_config, &source_paths,
-                                  &render_jobs, &error_buffer) == -1);
+                                  source_entries, &error_buffer) == -1);
   char expected[ERROR_MESSAGE_SIZE];
   const int n = snprintf(expected, sizeof(expected),
                          "failed to read content: exceeds max file size (%zu bytes) at %jd bytes "
@@ -782,7 +774,7 @@ static void test_rejects_oversize_source(void) {
   TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
   TEST_CHECK(error_buffer.data != NULL && strcmp(error_buffer.data, expected) == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);
@@ -821,13 +813,13 @@ static void test_appends_one_error_line_per_failing_source(void) {
   site_config_init(&site_config);
   struct PathList source_paths;
   path_list_init(&source_paths);
-  struct RenderJobSet render_jobs = {0};
+  struct ContentEntry* source_entries[2] = {NULL};
   struct StringBuffer error_buffer;
   string_buffer_init(&error_buffer);
 
   static const char* const sources[] = {"content/a.md", "content/b.md"};
   TEST_CHECK(render_sources(root_dir, sources, sizeof(sources) / sizeof(sources[0]), NULL,
-                            &site_config, &source_paths, &render_jobs, &error_buffer) == -1);
+                            &site_config, &source_paths, source_entries, &error_buffer) == -1);
   // Compared whole, with the separator in the middle: a dropped separator, a lost line, or a
   // leading or trailing newline each change these bytes.
   TEST_CHECK(error_buffer.data != NULL &&
@@ -835,7 +827,7 @@ static void test_appends_one_error_line_per_failing_source(void) {
                     "missing required frontmatter key 'title' (in 'content/a.md')\n"
                     "missing required frontmatter key 'title' (in 'content/b.md')") == 0);
 
-  render_job_set_free(&render_jobs);
+  entry_renderer_free_entries(source_entries, sizeof(source_entries) / sizeof(source_entries[0]));
   string_buffer_free(&error_buffer);
   path_list_free(&source_paths);
   site_config_free(&site_config);

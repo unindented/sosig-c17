@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "build/job.h"
 #include "build/output_path.h"
-#include "build/render_job.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -18,7 +18,6 @@
 #include "formats/markdown.h"
 #include "runtime/fs.h"
 #include "shared/arena.h"
-#include "shared/string_buffer.h"
 
 /**
  * Largest content source file read, in bytes, frontmatter and fences included.
@@ -31,7 +30,7 @@
  */
 enum { CONTENT_FILE_LEN_MAX = MARKDOWN_INPUT_LEN_MAX };
 
-/** Source bytes and frontmatter slices for one content entry render job. */
+/** Source bytes and frontmatter slices for one content entry parse job. */
 struct ContentEntryRenderSource {
   /** Complete Markdown source file contents owned by this struct. */
   char* markdown;
@@ -41,42 +40,49 @@ struct ContentEntryRenderSource {
 };
 
 /**
- * Worker context shared by all content entry render jobs. Every field is read-only to a job except
- * `render_jobs`, where each job writes its own slot.
+ * Worker context shared by all content entry parse jobs. Every field is read-only to a job, except
+ * `source_entries`, where each job writes its own slot.
  */
 struct ContentEntryRenderContext {
-  /** Site configuration shared by every render job. */
+  /** Site configuration shared by every parse job. */
   const struct SiteConfig* site_config;
 
-  /** Content entry source paths shared by every render job. */
+  /** Content entry source paths shared by every parse job. */
   const struct PathList* source_paths;
 
-  /** One result slot per source path. Each render job writes only its index. */
-  struct RenderJob* render_jobs;
+  /** One entry slot per source path. A job writes only `source_entries[index]`. */
+  struct ContentEntry** source_entries;
 };
 
 /**
- * @brief Parses one content entry source path as a worker-pool job.
+ * @brief Parses one content entry source path into its entry slot.
  *
- * Owns all temporary resources for the job, transferring the parsed entry to the matching result
- * slot on success. Draft entries are parsed but leave the slot empty.
+ * This is the `JobFn` of the parse phase, so it runs concurrently with other indexes and writes
+ * only `source_entries[index]` and its own error slot. It owns all temporary resources for the job
+ * and transfers the parsed entry to the slot on success. Draft entries are parsed but leave the
+ * slot `NULL`.
  *
+ * @param jobs     Running job set, whose error slot for `index` the job may fill through
+ *                 `job_set_error`. Must not be `NULL`.
  * @param index    Source path index this job parses.
  * @param userdata Pointer to the shared `struct ContentEntryRenderContext`. Must not be `NULL`.
- * @return `0` on success or a skipped draft, or `-1` on a parse failure.
+ * @return `0` on success, or a skipped draft, or `-1` after recording the failure through
+ *         `job_set_error`.
  */
-static int render_content_entry_job(size_t index, void* userdata) __attribute__((nonnull(2)));
+static int render_content_entry_job(struct JobSet* jobs, size_t index, void* userdata)
+    __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Allocates and initializes a content entry, reporting allocation failure on the result.
+ * @brief Allocates and initializes a content entry, reporting allocation failure on the job.
  *
  * @param source_path Source path used in the failure diagnostic. Must not be `NULL`.
- * @param result      Result slot that receives an allocation error message on failure. Must not be
- *                    `NULL`.
+ * @param jobs        Running job set receiving the allocation failure. Must not be `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return The initialized entry the caller owns, or `NULL` on allocation failure.
  */
 static struct ContentEntry* render_content_entry_create(const char* source_path,
-                                                        struct RenderJob* result)
+                                                        struct JobSet* jobs,
+                                                        size_t index)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -85,14 +91,15 @@ static struct ContentEntry* render_content_entry_create(const char* source_path,
  * @param entry       Entry that receives the parsed metadata. Must not be `NULL`.
  * @param source_path Path of the source file to read. Must not be `NULL`.
  * @param source_out  Receives the file bytes and frontmatter/body slices. Must not be `NULL`.
- * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
+ * @param jobs        Running job set receiving the failure. Must not be `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return `0` on success, or `-1` on a read, split, or parse failure.
  */
 static int render_content_entry_load_source(struct ContentEntry* entry,
                                             const char* source_path,
                                             struct ContentEntryRenderSource* source_out,
-                                            struct RenderJob* result)
-    __attribute__((nonnull(1, 2, 3, 4)));
+                                            struct JobSet* jobs,
+                                            size_t index) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
  * @brief Converts a content entry's Markdown body into HTML the entry owns.
@@ -101,13 +108,15 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
  * @param source      Render source whose frontmatter split supplies the Markdown body. Must not be
  *                    `NULL`.
  * @param source_path Source path used in the failure diagnostic. Must not be `NULL`.
- * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
+ * @param jobs        Running job set receiving the failure. Must not be `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return `0` on success, or `-1` on oversize input, a parser failure, or allocation failure.
  */
 static int render_content_entry_body(struct ContentEntry* entry,
                                      const struct ContentEntryRenderSource* source,
                                      const char* source_path,
-                                     struct RenderJob* result) __attribute__((nonnull(1, 2, 3, 4)));
+                                     struct JobSet* jobs,
+                                     size_t index) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
  * @brief Computes the public URL path and filesystem output path by expanding the permalink.
@@ -122,15 +131,16 @@ static int render_content_entry_body(struct ContentEntry* entry,
  * @param source_path Source path used to derive the section and for failure diagnostics. Must be
  *                    spelled with `site_config->content_dir` as its literal prefix. Must not be
  *                    `NULL`.
- * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
+ * @param jobs        Running job set receiving the failure. Must not be `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return `0` on success, or `-1` when the source is not under `content_dir`, on an unsafe or
  *         oversize path, or on allocation failure.
  */
 static int render_content_entry_finalize_paths(struct ContentEntry* entry,
                                                const struct SiteConfig* site_config,
                                                const char* source_path,
-                                               struct RenderJob* result)
-    __attribute__((nonnull(1, 2, 3, 4)));
+                                               struct JobSet* jobs,
+                                               size_t index) __attribute__((nonnull(1, 2, 3, 4)));
 
 /**
  * @brief Returns the remainder of `source_path` after a required `content_dir/` prefix.
@@ -138,13 +148,15 @@ static int render_content_entry_finalize_paths(struct ContentEntry* entry,
  * @param source_path Source Markdown path that must be spelled with `content_dir` as its literal
  *                    prefix. Must not be `NULL`.
  * @param content_dir Configured content directory, with no trailing `/`. Must not be `NULL`.
- * @param result      Result slot that receives an error message when the prefix is missing. Must
- *                    not be `NULL`.
+ * @param jobs        Running job set receiving the failure when the prefix is missing. Must not be
+ *                    `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return Pointer into `source_path` past `content_dir/`, or `NULL` after recording an error.
  */
 static const char* render_content_entry_finalize_paths_relative(const char* source_path,
                                                                 const char* content_dir,
-                                                                struct RenderJob* result)
+                                                                struct JobSet* jobs,
+                                                                size_t index)
     __attribute__((nonnull(1, 2, 3)));
 
 /**
@@ -179,14 +191,16 @@ static char* render_content_entry_finalize_paths_section(const char* source_rela
  *                    entry stores it without copying, so it must outlive the entry. Must not be
  *                    `NULL`.
  * @param source_path Source path used in failure diagnostics. Must not be `NULL`.
- * @param result      Result slot that receives an error message on failure. Must not be `NULL`.
+ * @param jobs        Running job set receiving the failure. Must not be `NULL`.
+ * @param index       Job index whose error slot receives the failure.
  * @return `0` on success, or `-1` on an unsafe/oversize path or allocation failure.
  */
 static int render_content_entry_finalize_paths_output(struct ContentEntry* entry,
                                                       const struct SiteConfig* site_config,
                                                       const char* url_path,
                                                       const char* source_path,
-                                                      struct RenderJob* result)
+                                                      struct JobSet* jobs,
+                                                      size_t index)
     __attribute__((nonnull(1, 2, 3, 4, 5)));
 
 /**
@@ -201,55 +215,57 @@ int entry_renderer_render_entries(const struct SiteConfig* site_config,
                                   const struct PathList* source_paths,
                                   size_t worker_count,
                                   bool is_verbose,
-                                  struct RenderJobSet* render_jobs_out,
+                                  struct ContentEntry** source_entries,
                                   struct StringBuffer* error_out) {
-  *render_jobs_out = (struct RenderJobSet){0};
-  // `calloc` fails rather than wrapping when the product overflows, so it carries the bound. It may
-  // also return `NULL` for an empty site, which is not a failure.
-  render_jobs_out->items = calloc(source_paths->count, sizeof(*render_jobs_out->items));
-  if (render_jobs_out->items == NULL && source_paths->count > 0) {
-    (void)string_buffer_append(error_out, "out of memory allocating content entry render results");
-    return -1;
-  }
-  render_jobs_out->count = source_paths->count;
-
   struct ContentEntryRenderContext render_context = {
       .site_config = site_config,
       .source_paths = source_paths,
-      .render_jobs = render_jobs_out->items,
+      .source_entries = source_entries,
   };
-  return render_job_run(render_jobs_out, worker_count, render_content_entry_job, &render_context,
-                        "parsing content", is_verbose, error_out);
+  return job_run(source_paths->count, worker_count, render_content_entry_job, &render_context,
+                 "parsing content", is_verbose, error_out);
 }
 
-static int render_content_entry_job(size_t index, void* userdata) {
+void entry_renderer_free_entries(struct ContentEntry** source_entries, size_t source_entry_count) {
+  if (source_entries == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < source_entry_count; i++) {
+    if (source_entries[i] != NULL) {
+      content_entry_free(source_entries[i]);
+      free(source_entries[i]);
+      source_entries[i] = NULL;
+    }
+  }
+}
+
+static int render_content_entry_job(struct JobSet* jobs, size_t index, void* userdata) {
   struct ContentEntryRenderContext* render_context = userdata;
-  struct RenderJob* result = &render_context->render_jobs[index];
   const char* source_path = render_context->source_paths->items[index];
   struct ContentEntryRenderSource source = {0};
   struct ContentEntry* entry = NULL;
   int rc = -1;
 
-  entry = render_content_entry_create(source_path, result);
+  entry = render_content_entry_create(source_path, jobs, index);
   if (entry == NULL) {
     goto cleanup;
   }
-  if (render_content_entry_load_source(entry, source_path, &source, result) != 0) {
+  if (render_content_entry_load_source(entry, source_path, &source, jobs, index) != 0) {
     goto cleanup;
   }
   if (entry->is_draft) {
     rc = 0;
     goto cleanup;
   }
-  if (render_content_entry_body(entry, &source, source_path, result) != 0) {
+  if (render_content_entry_body(entry, &source, source_path, jobs, index) != 0) {
     goto cleanup;
   }
-  if (render_content_entry_finalize_paths(entry, render_context->site_config, source_path,
-                                          result) != 0) {
+  if (render_content_entry_finalize_paths(entry, render_context->site_config, source_path, jobs,
+                                          index) != 0) {
     goto cleanup;
   }
 
-  result->entry = entry;
+  render_context->source_entries[index] = entry;
   entry = NULL;
   rc = 0;
 
@@ -263,12 +279,13 @@ cleanup:
 }
 
 static struct ContentEntry* render_content_entry_create(const char* source_path,
-                                                        struct RenderJob* result) {
+                                                        struct JobSet* jobs,
+                                                        size_t index) {
   // Use `malloc`, not `calloc`. `content_entry_init` assigns a whole compound literal over the
   // struct, so it writes every field, and a prior zeroing pass would be dead.
   struct ContentEntry* entry = malloc(sizeof(*entry));
   if (entry == NULL) {
-    render_job_set_error(result, "out of memory allocating content entry for '%s'", source_path);
+    job_set_error(jobs, index, "out of memory allocating content entry for '%s'", source_path);
     return NULL;
   }
   content_entry_init(entry);
@@ -278,12 +295,13 @@ static struct ContentEntry* render_content_entry_create(const char* source_path,
 static int render_content_entry_load_source(struct ContentEntry* entry,
                                             const char* source_path,
                                             struct ContentEntryRenderSource* source_out,
-                                            struct RenderJob* result) {
+                                            struct JobSet* jobs,
+                                            size_t index) {
   size_t markdown_len = 0;
   char reason[FS_REASON_SIZE];
   if (fs_read_file(source_path, CONTENT_FILE_LEN_MAX, &source_out->markdown, &markdown_len, reason,
                    sizeof(reason)) != 0) {
-    render_job_set_error(result, "failed to read content: %s ('%s')", reason, source_path);
+    job_set_error(jobs, index, "failed to read content: %s ('%s')", reason, source_path);
     return -1;
   }
 
@@ -296,12 +314,12 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
   // a bare `in '%s'` suffix would read as part of.
   if (frontmatter_split(source_out->markdown, markdown_len, &source_out->split, error_message,
                         sizeof(error_message)) != 0) {
-    render_job_set_error(result, "%s (in '%s')", error_message, source_path);
+    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
     return -1;
   }
   if (frontmatter_parse(entry, source_out->split.frontmatter, source_out->split.frontmatter_len,
                         source_path, error_message, sizeof(error_message)) != 0) {
-    render_job_set_error(result, "%s (in '%s')", error_message, source_path);
+    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
     return -1;
   }
   return 0;
@@ -310,7 +328,8 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
 static int render_content_entry_body(struct ContentEntry* entry,
                                      const struct ContentEntryRenderSource* source,
                                      const char* source_path,
-                                     struct RenderJob* result) {
+                                     struct JobSet* jobs,
+                                     size_t index) {
   char error_message[ERROR_MESSAGE_SIZE] = "";
   // The entry adopts the converter's heap buffer, so `content_entry_free` releases it.
   entry->body_html = markdown_to_html(source->split.body, source->split.body_len, error_message,
@@ -319,9 +338,9 @@ static int render_content_entry_body(struct ContentEntry* entry,
     return 0;
   }
   if (error_message[0] != '\0') {
-    render_job_set_error(result, "%s (in '%s')", error_message, source_path);
+    job_set_error(jobs, index, "%s (in '%s')", error_message, source_path);
   } else {
-    render_job_set_error(result, "failed to render Markdown for '%s'", source_path);
+    job_set_error(jobs, index, "failed to render Markdown for '%s'", source_path);
   }
   return -1;
 }
@@ -329,33 +348,35 @@ static int render_content_entry_body(struct ContentEntry* entry,
 static int render_content_entry_finalize_paths(struct ContentEntry* entry,
                                                const struct SiteConfig* site_config,
                                                const char* source_path,
-                                               struct RenderJob* result) {
-  const char* relative =
-      render_content_entry_finalize_paths_relative(source_path, site_config->content_dir, result);
+                                               struct JobSet* jobs,
+                                               size_t index) {
+  const char* relative = render_content_entry_finalize_paths_relative(
+      source_path, site_config->content_dir, jobs, index);
   if (relative == NULL) {
     return -1;
   }
 
   const char* section = render_content_entry_finalize_paths_section(relative, &entry->arena);
   if (section == NULL) {
-    render_job_set_error(result, "out of memory deriving section for '%s'", source_path);
+    job_set_error(jobs, index, "out of memory deriving section for '%s'", source_path);
     return -1;
   }
 
   const char* url_path =
       permalink_expand(site_config->permalink, section, entry->slug, &entry->arena);
   if (url_path == NULL) {
-    render_job_set_error(result, "out of memory building output path for '%s'", source_path);
+    job_set_error(jobs, index, "out of memory building output path for '%s'", source_path);
     return -1;
   }
-  return render_content_entry_finalize_paths_output(entry, site_config, url_path, source_path,
-                                                    result);
+  return render_content_entry_finalize_paths_output(entry, site_config, url_path, source_path, jobs,
+                                                    index);
 }
 
 static const char* render_content_entry_finalize_paths_relative(const char* source_path,
                                                                 const char* content_dir,
-                                                                struct RenderJob* result) {
-  // The `<content_dir>/` prefix is a precondition this pass checks rather than assumes. Every
+                                                                struct JobSet* jobs,
+                                                                size_t index) {
+  // The `<content_dir>/` prefix is a precondition this phase checks rather than assumes. Every
   // production caller satisfies it, because `fs_list_files_with_suffixes` roots its walk at
   // `content_dir` and builds each path down from there, and `site_config_load` has already trimmed
   // any trailing `/`. The function refuses a source from outside that root. Otherwise, the whole
@@ -366,8 +387,8 @@ static const char* render_content_entry_finalize_paths_relative(const char* sour
     // This deliberately does not name the configured root as well. It is unbounded, so a second
     // value could truncate away the reason, and `load_build_inputs` omits it from its own
     // diagnostics for the same reason. `sosig config` prints the resolved value.
-    render_job_set_error(result, "content source must be under the configured 'content_dir': '%s'",
-                         source_path);
+    job_set_error(jobs, index, "content source must be under the configured 'content_dir': '%s'",
+                  source_path);
     return NULL;
   }
   return source_relative_path;
@@ -423,14 +444,15 @@ static int render_content_entry_finalize_paths_output(struct ContentEntry* entry
                                                       const struct SiteConfig* site_config,
                                                       const char* url_path,
                                                       const char* source_path,
-                                                      struct RenderJob* result) {
+                                                      struct JobSet* jobs,
+                                                      size_t index) {
   const char* relative_path = url_path + 1;
   if (!path_is_safe_relative(relative_path)) {
     // The source leads and the path trails, the order `output_path_check_limits` uses below.
     // `relative_path` is not yet bounded on this branch, so naming it first would truncate away the
     // source that identifies which file produced it.
-    render_job_set_error(result, "permalink expanded to an unsafe output path for '%s': '%s'",
-                         source_path, relative_path);
+    job_set_error(jobs, index, "permalink expanded to an unsafe output path for '%s': '%s'",
+                  source_path, relative_path);
     return -1;
   }
   // Every output path producer reports a limit failure through `output_path_check_limits`, so a
@@ -438,7 +460,7 @@ static int render_content_entry_finalize_paths_output(struct ContentEntry* entry
   char error_message[ERROR_MESSAGE_SIZE];
   if (output_path_check_limits(relative_path, source_path, error_message, sizeof(error_message)) !=
       0) {
-    render_job_set_error(result, "%s", error_message);
+    job_set_error(jobs, index, "%s", error_message);
     return -1;
   }
 
@@ -447,7 +469,7 @@ static int render_content_entry_finalize_paths_output(struct ContentEntry* entry
   if (entry->output_path == NULL) {
     // Same wording as the `permalink_expand` failure above. Both are the output path failing to be
     // built, and the user can act on neither differently.
-    render_job_set_error(result, "out of memory building output path for '%s'", source_path);
+    job_set_error(jobs, index, "out of memory building output path for '%s'", source_path);
     return -1;
   }
   return 0;

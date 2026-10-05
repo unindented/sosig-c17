@@ -11,7 +11,6 @@
 
 #include "build/entry_renderer.h"
 #include "build/page_renderer.h"
-#include "build/render_job.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -22,27 +21,29 @@
 #include "test_support.h"
 
 int render_pages(const struct SiteConfig* site_config,
-                 struct RenderJobSet* render_jobs,
+                 struct ContentEntry* const* source_entries,
+                 size_t source_entry_count,
                  size_t worker_count,
                  struct StringBuffer* error_out) {
-  const size_t count = render_jobs->count;
-  struct ContentEntry** entries = calloc(count > 0 ? count : 1, sizeof(*entries));
+  struct ContentEntry** entries =
+      calloc(source_entry_count > 0 ? source_entry_count : 1, sizeof(*entries));
   TEST_ASSERT(entries != NULL);
   if (entries == NULL) {
     return TEST_PLUMBING_FAILED;
   }
   size_t entry_count = 0;
-  for (size_t i = 0; i < count; i++) {
-    if (render_jobs->items[i].entry != NULL) {
-      entries[entry_count++] = render_jobs->items[i].entry;
+  for (size_t i = 0; i < source_entry_count; i++) {
+    if (source_entries[i] != NULL) {
+      entries[entry_count++] = source_entries[i];
     }
   }
   content_entry_sort(entries, entry_count);
   const char* site_updated =
       content_entry_latest_date((const struct ContentEntry* const*)entries, entry_count);
-  const int rc = page_renderer_render_pages(render_jobs, site_config,
-                                            (const struct ContentEntry* const*)entries, entry_count,
-                                            site_updated, worker_count, false, error_out);
+  const int rc =
+      page_renderer_render_pages(site_config, (const struct ContentEntry* const*)source_entries,
+                                 source_entry_count, (const struct ContentEntry* const*)entries,
+                                 entry_count, site_updated, worker_count, false, error_out);
   free(entries);
   return rc;
 }
@@ -53,7 +54,7 @@ int render_sources(const char* root_dir,
                    const char* permalink_override,
                    struct SiteConfig* site_config,
                    struct PathList* source_paths,
-                   struct RenderJobSet* render_jobs_out,
+                   struct ContentEntry** source_entries,
                    struct StringBuffer* error_out) {
   int saved_dir_fd = -1;
   if (working_dir_enter(root_dir, &saved_dir_fd) != 0) {
@@ -77,10 +78,10 @@ int render_sources(const char* root_dir,
     }
     TEST_CHECK(is_pushed);
     if (is_pushed) {
-      rc = entry_renderer_render_entries(site_config, source_paths, 1, false, render_jobs_out,
+      rc = entry_renderer_render_entries(site_config, source_paths, 1, false, source_entries,
                                          error_out);
       if (rc == 0) {
-        rc = render_pages(site_config, render_jobs_out, 1, error_out);
+        rc = render_pages(site_config, source_entries, relative_path_count, 1, error_out);
       }
     }
   }
@@ -93,10 +94,10 @@ int render_single_source(const char* root_dir,
                          const char* permalink_override,
                          struct SiteConfig* site_config,
                          struct PathList* source_paths,
-                         struct RenderJobSet* render_jobs_out,
+                         struct ContentEntry** source_entries,
                          struct StringBuffer* error_out) {
   return render_sources(root_dir, &source_relative_path, 1, permalink_override, site_config,
-                        source_paths, render_jobs_out, error_out);
+                        source_paths, source_entries, error_out);
 }
 
 char* read_output(const char* root_dir, const char* relative_path) {

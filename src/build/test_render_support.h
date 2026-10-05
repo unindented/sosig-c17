@@ -3,30 +3,32 @@
 
 #include <stddef.h>
 
+struct ContentEntry;
 struct PathList;
-struct RenderJobSet;
 struct SiteConfig;
 struct StringBuffer;
 
 /**
- * @brief Runs the page-render pass over filled render-job slots.
+ * @brief Runs the page phase over entry slots the parse phase filled.
  *
- * Collects, sorts and dates the published entries the way the build does before its page pass.
+ * Collects, sorts and dates the published entries the way the build does before its page phase.
  *
- * @param site_config  Configuration used for rendering. Must not be `NULL`.
- * @param render_jobs  Render-job slots filled by the entry pass. Must not be `NULL`.
- * @param worker_count Worker threads the page pass runs on.
- * @param error_out    Buffer that receives any render diagnostic. Must not be `NULL`.
+ * @param site_config        Configuration used for rendering. Must not be `NULL`.
+ * @param source_entries     Entry slots filled by the parse phase. Must not be `NULL`.
+ * @param source_entry_count Number of slots in `source_entries`.
+ * @param worker_count       Worker threads the page phase runs on.
+ * @param error_out          Buffer that receives any render diagnostic. Must not be `NULL`.
  * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
  *         failure.
  */
 int render_pages(const struct SiteConfig* site_config,
-                 struct RenderJobSet* render_jobs,
+                 struct ContentEntry* const* source_entries,
+                 size_t source_entry_count,
                  size_t worker_count,
                  struct StringBuffer* error_out);
 
 /**
- * @brief Renders named fixture sources through both worker-pool passes on one worker.
+ * @brief Renders named fixture sources through both parallel phases on one worker.
  *
  * Loads `sosig.toml` from `root_dir` and runs with `root_dir` as the working directory, restoring
  * the previous one before returning.
@@ -37,8 +39,9 @@ int render_pages(const struct SiteConfig* site_config,
  * @param permalink_override  Replacement permalink, or `NULL` to keep the configured value.
  * @param site_config         Configuration populated from the fixture. Must not be `NULL`.
  * @param source_paths        Path list populated with the sources. Must not be `NULL`.
- * @param render_jobs_out     Receives the allocated render-job slots. Must be zero-initialized, so
- *                            `render_job_set_free` is safe whether or not it is written.
+ * @param source_entries      One entry slot per path in `relative_paths`, each `NULL`-initialized,
+ *                            so `entry_renderer_free_entries` is safe whether or not it is written.
+ *                            Must not be `NULL`.
  * @param error_out           Buffer that receives any render diagnostic. Must not be `NULL`.
  * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
  *         failure.
@@ -49,11 +52,11 @@ int render_sources(const char* root_dir,
                    const char* permalink_override,
                    struct SiteConfig* site_config,
                    struct PathList* source_paths,
-                   struct RenderJobSet* render_jobs_out,
+                   struct ContentEntry** source_entries,
                    struct StringBuffer* error_out);
 
 /**
- * @brief Renders one fixture source through both worker-pool passes on one worker.
+ * @brief Renders one fixture source through both parallel phases on one worker.
  *
  * Equivalent to `render_sources` with a single path.
  *
@@ -62,8 +65,8 @@ int render_sources(const char* root_dir,
  * @param permalink_override   Replacement permalink, or `NULL` to keep the configured value.
  * @param site_config          Configuration populated from the fixture. Must not be `NULL`.
  * @param source_paths         Path list populated with the source. Must not be `NULL`.
- * @param render_jobs_out      Receives the allocated render-job slots. Must be zero-initialized, so
- *                             `render_job_set_free` is safe whether or not it is written.
+ * @param source_entries       One `NULL`-initialized entry slot, so `entry_renderer_free_entries`
+ *                             is safe whether or not it is written. Must not be `NULL`.
  * @param error_out            Buffer that receives any render diagnostic. Must not be `NULL`.
  * @return `0` on success, `-1` on render failure, or `TEST_PLUMBING_FAILED` on test-plumbing
  *         failure.
@@ -73,11 +76,11 @@ int render_single_source(const char* root_dir,
                          const char* permalink_override,
                          struct SiteConfig* site_config,
                          struct PathList* source_paths,
-                         struct RenderJobSet* render_jobs_out,
+                         struct ContentEntry** source_entries,
                          struct StringBuffer* error_out);
 
 /**
- * @brief Reads a page the render pass wrote below a fixture root.
+ * @brief Reads a page the page phase wrote below a fixture root.
  *
  * Pages in these tests are short, so a fixed-size read holds any of them whole.
  *

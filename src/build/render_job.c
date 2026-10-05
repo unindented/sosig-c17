@@ -16,7 +16,6 @@
 #include <string.h>
 
 #include "core/error.h"
-#include "domain/content_entry.h"
 #include "runtime/pool.h"
 #include "shared/string_buffer.h"
 
@@ -144,12 +143,6 @@ void render_job_set_error(struct RenderJob* result, const char* fmt, ...) {
 }
 
 void render_job_set_free(struct RenderJobSet* render_jobs) {
-  for (size_t i = 0; i < render_jobs->count; i++) {
-    if (render_jobs->items[i].entry != NULL) {
-      content_entry_free(render_jobs->items[i].entry);
-      free(render_jobs->items[i].entry);
-    }
-  }
   free(render_jobs->items);
 }
 

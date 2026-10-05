@@ -9,7 +9,6 @@
 #include "build/entry_renderer.h"
 #include "build/manifest_builder.h"
 #include "build/page_renderer.h"
-#include "build/render_job.h"
 #include "build/site_writer.h"
 #include "core/error.h"
 #include "core/path_list.h"
@@ -43,10 +42,18 @@ struct BuildState {
   /** Intended output paths for this build, populated before any file is written. */
   struct Manifest manifest;
 
-  /** Render job result slots, one per source path, allocated by the entry pass. */
-  struct RenderJobSet render_jobs;
+  /**
+   * One slot per source path, holding the entry parsed from it, so its length is
+   * `source_paths.count`. A slot stays `NULL` for a draft and for a source that failed to parse.
+   * The build owns every entry here, and `entry_renderer_free_entries` releases them before the
+   * array itself is freed.
+   */
+  struct ContentEntry** source_entries;
 
-  /** Rendered non-draft content entries used by templates, sorted newest-first. */
+  /**
+   * Rendered non-draft content entries used by templates, sorted newest-first. The pointers are
+   * borrowed from `source_entries`.
+   */
   struct ContentEntry** content_entries;
 
   /** Number of content entries in `content_entries`. */
@@ -85,8 +92,9 @@ static void build_state_init(struct BuildState* state) __attribute__((nonnull(1)
 /**
  * @brief Releases every allocation a build state owns and leaves the state zeroed.
  *
- * `content_entries` holds borrowed pointers into `render_jobs`, so only its array is freed here.
- * Each entry is owned by the slot it was rendered into and is released with that slot.
+ * `content_entries` holds borrowed pointers into `source_entries`, so only its array is freed here.
+ * Each entry is owned by the `source_entries` slot it was parsed into and is released with that
+ * array.
  *
  * @param state Build state to release. Must not be `NULL`.
  */
@@ -127,11 +135,14 @@ static int require_read_roots(const struct BuildState* state, char* err, size_t 
 /**
  * @brief Parses every discovered content entry source, dispatching jobs across worker threads.
  *
- * @param state     Build state holding the sources, which receives the result slots. Must not be
+ * Allocates `source_entries`, one slot per source path, before the parse phase fills it.
+ *
+ * @param state     Build state holding the sources, whose `source_entries` receives the parsed
+ *                  entries. Must not be `NULL`.
+ * @param error_out Growable buffer that receives the collected parse diagnostics. Must not be
  *                  `NULL`.
- * @param error_out Growable buffer that receives the collected render diagnostics. Must not be
- *                  `NULL`.
- * @return `0` when every job succeeded, or `-1` when any render job failed.
+ * @return `0` when every job succeeded, or `-1` when the slots could not be allocated or any parse
+ *         job failed.
  */
 static int render_content_entries(struct BuildState* state, struct StringBuffer* error_out)
     __attribute__((nonnull(1, 2)));
@@ -197,7 +208,7 @@ static int prepare_output_dir(const struct BuildState* state, char* err, size_t 
  * Runs after the entries are collected and sorted, so a content template sees the whole entry set
  * and the site's last-updated timestamp. Runs after the manifest, so no two jobs write one file.
  *
- * @param state     Build state holding the sorted entries and result slots. Must not be `NULL`.
+ * @param state     Build state holding the parsed and sorted entries. Must not be `NULL`.
  * @param error_out Growable buffer that receives the collected render diagnostics. Must not be
  *                  `NULL`.
  * @return `0` when every job succeeded, or `-1` when any render job failed.
@@ -223,9 +234,9 @@ enum ExitCode cmd_build_run(const struct BuildOptions* options) {
   enum ExitCode rc = EXIT_CODE_FAILURE;
   if (cmd_build_execute(options, &error_buffer) != 0) {
     // `error_buffer` comes back empty only when recording the diagnostic itself ran out of memory,
-    // so the fallback keeps the failure visible. The fallback also makes the four discarded
-    // `(void)string_buffer_append(...)` results in `cmd_build_execute` safe. An append that fails
-    // degrades the message to this line instead of reporting a silent success.
+    // so the fallback keeps the failure visible. The fallback also makes the discarded
+    // `(void)string_buffer_append(...)` results in this file safe. An append that fails degrades
+    // the message to this line instead of reporting a silent success.
     fprintf(stderr, "%s\n", error_buffer.data != NULL ? error_buffer.data : "build failed");
     goto cleanup;
   }
@@ -244,7 +255,7 @@ int cmd_build_execute(const struct BuildOptions* options, struct StringBuffer* e
   state.is_verbose = options->is_verbose;
 
   // Single-message phases report through the fixed `err`/`err_len` convention and are bridged into
-  // the growable buffer here. The render phases aggregate many failures and append directly.
+  // the growable buffer here. The parallel phases aggregate many failures and append directly.
   //
   // The order below follows the data: a content template can read `site.updated` and iterate
   // `content_entries`. Parsing every source has to finish, and the entries have to be collected and
@@ -322,7 +333,8 @@ static void build_state_init(struct BuildState* state) {
 
 static void build_state_free(struct BuildState* state) {
   free(state->content_entries);
-  render_job_set_free(&state->render_jobs);
+  entry_renderer_free_entries(state->source_entries, state->source_paths.count);
+  free(state->source_entries);
   manifest_free(&state->manifest);
   path_list_free(&state->source_paths);
   site_config_free(&state->site_config);
@@ -374,9 +386,17 @@ static int require_read_roots(const struct BuildState* state, char* err, size_t 
 
 static int render_content_entries(struct BuildState* state, struct StringBuffer* error_out) {
   build_verbose(state, "parsing content, workers: %zu", state->worker_count);
+  // `calloc` fails rather than wrapping when the product overflows, so it carries the bound. It may
+  // also return `NULL` for an empty site, which is not a failure, because the parse phase then runs
+  // no job.
+  state->source_entries = calloc(state->source_paths.count, sizeof(*state->source_entries));
+  if (state->source_entries == NULL && state->source_paths.count > 0) {
+    (void)string_buffer_append(error_out, "out of memory allocating content entry slots");
+    return -1;
+  }
   return entry_renderer_render_entries(&state->site_config, &state->source_paths,
-                                       state->worker_count, state->is_verbose, &state->render_jobs,
-                                       error_out);
+                                       state->worker_count, state->is_verbose,
+                                       state->source_entries, error_out);
 }
 
 static int collect_content_entries(struct BuildState* state, char* err, size_t err_len) {
@@ -389,8 +409,8 @@ static int collect_content_entries(struct BuildState* state, char* err, size_t e
   // date among them, so the code settles both here rather than per render.
   content_entry_sort(state->content_entries, state->content_entry_count);
   // C has no implicit qualification conversion for pointer-to-pointer, so handing the entry array
-  // to a read-only callee needs this cast spelled out. It recurs at all five such call sites in
-  // this file. It only adds `const`, at both levels, and the deep `const` is a thread-safety
+  // to a read-only callee needs this cast spelled out. It recurs at all six such call sites in this
+  // file. It only adds `const`, at both levels, and the deep `const` is a thread-safety
   // requirement. A `TemplateContext` with only `const` pointers prevents one render job from
   // allocating into another job's arena.
   state->site_updated = content_entry_latest_date(
@@ -399,8 +419,8 @@ static int collect_content_entries(struct BuildState* state, char* err, size_t e
 }
 
 static int collect_content_entries_compact(struct BuildState* state, char* err, size_t err_len) {
-  for (size_t i = 0; i < state->render_jobs.count; i++) {
-    if (state->render_jobs.items[i].entry != NULL) {
+  for (size_t i = 0; i < state->source_paths.count; i++) {
+    if (state->source_entries[i] != NULL) {
       state->content_entry_count++;
     }
   }
@@ -410,9 +430,9 @@ static int collect_content_entries_compact(struct BuildState* state, char* err, 
     return error_report(err, err_len, "out of memory collecting content entries");
   }
   size_t j = 0;
-  for (size_t i = 0; i < state->render_jobs.count; i++) {
-    if (state->render_jobs.items[i].entry != NULL) {
-      state->content_entries[j++] = state->render_jobs.items[i].entry;
+  for (size_t i = 0; i < state->source_paths.count; i++) {
+    if (state->source_entries[i] != NULL) {
+      state->content_entries[j++] = state->source_entries[i];
     }
   }
   return 0;
@@ -441,10 +461,11 @@ static int prepare_output_dir(const struct BuildState* state, char* err, size_t 
 
 static int render_content_pages(struct BuildState* state, struct StringBuffer* error_out) {
   build_verbose(state, "rendering content, workers: %zu", state->worker_count);
-  return page_renderer_render_pages(&state->render_jobs, &state->site_config,
-                                    (const struct ContentEntry* const*)state->content_entries,
-                                    state->content_entry_count, state->site_updated,
-                                    state->worker_count, state->is_verbose, error_out);
+  return page_renderer_render_pages(
+      &state->site_config, (const struct ContentEntry* const*)state->source_entries,
+      state->source_paths.count, (const struct ContentEntry* const*)state->content_entries,
+      state->content_entry_count, state->site_updated, state->worker_count, state->is_verbose,
+      error_out);
 }
 
 static int write_generated_site(struct BuildState* state, char* err, size_t err_len) {

@@ -7,24 +7,13 @@
 #include "core/error.h"
 #include "runtime/pool.h"
 
-struct ContentEntry;
 struct StringBuffer;
 
 /**
- * Result slot for one content entry render job, shared by the two render passes.
- *
- * `entry_renderer_render_entries` allocates the slots and fills each slot's `entry`,
- * `page_renderer_render_pages` reads that `entry` and writes its page, and either pass records
- * `error_message` on failure. The slot is the sole coupling between the passes: neither module
- * needs the other's header, only this one.
+ * Error slot for one content page render job. `page_renderer_render_pages` allocates the slots, and
+ * each job records `error_message` on failure.
  */
 struct RenderJob {
-  /**
-   * Rendered content entry, or `NULL` for a draft or unrendered slot. Heap-allocated and released
-   * with the slot by `render_job_set_free`.
-   */
-  struct ContentEntry* entry;
-
   /** Render job error reported after the workers finish. */
   char error_message[ERROR_MESSAGE_SIZE];
 };
@@ -48,7 +37,7 @@ enum { RENDER_JOB_ERROR_REPORT_COUNT_MAX = 20 };
  * @brief Runs one render pass across the worker pool, reports progress, and collects its
  *        diagnostics.
  *
- * Both passes run one job per result slot, so a job index is also its slot index. The pass runs
+ * The page phase runs one job per result slot, so a job index is also its slot index. It runs
  * `render_jobs->count` jobs. `job_fn` writes only its own slot. This function reads every slot's
  * `error_message` after the pool joins and appends each distinct one to `error_out` as its own
  * line, at most `RENDER_JOB_ERROR_REPORT_COUNT_MAX` of them, followed by a count of the remaining
@@ -92,7 +81,7 @@ void render_job_set_error(struct RenderJob* result, const char* fmt, ...)
     __attribute__((format(printf, 2, 3), nonnull(1, 2)));
 
 /**
- * @brief Releases every slot's entry and the slot array itself.
+ * @brief Releases the slot array.
  *
  * @param render_jobs Result slot set to release. Must not be `NULL`.
  */
