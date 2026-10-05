@@ -186,11 +186,11 @@ static void test_build_command_receives_parsed_options(void) {
                     "loading config\n"
                     "discovering content\n"
                     "parsing content, workers: 3\n"
-                    ".\n"
+                    "\rparsing content 1/1\n"
                     "collecting content entries\n"
                     "building output manifest\n"
                     "rendering content, workers: 3\n"
-                    ".\n"
+                    "\rrendering content 1/1\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
                     "build complete\n") == 0);

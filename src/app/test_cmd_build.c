@@ -459,7 +459,7 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
 // A caller-supplied `worker_count` reaches every pool instead of being replaced by the detected
 // default. A build with it produces the same bytes as the default build. The resolved count is not
 // observable from the return value, so it is read off the verbose phase lines, which are the only
-// place the module reports it.
+// place the module reports it. Each parallel pass closes with its one-job progress line.
 static void test_honors_requested_worker_count(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
@@ -495,11 +495,11 @@ static void test_honors_requested_worker_count(void) {
                               "loading config\n"
                               "discovering content\n"
                               "parsing content, workers: %d\n"
-                              ".\n"
+                              "\rparsing content 1/1\n"
                               "collecting content entries\n"
                               "building output manifest\n"
                               "rendering content, workers: %d\n"
-                              ".\n"
+                              "\rrendering content 1/1\n"
                               "rendering aggregate templates\n"
                               "rendering feed templates\n"
                               "build complete\n",
@@ -519,11 +519,11 @@ static void test_honors_requested_worker_count(void) {
                           "loading config\n"
                           "discovering content\n"
                           "parsing content, workers: %d\n"
-                          ".\n"
+                          "\rparsing content 1/1\n"
                           "collecting content entries\n"
                           "building output manifest\n"
                           "rendering content, workers: %d\n"
-                          ".\n"
+                          "\rrendering content 1/1\n"
                           "rendering aggregate templates\n"
                           "rendering feed templates\n"
                           "build complete\n",
@@ -929,7 +929,7 @@ static void test_reports_bad_template(void) {
 
 // Two content entries that both fail to render append one diagnostic line each, so neither is lost
 // to the other. This is the postcondition `cmd_build_execute` states and the reason `error_out` is
-// growable rather than a fixed buffer: an `append_render_error` that overwrote, or that dropped the
+// growable rather than a fixed buffer: an `append_error` that overwrote, or that dropped the
 // separator and ran two messages together, would still satisfy every single-entry test.
 static void test_reports_one_line_per_failing_entry(void) {
   char root_dir_template[] = "/tmp/sosig-build-test.XXXXXX";

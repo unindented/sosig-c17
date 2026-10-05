@@ -20,8 +20,9 @@ struct StringBuffer;
  * Each job writes its entry's page to the entry's `output_path` and frees the HTML before the next
  * job starts, so at most one page per worker is held in memory. Draft slots are skipped. A failed
  * write is that entry's diagnostic, like a failed render, and leaves the other pages written. Each
- * finished job prints a progress dot when `is_verbose`. Each failing job's buffered diagnostic goes
- * to `error_out`, one per line.
+ * finished job reports progress when `is_verbose`. Failing jobs' diagnostics go to `error_out` one
+ * per line, each distinct message once, up to `RENDER_JOB_ERROR_REPORT_COUNT_MAX` of them plus a
+ * count of the rest, so the caller reports them at a single boundary.
  *
  * Call this only after `manifest_builder_populate` accepts every output path. Jobs write
  * concurrently, and the manifest is what guarantees that no two of them target the same file.
@@ -35,12 +36,12 @@ struct StringBuffer;
  * @param content_entry_count Number of entries in `content_entries`.
  * @param site_updated        Site last-updated timestamp exposed as `site.updated`. Must not be
  *                            `NULL`.
- * @param worker_count        Worker threads used for rendering. `0` is treated as `1`.
- * @param is_verbose          Whether each finished job prints a progress dot to `stderr`.
+ * @param worker_count        Requested worker threads, as for `pool_run`.
+ * @param is_verbose          Whether progress is printed to `stderr`.
  * @param error_out           Growable buffer that receives the collected render diagnostics. Must
  *                            not be `NULL`.
- * @return `0` when every job succeeded, or `-1` when a page failed to render or write, when the
- *         worker pool could not start, or when a diagnostic could not be buffered.
+ * @return `0` when every job succeeded, or `-1` when a page failed to render or write, the worker
+ *         pool could not start, or a diagnostic could not be appended.
  */
 int page_renderer_render_pages(struct RenderJobSet* render_jobs,
                                const struct SiteConfig* site_config,

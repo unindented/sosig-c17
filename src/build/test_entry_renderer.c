@@ -165,11 +165,11 @@ static void test_skips_draft_entry(void) {
   remove_fixture_tree(root_dir);
 }
 
-// A verbose pass prints one progress dot per finished job, drafts included, then closes the line.
-// The dots are written from worker threads under `stderr`'s lock, which is the only hand-written
+// A verbose pass prints one progress line per finished job, drafts included, then closes the line.
+// The lines are written from worker threads under `stderr`'s lock, which is the only hand-written
 // locking outside the pool. This drives it with more workers than one so the lock is contended, and
 // the `tsan` test preset runs the same path under ThreadSanitizer.
-static void test_verbose_prints_one_dot_per_job(void) {
+static void test_verbose_prints_one_progress_line_per_job(void) {
   char root_dir_template[] = "/tmp/sosig-render-test.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
   if (root_dir == NULL) {
@@ -216,14 +216,24 @@ static void test_verbose_prints_one_dot_per_job(void) {
   string_buffer_init(&error_buffer);
 
   struct RenderJobSet render_jobs = {0};
-  char stderr_out[64];
+  char stderr_out[128];
   const int rc = render_entries_capturing_stderr(&site_config, &source_paths, 4, &render_jobs,
                                                  &error_buffer, stderr_out, sizeof(stderr_out));
 
   TEST_CHECK(rc == 0);
-  // Three jobs, so three dots even though one entry is a draft that produces no output, and one
-  // trailing newline closing the line before any later status message.
-  TEST_CHECK(strcmp(stderr_out, "...\n") == 0);
+  // Three jobs, so three progress lines even though one entry is a draft that produces no output,
+  // and one trailing newline closing the line before any later status message. Workers finish in
+  // any order, so each count is asserted present once rather than the whole text in sequence.
+  static const char* const progress_lines[] = {"\rparsing content 1/3", "\rparsing content 2/3",
+                                               "\rparsing content 3/3"};
+  size_t progress_len = 0;
+  for (size_t i = 0; i < sizeof(progress_lines) / sizeof(progress_lines[0]); i++) {
+    const char* found = strstr(stderr_out, progress_lines[i]);
+    TEST_CHECK(found != NULL && strstr(found + 1, progress_lines[i]) == NULL);
+    progress_len += strlen(progress_lines[i]);
+  }
+  TEST_CHECK(strlen(stderr_out) == progress_len + 1);
+  TEST_CHECK(stderr_out[progress_len] == '\n');
 
   TEST_CHECK(working_dir_leave(saved_dir_fd) == 0);
 
@@ -900,7 +910,7 @@ static void test_appends_one_error_line_per_failing_source(void) {
 TEST_LIST = {
     {"renders entry metadata and html", test_renders_entry_metadata_and_html},
     {"skips draft entry", test_skips_draft_entry},
-    {"verbose prints one dot per job", test_verbose_prints_one_dot_per_job},
+    {"verbose prints one progress line per job", test_verbose_prints_one_progress_line_per_job},
     {"nests output under slugified sections", test_nests_output_under_slugified_sections},
     {"accepts empty site", test_accepts_empty_site},
     {"rejects source outside content dir", test_rejects_source_outside_content_dir},

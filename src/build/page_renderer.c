@@ -31,9 +31,6 @@ struct ContentEntryPageContext {
 
   /** One result slot per source path. Each render job writes only its index. */
   struct RenderJob* render_jobs;
-
-  /** Whether each finished job prints a progress dot to `stderr`. */
-  bool is_verbose;
 };
 
 /**
@@ -103,11 +100,10 @@ int page_renderer_render_pages(struct RenderJobSet* render_jobs,
           },
       .templates_dir = site_config->templates_dir,
       .render_jobs = render_jobs->items,
-      .is_verbose = is_verbose,
   };
 
   return render_job_run(render_jobs, worker_count, render_content_page_job, &page_context,
-                        is_verbose, error_out);
+                        "rendering content", is_verbose, error_out);
 }
 
 static int render_content_page_job(size_t index, void* userdata) {
@@ -133,7 +129,6 @@ static int render_content_page_job(size_t index, void* userdata) {
              : -1;
     free(rendered_html);
   }
-  render_job_progress_dot(page_context->is_verbose);
   return rc;
 }
 

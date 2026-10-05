@@ -41,57 +41,54 @@ struct RenderJobSet {
   size_t count;
 };
 
+/** Most distinct diagnostics one render pass reports before summarizing the rest as a count. */
+enum { RENDER_JOB_ERROR_REPORT_COUNT_MAX = 20 };
+
 /**
- * @brief Runs one render pass across the worker pool and collects its buffered diagnostics.
+ * @brief Runs one render pass across the worker pool, reports progress, and collects its
+ *        diagnostics.
  *
  * Both passes run one job per result slot, so a job index is also its slot index. The pass runs
  * `render_jobs->count` jobs. `job_fn` writes only its own slot. This function reads every slot's
- * `error_message` after the pool joins.
+ * `error_message` after the pool joins and appends each distinct one to `error_out` as its own
+ * line, at most `RENDER_JOB_ERROR_REPORT_COUNT_MAX` of them, followed by a count of the remaining
+ * failures. A newline is written only between lines, so the collection never starts with a blank
+ * line.
  *
- * @param render_jobs  Result slot set whose `count` is the job count and whose buffered
- *                     diagnostics are collected. Must not be `NULL`.
- * @param worker_count Worker threads used for rendering. `0` is treated as `1`.
+ * @param render_jobs  Result slot set whose `count` is the job count and whose buffered diagnostics
+ *                     are collected. Must not be `NULL`.
+ * @param worker_count Requested worker threads, as for `pool_run`.
  * @param job_fn       Job run once per result slot. Must not be `NULL`.
  * @param userdata     Shared job context forwarded to `job_fn`. Must not be `NULL`.
- * @param is_verbose   Whether the pass closes its progress dot line on `stderr`.
+ * @param phase_label  Pass name leading each progress line, and named when the pass fails without a
+ *                     diagnostic. Must not be `NULL`.
+ * @param is_verbose   Whether each finished job prints a progress line to `stderr`.
  * @param error_out    Growable buffer that receives the collected render diagnostics. Must not be
  *                     `NULL`.
- * @return `0` when every job succeeded, or `-1` when a job failed, when the worker pool could not
- *         start, or when a diagnostic could not be buffered.
+ * @return `0` when every job succeeded, or `-1` when a job failed, the worker pool could not start,
+ *         or a diagnostic could not be appended.
  */
 int render_job_run(const struct RenderJobSet* render_jobs,
                    size_t worker_count,
                    PoolJobFn job_fn,
                    void* userdata,
+                   const char* phase_label,
                    bool is_verbose,
-                   struct StringBuffer* error_out) __attribute__((nonnull(1, 3, 4, 6)));
+                   struct StringBuffer* error_out) __attribute__((nonnull(1, 3, 4, 5, 7)));
 
 /**
- * @brief Records a job's first diagnostic in its render result slot.
+ * @brief Records a job's first diagnostic in its result slot.
  *
  * Safe to call from worker threads because it writes only the job's own result slot. This is
  * first-wins: a later call for the same slot is ignored, because the first message names the cause
  * and a later one is generally a consequence of it.
  *
  * @param result Result slot that receives the message. Must not be `NULL`.
- * @param fmt    `printf`-style format string. Must not be `NULL`.
+ * @param fmt    `printf` format for the diagnostic. Must not be `NULL`.
  * @param ...    Arguments for `fmt`.
  */
 void render_job_set_error(struct RenderJob* result, const char* fmt, ...)
     __attribute__((format(printf, 2, 3), nonnull(1, 2)));
-
-/**
- * @brief Prints one progress dot for a finished job when the build is verbose.
- *
- * Safe to call from worker threads. `stderr`'s lock serializes the write and its flush.
- *
- * This is best-effort. It deliberately ignores the write and flush results, so a failed progress
- * dot cannot fail the render job it reports on. Returning `-1` from a `PoolJobFn` marks the whole
- * pass failed, which would let a full `stderr` fail a build whose content rendered perfectly.
- *
- * @param is_verbose Whether the dot is printed at all.
- */
-void render_job_progress_dot(bool is_verbose);
 
 /**
  * @brief Releases every slot's entry and the slot array itself.

@@ -53,9 +53,6 @@ struct ContentEntryRenderContext {
 
   /** One result slot per source path. Each render job writes only its index. */
   struct RenderJob* render_jobs;
-
-  /** Whether each finished job prints a progress dot to `stderr`. */
-  bool is_verbose;
 };
 
 /**
@@ -220,10 +217,9 @@ int entry_renderer_render_entries(const struct SiteConfig* site_config,
       .site_config = site_config,
       .source_paths = source_paths,
       .render_jobs = render_jobs_out->items,
-      .is_verbose = is_verbose,
   };
   return render_job_run(render_jobs_out, worker_count, render_content_entry_job, &render_context,
-                        is_verbose, error_out);
+                        "parsing content", is_verbose, error_out);
 }
 
 static int render_content_entry_job(size_t index, void* userdata) {
@@ -263,7 +259,6 @@ cleanup:
     content_entry_free(entry);
     free(entry);
   }
-  render_job_progress_dot(render_context->is_verbose);
   return rc;
 }
 
