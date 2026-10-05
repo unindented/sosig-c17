@@ -132,7 +132,7 @@ void render_job_set_error(struct RenderJob* result, const char* fmt, ...) {
   }
 
   // This is first-wins, like the other error latches (`record_error` and `render_fail`). The first
-  // message names the cause; a later one is generally a consequence and must not replace it.
+  // message names the cause. A later one is generally a consequence and must not replace it.
   va_list ap;
   va_start(ap, fmt);
   // This goes through `error_report_va` rather than `vsnprintf` directly, so it marks an over-long

@@ -617,8 +617,8 @@ static int register_template_output(struct Manifest* manifest,
                                     char* err,
                                     size_t err_len) {
   // This is checked against the same limits as a content entry's output path. Both are generated
-  // output paths joined onto `output_dir`, and both land in this manifest. Applying them to one
-  // producer and not the other would leave a template output path unbounded.
+  // output paths joined onto `output_dir`, and both land in this manifest. `entry_renderer` checks
+  // the paths it generates, so no producer reaches the manifest with an unbounded output path.
   if (output_path_check_limits(template_name, source_label, err, err_len) != 0) {
     return -1;
   }

@@ -223,8 +223,7 @@ static void test_reports_missing_required_key(void) {
 // failure mode, and the reason it reports is what lets the user tell a closed pipe from a full
 // disk. A read-only `/dev/null` on `STDOUT_FILENO` is the deterministic way to reach that failure:
 // the writes fail, `site_config_print` reports it. The diagnostic still reaches the captured
-// `stderr`. Runs its own redirection rather than `run_config_capturing`, which needs a working
-// `stdout` to capture.
+// `stderr`.
 static void test_reports_unwritable_stdout(void) {
   char root_dir_template[] = "/tmp/sosig-cmd-config-unwritable.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);

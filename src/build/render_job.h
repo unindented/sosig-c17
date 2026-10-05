@@ -58,7 +58,8 @@ enum { RENDER_JOB_ERROR_REPORT_COUNT_MAX = 20 };
  * @param render_jobs  Result slot set whose `count` is the job count and whose buffered diagnostics
  *                     are collected. Must not be `NULL`.
  * @param worker_count Requested worker threads, as for `pool_run`.
- * @param job_fn       Job run once per result slot. Must not be `NULL`.
+ * @param job_fn       Job run once per result slot, concurrently from several threads, so it must
+ *                     be thread-safe. Must not be `NULL`.
  * @param userdata     Shared job context forwarded to `job_fn`. Must not be `NULL`.
  * @param phase_label  Pass name leading each progress line, and named when the pass fails without a
  *                     diagnostic. Must not be `NULL`.

@@ -85,6 +85,9 @@ static void build_state_init(struct BuildState* state) __attribute__((nonnull(1)
 /**
  * @brief Releases every allocation a build state owns and leaves the state zeroed.
  *
+ * `content_entries` holds borrowed pointers into `render_jobs`, so only its array is freed here.
+ * Each entry is owned by the slot it was rendered into and is released with that slot.
+ *
  * @param state Build state to release. Must not be `NULL`.
  */
 static void build_state_free(struct BuildState* state) __attribute__((nonnull(1)));
@@ -219,8 +222,8 @@ enum ExitCode cmd_build_run(const struct BuildOptions* options) {
 
   enum ExitCode rc = EXIT_CODE_FAILURE;
   if (cmd_build_execute(options, &error_buffer) != 0) {
-    // `error_out` comes back empty only when recording the diagnostic itself ran out of memory, so
-    // the fallback keeps the failure visible. The fallback also makes the four discarded
+    // `error_buffer` comes back empty only when recording the diagnostic itself ran out of memory,
+    // so the fallback keeps the failure visible. The fallback also makes the four discarded
     // `(void)string_buffer_append(...)` results in `cmd_build_execute` safe. An append that fails
     // degrades the message to this line instead of reporting a silent success.
     fprintf(stderr, "%s\n", error_buffer.data != NULL ? error_buffer.data : "build failed");
@@ -317,8 +320,6 @@ static void build_state_init(struct BuildState* state) {
   site_config_init(&state->site_config);
 }
 
-// `content_entries` holds borrowed pointers into `render_jobs`, so only its array is freed here.
-// Each entry is owned by the slot it was rendered into and is released with that slot.
 static void build_state_free(struct BuildState* state) {
   free(state->content_entries);
   render_job_set_free(&state->render_jobs);
