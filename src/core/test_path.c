@@ -150,7 +150,7 @@ static void test_safe_relative_path_accepts_valid_rejects_escapes(void) {
   // cover. `.` and `..` are the only dot segments. A one-byte segment and a two-byte segment that
   // merely contains a `.` are ordinary names. Without these cases, `is_dot_segment` widened to
   // treat any one-byte segment or any segment touching a `.` as a traversal would still pass every
-  // case here, while refusing to publish `content/a.md`.
+  // case here, while refusing to publish `blog/a.html`.
   TEST_CHECK(path_is_safe_relative("a/b.html"));
   TEST_CHECK(path_is_safe_relative("a"));
   TEST_CHECK(path_is_safe_relative(".a"));

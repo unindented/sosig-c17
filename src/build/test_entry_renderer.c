@@ -782,9 +782,10 @@ static void test_rejects_oversize_source(void) {
 
 // Two failing sources append one diagnostic line each, separated by exactly one newline, with none
 // leading or trailing the buffer. That separator placement is what the "one per line" contract in
-// `entry_renderer.h` means, and a single-source failure cannot observe it at all. The build-level
-// counterpart is `test_reports_one_line_per_failing_entry` in `src/app/test_cmd_build.c`. This one
-// pins it at the module boundary, where the contract is documented.
+// `entry_renderer.h` means, and a single-source failure cannot observe it at all.
+// `test_reports_one_line_per_failing_entry` in `src/app/test_cmd_build.c` pins the same separator
+// for failures in the page phase, which runs only after this phase passes. This one pins it at the
+// module boundary, where the contract is documented.
 static void test_appends_one_error_line_per_failing_source(void) {
   char root_dir_template[] = "/tmp/sosig-entry-error-lines.XXXXXX";
   const char* root_dir = init_fixture_dir(root_dir_template);
