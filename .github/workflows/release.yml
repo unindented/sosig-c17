@@ -159,7 +159,7 @@ jobs:
           }
           run_sosig --version
           # Every fixture site in the golden test suite, built by the installed binary rather than
-          # a build-tree binary. It mirrors `cmake/sosig_run_golden_site.cmake`.
+          # a build-tree binary. It mirrors `cmake/sosig_run_golden.cmake`.
           for fixture in tests/fixtures/*; do
             site=$(basename "$fixture")
             scratch="$tmp/$site"

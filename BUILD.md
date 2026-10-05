@@ -16,7 +16,7 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 | `cmake/sosig_quality.cmake` | Configure formatting and static analysis |
 | `cmake/sosig_testing.cmake` | Add local unit tests |
 | `cmake/sosig_packaging.cmake` | Configure installation and CPack archives |
-| `cmake/sosig_run_golden_site.cmake` | Run one golden test |
+| `cmake/sosig_run_golden.cmake` | Run one golden test |
 | `cmake/sosig_restyle_graphviz_svg.cmake` | Add light and dark styles to the target graph |
 | `cmake/toolchains/` | Configure Zig for Linux `musl` targets |
 | `CMakeGraphVizOptions.cmake` | Set filters and layout for the target graph |

@@ -20,7 +20,7 @@ function(sosig_add_golden_test name)
       "-DSOSIG_EXPECTED_DIR=${arg_EXPECTED}"
       "-DSOSIG_SCRATCH_DIR=${PROJECT_BINARY_DIR}/golden/$<CONFIG>/${name}"
       "-DSOSIG_BUILD_ARGS=${arg_BUILD_ARGS}" -P
-      "${PROJECT_SOURCE_DIR}/cmake/sosig_run_golden_site.cmake"
+      "${PROJECT_SOURCE_DIR}/cmake/sosig_run_golden.cmake"
   )
   set_tests_properties(
     "${name}"
