@@ -361,7 +361,7 @@ The stripped archive is written to `build/release/`.
 
 #### x86-64 Linux `musl` package
 
-This cross-build requires Zig 0.16 and `llvm-strip`.
+This cross-build requires Zig 0.17 and `llvm-strip`.
 
 ```sh
 cmake --preset release-linux-x86_64
@@ -373,7 +373,7 @@ The archive is `build/release-linux-x86_64/sosig-<version>-x86_64-linux-musl.tar
 
 #### AArch64 Linux `musl` package
 
-This cross-build also requires Zig 0.16 and `llvm-strip`.
+This cross-build also requires Zig 0.17 and `llvm-strip`.
 
 ```sh
 cmake --preset release-linux-aarch64
