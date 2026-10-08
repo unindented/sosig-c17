@@ -262,7 +262,7 @@ static void test_writes_pages_sharing_parents_concurrently(void) {
   for (int i = 0; i < SOURCE_COUNT; i++) {
     char source_path[64];
     char output_path[64];
-    char title[16];
+    char title[24];
     (void)snprintf(source_path, sizeof(source_path), "content/section/sub/post-%02d.md", i);
     (void)snprintf(output_path, sizeof(output_path), "public/section/sub/post-%02d/index.html", i);
     (void)snprintf(title, sizeof(title), "Post %02d", i);
