@@ -1,5 +1,7 @@
 # This script builds one copied fixture site twice. It checks that the second build leaves the
-# generated output unchanged, then compares the result with the expected output.
+# generated output unchanged, then compares the result with the expected output. The release
+# workflow runs it against a packaged binary, with `SOSIG_EMULATOR` naming a launcher such as
+# `qemu-aarch64` when the binary targets another architecture.
 
 foreach(required IN ITEMS SOSIG_EXECUTABLE SOSIG_SITE_DIR SOSIG_EXPECTED_DIR SOSIG_SCRATCH_DIR)
   if(NOT DEFINED ${required})
@@ -15,7 +17,7 @@ set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
 set(first_dir "${SOSIG_SCRATCH_DIR}/first/public")
 
 execute_process(
-  COMMAND "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
+  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
   OUTPUT_VARIABLE build_stdout
@@ -30,7 +32,7 @@ endif()
 file(COPY "${actual_dir}" DESTINATION "${SOSIG_SCRATCH_DIR}/first")
 
 execute_process(
-  COMMAND "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
+  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
   OUTPUT_VARIABLE build_stdout

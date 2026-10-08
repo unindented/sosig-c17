@@ -147,34 +147,18 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           tar -C "$tmp" -xzf "$archive"
           bin="$tmp/sosig-$VERSION-$TARGET/bin/sosig"
-          run_sosig() {
-            case "$TARGET" in
-              aarch64-linux-musl)
-                qemu-aarch64 "$bin" "$@"
-                ;;
-              *)
-                "$bin" "$@"
-                ;;
-            esac
-          }
-          run_sosig --version
+          emulator=""
+          if [ "$TARGET" = aarch64-linux-musl ]; then
+            emulator=qemu-aarch64
+          fi
+          $emulator "$bin" --version
           # Every fixture site in the golden test suite, built by the installed binary rather than
-          # a build-tree binary. It mirrors `cmake/sosig_run_golden.cmake`.
+          # a build-tree binary.
           for fixture in tests/fixtures/*; do
             site=$(basename "$fixture")
-            scratch="$tmp/$site"
-            mkdir -p "$scratch"
-            cp -R "$fixture/." "$scratch/"
-            (cd "$scratch" && run_sosig build --workers 2)
-            cp -R "$scratch/public" "$scratch/first"
-            (cd "$scratch" && run_sosig build --workers 2)
-            (cd "$scratch/first" && find . -type f) | while IFS= read -r file; do
-              if ! cmp -s "$scratch/first/$file" "$scratch/public/$file"; then
-                echo "second build changed generated output: '$file'" >&2
-                exit 1
-              fi
-            done
-            diff -ru "tests/expected/$site" "$scratch/public"
+            cmake -DSOSIG_EXECUTABLE="$bin" -DSOSIG_EMULATOR="$emulator" \
+              -DSOSIG_SITE_DIR="$PWD/$fixture" -DSOSIG_EXPECTED_DIR="$PWD/tests/expected/$site" \
+              -DSOSIG_SCRATCH_DIR="$tmp/$site" -P cmake/sosig_run_golden.cmake
           done
 
       - name: Verify archive contents
