@@ -30,19 +30,17 @@
 #include "entity.h"
 
 
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199409L
-    /* C89/90 or old compilers in general may not understand "inline". */
-    #if defined __GNUC__
-        #define inline __inline__
-    #elif defined _MSC_VER
-        #define inline __inline
-    #else
-        #define inline
-    #endif
-#endif
-
 #ifdef _WIN32
     #define snprintf _snprintf
+#endif
+
+/* For falling through case labels in switch statements. */
+#if defined __clang__ && __clang_major__ >= 12
+    #define MD_FALLTHROUGH()        ;__attribute__((fallthrough))
+#elif defined __GNUC__ && __GNUC__ >= 7
+    #define MD_FALLTHROUGH()        ;__attribute__((fallthrough))
+#else
+    #define MD_FALLTHROUGH()        ((void)0)
 #endif
 
 
@@ -532,6 +530,7 @@ enter_span_callback(MD_SPANTYPE type, void* detail, void* userdata)
         case MD_SPAN_A:                 render_open_a_span(r, (MD_SPAN_A_DETAIL*) detail); break;
         case MD_SPAN_IMG:               render_open_img_span(r, (MD_SPAN_IMG_DETAIL*) detail); break;
         case MD_SPAN_CODE:              RENDER_VERBATIM(r, "<code>"); break;
+        case MD_SPAN_INS:               RENDER_VERBATIM(r, "<ins>"); break;
         case MD_SPAN_DEL:               RENDER_VERBATIM(r, "<del>"); break;
         case MD_SPAN_SPOILER:           RENDER_VERBATIM(r, "<x-spoiler>"); break;
         case MD_SPAN_SUPERSCRIPT:       RENDER_VERBATIM(r, "<sup>"); break;
@@ -563,12 +562,13 @@ leave_span_callback(MD_SPANTYPE type, void* detail, void* userdata)
         case MD_SPAN_A:                 RENDER_VERBATIM(r, "</a>"); break;
         case MD_SPAN_IMG:               render_close_img_span(r, (MD_SPAN_IMG_DETAIL*) detail); break;
         case MD_SPAN_CODE:              RENDER_VERBATIM(r, "</code>"); break;
+        case MD_SPAN_INS:               RENDER_VERBATIM(r, "</ins>"); break;
         case MD_SPAN_DEL:               RENDER_VERBATIM(r, "</del>"); break;
         case MD_SPAN_SPOILER:           RENDER_VERBATIM(r, "</x-spoiler>"); break;
         case MD_SPAN_SUPERSCRIPT:       RENDER_VERBATIM(r, "</sup>"); break;
         case MD_SPAN_SUBSCRIPT:         RENDER_VERBATIM(r, "</sub>"); break;
         case MD_SPAN_MARK:              RENDER_VERBATIM(r, "</mark>"); break;
-        case MD_SPAN_LATEXMATH:         /*fall through*/
+        case MD_SPAN_LATEXMATH:         MD_FALLTHROUGH();
         case MD_SPAN_LATEXMATH_DISPLAY: RENDER_VERBATIM(r, "</x-equation>"); break;
         case MD_SPAN_WIKILINK:          RENDER_VERBATIM(r, "</x-wikilink>"); break;
         case MD_SPAN_FOOTNOTE_REF:      /* noop: enter_span already emitted full HTML */ break;
