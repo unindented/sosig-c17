@@ -2,9 +2,8 @@
 
 #include "core/ascii.h"
 
-// `ascii_is_digit` answers for `[0-9]` and nothing else, asserted at both edges. Only `parse_size`
-// calls it, and it re-checks the byte afterwards by handing it to `strtoull`, so a widened alphabet
-// here is invisible from outside the module.
+// `ascii_is_digit` answers for `[0-9]` and nothing else, asserted at both edges. No caller
+// re-checks the byte afterwards: widening the set would change which values `parse_size` accepts.
 static void test_is_digit_accepts_only_ascii_digits(void) {
   TEST_CHECK(ascii_is_digit('0'));
   TEST_CHECK(ascii_is_digit('5'));
@@ -56,8 +55,8 @@ static void test_is_alnum_accepts_only_letters_and_digits(void) {
 
 // `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. Slugs, URL schemes, file
 // suffixes, and manifest keys all use this exact locale-independent fold, through `text_slugify`,
-// `skip_scheme`, `has_suffix` in `fs.c`, and `manifest_equal_bytes` with `manifest_hash_bytes`.
-// `skip_scheme` folds both the URL byte and the scheme byte before comparing, and a fold that set
+// `has_scheme`, `has_suffix` in `walk.c`, and `is_path_equal_folded` with `hash_path_folded`.
+// `has_scheme` folds both the URL byte and the scheme byte before comparing, and a fold that set
 // bit 0x20 unconditionally would make the control byte 0x1A compare equal to ':' and 0x0F equal to
 // '/'. A scheme-less `base_url` spelled with those control bytes would then pass as absolute. The
 // high-byte case pins the rule that bytes outside ASCII never fold, whatever the locale: `tolower`

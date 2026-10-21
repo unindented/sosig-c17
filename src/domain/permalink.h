@@ -1,6 +1,8 @@
 #ifndef SOSIG_PERMALINK_H
 #define SOSIG_PERMALINK_H
 
+#include "shared/str.h"
+
 struct Arena;
 
 /**
@@ -18,15 +20,15 @@ struct Arena;
  * configured pattern by expanding it here and checking the result, rather than reasoning about the
  * pattern's bytes separately, so validation and rendering can never disagree.
  *
- * @param pattern Permalink pattern to expand. Must not be `NULL`.
- * @param section Slugified section. May be empty. Must not be `NULL`.
- * @param slug    Entry slug. Must not be `NULL`.
+ * @param pattern Permalink pattern to expand.
+ * @param section Slugified section. May be empty.
+ * @param slug    Entry slug.
  * @param arena   Arena that owns the returned URL. Must not be `NULL`.
- * @return Terminated URL owned by `arena` with a leading `/`, or `NULL` on allocation failure.
+ * @return URL owned by `arena` with a leading `/`.
  */
-char* permalink_expand(const char* pattern,
-                       const char* section,
-                       const char* slug,
-                       struct Arena* arena) __attribute__((nonnull(1, 2, 3, 4)));
+struct Str permalink_expand(struct Str pattern,
+                            struct Str section,
+                            struct Str slug,
+                            struct Arena* arena) __attribute__((nonnull(4)));
 
 #endif

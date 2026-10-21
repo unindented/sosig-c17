@@ -3,56 +3,54 @@
 
 #include <stddef.h>
 
+#include "shared/arena.h"
+#include "shared/str.h"
+
 struct ContentEntry;
+struct Log;
+struct Os;
 struct SiteConfig;
 
-// These are declared in the order `cmd_build` runs them. The manifest phase in `manifest_builder`
-// claims every intended output path before this module writes anything. Content pages are written
-// earlier, by `page_renderer_render_pages`. Ordering the entries and deriving `site.updated` happen
-// earlier still, in `content_entry` (`content_entry_sort`, `content_entry_latest_date`).
+// The manifest phase in `manifest_builder` claims every intended output path before this module
+// writes anything. Content pages are written earlier, by `page_renderer_render_pages`. Ordering the
+// entries and deriving `site.updated` happen earlier still, in `content_entry`
+// (`content_entry_sort`, `content_entry_date_latest`).
 
 /**
- * @brief Renders and writes configured aggregate templates with all non-draft entries visible.
+ * @brief Renders each of `template_names` with `content_entries` visible and writes it to its
+ *        matching path under `output_dir`.
  *
- * @param site_config         Configuration supplying `output_dir`, `templates_dir`, and the
- *                            aggregate template list. Must not be `NULL`.
+ * `cmd_build` calls this once for the aggregate templates, with every non-draft entry, and once for
+ * the feed templates, with the newest `feed_count`.
+ *
+ * @param site_config         Configuration supplying `output_dir` and `templates_dir`. Must not be
+ *                            `NULL`.
+ * @param template_names      Array of `template_count` safe relative template names. May be `NULL`
+ *                            only when `template_count` is 0.
+ * @param template_count      Number of entries in `template_names`.
  * @param content_entries     Content entries, sorted newest-first, visible to the templates. May be
  *                            `NULL` only when `content_entry_count` is 0.
  * @param content_entry_count Number of entries in `content_entries`.
- * @param site_updated        Site last-updated timestamp exposed as `site.updated`. Must not be
- *                            `NULL`.
- * @param err                 Destination buffer for a failure diagnostic.
- * @param err_len             Size of `err` in bytes.
- * @return `0` on success, including when no aggregate is configured, or `-1` on the first template
- *         that fails to render or write.
- */
-int site_writer_write_aggregates(const struct SiteConfig* site_config,
-                                 const struct ContentEntry* const* content_entries,
-                                 size_t content_entry_count,
-                                 const char* site_updated,
-                                 char* err,
-                                 size_t err_len) __attribute__((nonnull(1, 4)));
-
-/**
- * @brief Renders and writes configured feed templates with the newest `feed_count` entries.
- *
- * @param site_config         Configuration supplying `output_dir`, `templates_dir`, `feed_count`,
- *                            and the feed template list. Must not be `NULL`.
- * @param content_entries     Content entries, sorted newest-first, the feed draws from. May be
- *                            `NULL` only when `content_entry_count` is 0.
- * @param content_entry_count Number of entries in `content_entries`.
- * @param site_updated        Site last-updated timestamp exposed as `site.updated`. Must not be
- *                            `NULL`.
- * @param err                 Destination buffer for a failure diagnostic.
- * @param err_len             Size of `err` in bytes.
- * @return `0` on success, including when no feed is configured, or `-1` on the first template that
+ * @param site_updated        Site last-updated timestamp exposed as `site.updated`.
+ * @param os                  Host the templates are read from and the outputs written to. Must not
+ *                            be `NULL`.
+ * @param output              Arena whose free space holds each rendered output until it is written.
+ *                            Nothing in it outlives the call. Must not overlap `scratch`.
+ * @param scratch             Arena for each render's temporaries.
+ * @param log                 Log that receives the first failure. Its arena must be none of the
+ *                            others. Must not be `NULL`.
+ * @return `0` on success, including when `template_count` is 0, or `-1` on the first template that
  *         fails to render or write.
  */
-int site_writer_write_feeds(const struct SiteConfig* site_config,
-                            const struct ContentEntry* const* content_entries,
-                            size_t content_entry_count,
-                            const char* site_updated,
-                            char* err,
-                            size_t err_len) __attribute__((nonnull(1, 4)));
+int site_writer_write_templates(const struct SiteConfig* site_config,
+                                const struct Str* template_names,
+                                ptrdiff_t template_count,
+                                const struct ContentEntry* const* content_entries,
+                                ptrdiff_t content_entry_count,
+                                struct Str site_updated,
+                                struct Os* os,
+                                struct Arena output,
+                                struct Arena scratch,
+                                struct Log* log) __attribute__((nonnull(1, 7, 10)));
 
 #endif

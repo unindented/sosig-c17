@@ -4,14 +4,22 @@
 
 #include <acutest.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include "runtime/fs.h"
+#include "runtime/os.h"
+#include "shared/arena.h"
+#include "shared/log.h"
+#include "shared/str.h"
 #include "test_support.h"
 
 /**
@@ -26,51 +34,84 @@ static bool is_same_file(int fd, const struct stat* before) {
   return fstat(fd, &after) == 0 && after.st_dev == before->st_dev && after.st_ino == before->st_ino;
 }
 
+/**
+ * @brief Runs out of memory. Run through `test_is_oom`.
+ *
+ * @param userdata Unused.
+ */
+static void run_out_of_memory(void* userdata) {
+  (void)userdata;
+  os_oom();
+}
+
+/**
+ * @brief Returns without running out of memory. Run through `test_is_oom`.
+ *
+ * @param userdata Unused.
+ */
+static void return_normally(void* userdata) {
+  (void)userdata;
+}
+
+// `test_is_oom` reports a child that ends in `os_oom`, and not one that returns.
+static void test_detects_only_an_out_of_memory_exit(void) {
+  TEST_CHECK(test_is_oom(run_out_of_memory, NULL));
+  TEST_CHECK(!test_is_oom(return_normally, NULL));
+}
+
+// An `os_oom` that no `test_is_oom` expects exits with status `1`, the one acutest counts as a
+// failed test.
+static void test_unexpected_oom_exits_with_failure_status(void) {
+  (void)fflush(stdout);
+  (void)fflush(stderr);
+  const pid_t pid = fork();
+  TEST_ASSERT(pid >= 0);
+  if (pid == 0) {
+    // The child's report would read as a failure of this test, so it goes nowhere.
+    const int null_fd = open("/dev/null", O_WRONLY);
+    if (null_fd >= 0) {
+      (void)dup2(null_fd, STDERR_FILENO);
+    }
+    os_oom();
+  }
+  int status = 0;
+  TEST_CHECK(waitpid(pid, &status, 0) == pid);
+  TEST_CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+}
+
 // A fixture file lands below the root with its parent directories created and its text intact, and
 // removing the tree deletes the root and everything below it.
 static void test_fixture_tree_write_and_remove(void) {
-  char root_dir_template[] = "/tmp/sosig-test-support.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
+  enum { FIXTURE_LEN_MAX = 64 };
+  char root_dir[] = "/tmp/sosig-test-support.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
     return;
   }
   const int write_rc = write_fixture_file(root_dir, "nested/deeper/file.txt", "fixture text");
-  char fixture_path[PATH_MAX];
-  const int fixture_path_len =
-      snprintf(fixture_path, sizeof(fixture_path), "%s/nested/deeper/file.txt", root_dir);
-  const bool is_path_complete =
-      fixture_path_len > 0 && (size_t)fixture_path_len < sizeof(fixture_path);
-  FILE* fixture = is_path_complete ? fopen(fixture_path, "rb") : NULL;
-  const bool is_opened = fixture != NULL;
-  char text[64] = "";
-  int read_rc = -1;
-  int close_rc = -1;
-  if (fixture != NULL) {
-    read_rc = read_capture(fixture, text, sizeof(text));
-    close_rc = fclose(fixture);
-  }
+  struct Arena arena = test_arena();
+  const struct Str fixture_path =
+      str_concat(str_from_cstr(root_dir), S("/nested/deeper/file.txt"), &arena);
+  struct Log log = test_log();
+  struct Str text = {0};
+  const int read_rc = os_read(os_posix(), fixture_path, FIXTURE_LEN_MAX, &arena, &text,
+                              S("failed to read fixture"), &log);
   // The tree is removed before any assertion, so a failed one cannot leave it behind.
   remove_fixture_tree(root_dir);
   errno = 0;
   const int access_rc = access(root_dir, F_OK);
   const int access_errno = errno;
 
-  TEST_CHECK(root_dir == root_dir_template);
   TEST_CHECK(write_rc == 0);
-  TEST_CHECK(is_path_complete);
-  TEST_CHECK(is_opened);
-  TEST_CHECK(read_rc == 0);
-  TEST_CHECK(close_rc == 0);
-  TEST_CHECK(strcmp(text, "fixture text") == 0);
+  TEST_CHECK(read_rc == 0 && test_log_is_empty(&log));
+  TEST_CHECK(str_eq(text, S("fixture text")));
   TEST_CHECK(access_rc == -1 && access_errno == ENOENT);
 }
 
 // Entering a directory makes relative paths resolve below it, and leaving restores the working
 // directory the test started in.
 static void test_working_dir_enter_and_leave(void) {
-  char root_dir_template[] = "/tmp/sosig-test-support.XXXXXX";
-  const char* root_dir = init_fixture_dir(root_dir_template);
-  if (root_dir == NULL) {
+  char root_dir[] = "/tmp/sosig-test-support.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
     return;
   }
   const int write_rc = write_fixture_file(root_dir, "marker", "");
@@ -107,9 +148,9 @@ static void test_capture_reads_stream_text_and_restores(void) {
   TEST_ASSERT(capture_begin(stderr, &capture) == 0);
   TEST_CHECK(fputs("captured\n", stderr) >= 0);
   char text[64];
-  TEST_CHECK(capture_end(&capture, text, sizeof(text)) == 0);
-
-  TEST_CHECK(strcmp(text, "captured\n") == 0);
+  if (TEST_CHECK(capture_end(&capture, text, sizeof(text)) == 0)) {
+    TEST_CHECK(strcmp(text, "captured\n") == 0);
+  }
   TEST_CHECK(is_same_file(STDERR_FILENO, &stderr_before));
 }
 
@@ -120,9 +161,9 @@ static void test_capture_flushes_buffered_text(void) {
   TEST_ASSERT(capture_begin(stdout, &capture) == 0);
   TEST_CHECK(fputs("buffered", stdout) >= 0);
   char text[64];
-  TEST_CHECK(capture_end(&capture, text, sizeof(text)) == 0);
-
-  TEST_CHECK(strcmp(text, "buffered") == 0);
+  if (TEST_CHECK(capture_end(&capture, text, sizeof(text)) == 0)) {
+    TEST_CHECK(strcmp(text, "buffered") == 0);
+  }
 }
 
 // A capture that ends with nothing written reads an empty string.
@@ -160,6 +201,8 @@ static void test_unwritable_capture_fails_writes_and_discards_them(void) {
 }
 
 TEST_LIST = {
+    {"detects only an out of memory exit", test_detects_only_an_out_of_memory_exit},
+    {"unexpected oom exits with failure status", test_unexpected_oom_exits_with_failure_status},
     {"fixture tree write and remove", test_fixture_tree_write_and_remove},
     {"working dir enter and leave", test_working_dir_enter_and_leave},
     {"capture reads stream text and restores", test_capture_reads_stream_text_and_restores},

@@ -9,12 +9,12 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 | Path | Responsibility |
 | --- | --- |
 | `src/CMakeLists.txt` | Build the private application library and the `sosig` executable |
-| `src/*/CMakeLists.txt` | Add sources, header file sets, and local unit tests |
-| `tests/CMakeLists.txt` | Add the golden test suite and the shared unit-test support library |
+| `src/*/CMakeLists.txt` | Add sources, header file sets, and local unit tests; `src/runtime/CMakeLists.txt` also defines the POSIX host library `sosig_os_posix` |
+| `tests/CMakeLists.txt` | Add the golden test suite, the shared unit-test support library, and the in-memory host |
 | `vendor/CMakeLists.txt` | Build each vendored dependency |
 | `cmake/sosig_build_profiles.cmake` | Set warnings, optimization, fortification, and sanitizers |
 | `cmake/sosig_quality.cmake` | Configure formatting and static analysis |
-| `cmake/sosig_testing.cmake` | Add local unit tests |
+| `cmake/sosig_testing.cmake` | Register a unit test and choose the host it links |
 | `cmake/sosig_packaging.cmake` | Configure installation and CPack archives |
 | `cmake/sosig_run_golden.cmake` | Run one golden test |
 | `cmake/sosig_restyle_graphviz_svg.cmake` | Add light and dark styles to the target graph |
@@ -23,7 +23,7 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 
 ## Target graph
 
-`sosig_app` is a private static library. It contains all application source files except `main.c`. The `sosig` executable and unit tests link to it. `sosig_app` links to `sosig_vendor_sharedstuff` for the arena and string buffer implementations.
+`sosig_app` is a private static library. It contains all application source files except `main.c` and `runtime/fs.c`. The `sosig` executable and unit tests link to it. `runtime/fs.c`, the POSIX implementation of `runtime/os.h`, is the object library `sosig_os_posix`, so each executable chooses its host when it is linked: `sosig` and the tests registered with the default `OS posix` link it, and the tests registered with `sosig_add_unit_test(<module> OS memory)` link `sosig_os_memory` (`tests/os_memory.c`) instead. Both are object libraries because `sosig_app` refers to them, and a static archive listed before its user would be skipped by a single-pass linker. `sosig_app` links to `sosig_vendor_sharedstuff` for the arena, counted string, output buffer, and diagnostic log implementations. The arena calls `os_oom` when an allocation does not fit, and `sharedstuff` leaves that function to the application: `main.c` defines the production one, which prints the log collected so far and `sosig: out of memory` with the file the thread was working on, and exits with `EXIT_CODE_FAILURE`. `sosig_test_support` defines the unit-test one.
 
 The library is static because it supports one product. It does not provide a public ABI.
 
@@ -33,11 +33,11 @@ Each vendored project has a separate target. Header-only dependencies use interf
 
 `Threads::Threads` is a private dependency of `sosig_app`. CMake adds this link requirement to each executable that links to the static library.
 
-Source directories group code by function. They do not define separate libraries. Each local `CMakeLists.txt` adds files to `sosig_app` and links the private vendored dependency that only its code uses. More libraries would add link boundaries without independent APIs.
+Source directories group code by function. Apart from the host implementation, they do not define separate libraries. Each local `CMakeLists.txt` adds files to `sosig_app` and links the private vendored dependency that only its code uses. More libraries would add link boundaries without independent APIs.
 
 ### Generated dependency graph
 
-CMake generates this graph from the `release` preset. The graph shows CMake targets and link relationships. It does not show dependencies between source modules. Graph options remove test-only targets.
+CMake generates this graph from the `release` preset. The graph shows CMake targets and link relationships. It does not show dependencies between source modules. Graph options remove test-only targets, such as the in-memory host `sosig_os_memory`.
 
 ![CMake target dependency graph](media/dependencies.svg)
 
@@ -77,7 +77,7 @@ The address-sanitizer profile instruments first-party and vendored code. Vendore
 
 ## Linting and formatting
 
-CMake sets `clang-tidy` and `cppcheck` as properties of first-party targets. Neither tool checks vendored code.
+CMake sets `clang-tidy` and `cppcheck` as properties of first-party targets. Neither tool checks vendored sources. cppcheck reads the vendored `sharedstuff` headers to expand `STR_FMT`. It also analyzes the inline functions those headers define.
 
 Tests run `cppcheck`. Tests do not run `clang-tidy` because deliberate failure cases cause analyzer errors.
 
@@ -91,9 +91,13 @@ This duplication is deliberate. A configure-time glob can omit a new file until 
 
 `SOSIG_BUILD_TESTING` controls test creation. It is true by default for a top-level build. It is false by default for a child build.
 
-Each source directory adds its local unit tests. The top-level `tests/` directory adds the golden test suite and `sosig_test_support`. Each CTest case has a `sosig` label. It also has a `unit` or `golden` label.
+Each source directory adds its local unit tests. The top-level `tests/` directory adds the golden test suite, `sosig_test_support`, and the in-memory host `sosig_os_memory`. Each CTest case has a `sosig` label. It also has a `unit` or `golden` label.
 
-`sosig_test_support` holds the unit-test plumbing that several `test_*.c` files need: a fixture-root creator, a recursive fixture-tree remover, a fixture-file writer, a working-directory switch, standard-stream capture and restore, and a capture-stream reader. Its own unit test is `tests/test_test_support.c`. `test_support.c` defines `TEST_NO_MAIN`, so acutest's `main` and run state stay in each test executable's own translation unit and the link resolves `acutest_check_` and `acutest_abort_` against it. A failure raised inside the support library is reported against `test_support.c` and fails the test that reached it.
+`sosig_add_unit_test` takes `OS memory` to link the in-memory host, and then compiles the test with `SOSIG_TEST_OS_MEMORY` set to 1. Every unit test registered without `OS memory` links the POSIX host: the POSIX layer's own tests and the test-support test, which need a real filesystem; the suites that build their fixtures in a real temporary directory; and the tests that reach no host. New tests use the in-memory host. `sosig_add_unit_test` also takes `NAME` when one source builds more than one test. `src/runtime/test_os.c` uses both: it builds `sosig.os_posix`, which works in a real temporary directory, and `sosig.os_memory`. These are the contract tests of `runtime/os.h`. Both must pass. Each unit test has a CTest timeout of 60 seconds, so a test that hangs fails instead of stopping the run.
+
+`sharedstuff` has its own compile-fail tests for `buf_printf` and `log_error`. They check that a call whose arguments disagree with its format does not compile: a raw `struct Str` for `%.*s`, a missing argument, a `ptrdiff_t` for `%d`, a format that is not a literal, a non-string given to `STR_FMT`, and a disagreement through a forwarding wrapper. They run in the `sharedstuff` repository. The vendored copy holds no tests.
+
+`sosig_test_support` holds the unit-test plumbing that several `test_*.c` files need: a fixture-root creator, a recursive fixture-tree remover, a fixture-file writer, a working-directory switch, standard-stream capture and restore, an arena over a fresh reservation, a log over a fresh reservation and exact-text log checks, and an out-of-memory check. It also defines the unit-test `os_oom`, which exits with a status of its own, so `test_is_oom` can run code in a child process and tell running out of memory apart from a crash. It is an object library, so that definition is linked into every test executable whatever the link order. Its own unit test is `tests/test_test_support.c`. `test_support.c` defines `TEST_NO_MAIN`, so acutest's `main` and run state stay in each test executable's own translation unit and the link resolves acutest's declarations, such as `acutest_check_`, `acutest_message_` and `acutest_abort_`, against it. A failure raised inside the support library is reported against `test_support.c` and fails the test that reached it.
 
 A parent that enables `sosig` tests must call `enable_testing()` in its top-level `CMakeLists.txt`. CTest starts discovery at the build root. A child call cannot create the root test file. CMake prints this requirement when a child enables tests.
 

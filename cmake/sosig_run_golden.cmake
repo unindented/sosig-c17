@@ -17,7 +17,7 @@ set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
 set(first_dir "${SOSIG_SCRATCH_DIR}/first/public")
 
 execute_process(
-  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
+  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
   OUTPUT_VARIABLE build_stdout
@@ -32,7 +32,7 @@ endif()
 file(COPY "${actual_dir}" DESTINATION "${SOSIG_SCRATCH_DIR}/first")
 
 execute_process(
-  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2 ${SOSIG_BUILD_ARGS}
+  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
   RESULT_VARIABLE build_result
   OUTPUT_VARIABLE build_stdout

@@ -1,50 +1,59 @@
 #include "build/site_writer.h"
 
 #include <stddef.h>
-#include <stdlib.h>
 
-#include "build/manifest_builder.h"
 #include "build/template.h"
-#include "core/error.h"
+#include "core/path.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
-#include "runtime/fs.h"
+#include "runtime/memory.h"
+#include "runtime/os.h"
 #include "shared/arena.h"
+#include "shared/str.h"
 
-// This module's two exported writers are unit-tested in `src/build/test_site_writer.c`, and CTest's
-// golden test suite exercises them end to end by building every fixture site and comparing each
-// result with its `tests/expected/<site>` tree. Collision checks live in `manifest_builder`,
-// unit-tested in `src/build/test_manifest_builder.c`.
+// This module's writer is unit-tested in `src/build/test_site_writer.c`, and CTest's golden test
+// suite exercises it end to end by building every fixture site and comparing each result with its
+// `tests/expected/<site>` tree. Collision checks live in `manifest_builder`, unit-tested in
+// `src/build/test_manifest_builder.c`.
 
 /**
  * @brief Renders one configured template and writes it to its matching output path.
  *
- * @param templates_dir Template directory root. Must not be `NULL`.
- * @param output_dir    Output directory the template name is rooted under. Must not be `NULL`.
+ * @param templates_dir Template directory root.
+ * @param output_dir    Output directory the template name is rooted under.
  * @param template_name Safe relative template name to render. `manifest_builder_populate` already
  *                      checked it against the output-path limits, because every call site runs the
  *                      manifest phase over the same configured lists first. This function does not
  *                      re-check, so an overlong name reaching here fails as an opaque write error
- *                      from the OS rather than with a diagnostic naming the limit. Must not be
- *                      `NULL`.
+ *                      from the OS rather than with a diagnostic naming the limit.
  * @param context       Template context for this render. Must not be `NULL`.
- * @param err           Destination buffer for a failure diagnostic.
- * @param err_len       Size of `err` in bytes.
- * @return `0` on success, or `-1` on a render, path, or write failure.
+ * @param os            Host the template is read from and the output written to. Must not be
+ *                      `NULL`.
+ * @param output        Arena that holds the rendered output until it is written.
+ * @param scratch       Arena for the render's temporaries and the output path.
+ * @param log           Log that receives the first failure. Its arena must be none of the others.
+ *                      Must not be `NULL`.
+ * @return `0` on success, or `-1` on a render or write failure.
  */
-static int write_rendered_template(const char* templates_dir,
-                                   const char* output_dir,
-                                   const char* template_name,
+static int write_rendered_template(struct Str templates_dir,
+                                   struct Str output_dir,
+                                   struct Str template_name,
                                    const struct TemplateContext* context,
-                                   char* err,
-                                   size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
+                                   struct Os* os,
+                                   struct Arena output,
+                                   struct Arena scratch,
+                                   struct Log* log) __attribute__((nonnull(4, 5, 8)));
 
-int site_writer_write_aggregates(const struct SiteConfig* site_config,
-                                 const struct ContentEntry* const* content_entries,
-                                 size_t content_entry_count,
-                                 const char* site_updated,
-                                 char* err,
-                                 size_t err_len) {
+int site_writer_write_templates(const struct SiteConfig* site_config,
+                                const struct Str* template_names,
+                                ptrdiff_t template_count,
+                                const struct ContentEntry* const* content_entries,
+                                ptrdiff_t content_entry_count,
+                                struct Str site_updated,
+                                struct Os* os,
+                                struct Arena output,
+                                struct Arena scratch,
+                                struct Log* log) {
   const struct TemplateContext context = {
       .site_config = site_config,
       .content_entry_current = NULL,
@@ -52,74 +61,30 @@ int site_writer_write_aggregates(const struct SiteConfig* site_config,
       .content_entry_count = content_entry_count,
       .site_updated = site_updated,
   };
-
-  for (size_t i = 0; i < site_config->aggregate_template_count; i++) {
+  for (ptrdiff_t i = 0; i < template_count; i++) {
     if (write_rendered_template(site_config->templates_dir, site_config->output_dir,
-                                site_config->aggregate_templates[i], &context, err, err_len) != 0) {
+                                template_names[i], &context, os, output, scratch, log) != 0) {
       return -1;
     }
   }
   return 0;
 }
 
-int site_writer_write_feeds(const struct SiteConfig* site_config,
-                            const struct ContentEntry* const* content_entries,
-                            size_t content_entry_count,
-                            const char* site_updated,
-                            char* err,
-                            size_t err_len) {
-  const size_t feed_content_entry_count =
-      content_entry_count < site_config->feed_count ? content_entry_count : site_config->feed_count;
-  const struct TemplateContext context = {
-      .site_config = site_config,
-      .content_entry_current = NULL,
-      .content_entries = content_entries,
-      .content_entry_count = feed_content_entry_count,
-      .site_updated = site_updated,
-  };
-
-  for (size_t i = 0; i < site_config->feed_template_count; i++) {
-    if (write_rendered_template(site_config->templates_dir, site_config->output_dir,
-                                site_config->feed_templates[i], &context, err, err_len) != 0) {
-      return -1;
-    }
-  }
-  return 0;
-}
-
-static int write_rendered_template(const char* templates_dir,
-                                   const char* output_dir,
-                                   const char* template_name,
+static int write_rendered_template(struct Str templates_dir,
+                                   struct Str output_dir,
+                                   struct Str template_name,
                                    const struct TemplateContext* context,
-                                   char* err,
-                                   size_t err_len) {
-  struct Arena scratch;
-  arena_init(&scratch);
-
-  int rc = -1;
-  char* output_path = NULL;
-  size_t rendered_html_len = 0;
-  char* rendered_html =
-      template_render_file(templates_dir, template_name, context, &rendered_html_len, err, err_len);
-  if (rendered_html == NULL) {
-    goto cleanup;
+                                   struct Os* os,
+                                   struct Arena output,
+                                   struct Arena scratch,
+                                   struct Log* log) {
+  memory_oom_set_job(template_name, NULL);
+  struct Str rendered_html = {0};
+  if (template_render_file(templates_dir, template_name, context, os, &output, scratch,
+                           &rendered_html, log) != 0) {
+    return -1;
   }
-
-  output_path = manifest_builder_derive_template_output(output_dir, template_name, &scratch);
-  if (output_path == NULL) {
-    (void)error_report(err, err_len, "out of memory building output path for '%s'", template_name);
-    goto cleanup;
-  }
-  char reason[FS_REASON_SIZE];
-  if (fs_write_file(output_path, rendered_html, rendered_html_len, reason, sizeof(reason)) != 0) {
-    (void)error_report(err, err_len, "failed to write template output: %s ('%s')", reason,
-                       output_path);
-    goto cleanup;
-  }
-  rc = 0;
-
-cleanup:
-  arena_free(&scratch);
-  free(rendered_html);
-  return rc;
+  // The render has returned, so its temporaries in `scratch` are dead and the path can reuse them.
+  const struct Str output_path = path_join(output_dir, template_name, &scratch);
+  return os_write(os, output_path, rendered_html, S("failed to write template output"), log);
 }

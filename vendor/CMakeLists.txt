@@ -21,7 +21,8 @@ target_include_directories(
 )
 
 add_library(
-  sosig_vendor_sharedstuff STATIC sharedstuff/src/arena.c sharedstuff/src/string_buffer.c
+  sosig_vendor_sharedstuff STATIC sharedstuff/src/arena.c sharedstuff/src/buf.c
+                                  sharedstuff/src/log.c sharedstuff/src/str.c
 )
 target_include_directories(
   sosig_vendor_sharedstuff SYSTEM

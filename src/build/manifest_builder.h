@@ -3,9 +3,13 @@
 
 #include <stddef.h>
 
-struct Arena;
+#include "shared/arena.h"
+#include "shared/str.h"
+
 struct ContentEntry;
+struct Log;
 struct Manifest;
+struct Os;
 struct PathList;
 struct SiteConfig;
 
@@ -24,14 +28,15 @@ struct SiteConfig;
  *
  * @param site_config Configuration supplying `content_dir`, `output_dir`, and `templates_dir`. Must
  *                    not be `NULL`.
- * @param err         Destination buffer for a failure diagnostic.
- * @param err_len     Size of `err` in bytes.
- * @return `0` when no input root holds `output_dir`, or `-1` when one does or on allocation
- *         failure.
+ * @param os          Host the directories are on. Must not be `NULL`.
+ * @param scratch     Arena for the ancestor paths the check builds.
+ * @param log         Log that receives the error. Must not be `NULL`.
+ * @return `0` when no input root holds `output_dir`, or `-1` when one does.
  */
 int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
-                                      char* err,
-                                      size_t err_len) __attribute__((nonnull(1)));
+                                      struct Os* os,
+                                      struct Arena scratch,
+                                      struct Log* log) __attribute__((nonnull(1, 2, 4)));
 
 /**
  * @brief Records every intended output path in the build manifest, rejecting duplicates and any
@@ -46,9 +51,8 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  *
  * The first case catches an output that would be read back as an input without overwriting one: a
  * new Markdown file below `content_dir` is parsed as a source by the next build, and a new file
- * below `templates_dir` can be read as a partial by the render of this same build. This runs
- * `manifest_builder_check_output_dir` itself first, so an `output_dir` inside a root is rejected
- * even when the caller skipped the early check, and then compares each root by `(device, inode)`
+ * below `templates_dir` can be read as a partial by the render of this same build. The caller has
+ * already run `manifest_builder_check_output_dir`, so this compares each root by `(device, inode)`
  * against each existing directory between `output_dir` and the output. That catches a symlink
  * inside `output_dir` that leads into a root. A root that does not exist holds nothing to protect
  * and is skipped.
@@ -75,43 +79,33 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  *                            and the template lists. Must not be `NULL`.
  * @param config_path         Path the configuration itself was loaded from. Claimed as an input
  *                            like any other, so a build cannot overwrite the file that configured
- *                            it. Must not be `NULL`.
+ *                            it.
  * @param source_paths        Every discovered content source path, drafts included, whose files
  *                            must not be overwritten. Must not be `NULL`.
  * @param content_entries     Rendered non-draft content entries whose output paths, each joined
  *                            onto `output_dir`, are recorded. May be `NULL` only when
  *                            `content_entry_count` is 0.
  * @param content_entry_count Number of entries in `content_entries`.
- * @param err                 Destination buffer for a failure diagnostic.
- * @param err_len             Size of `err` in bytes.
+ * @param os                  Host the inputs and outputs are on. Must not be `NULL`.
+ * @param perm                Arena that owns the manifest's entries, for as long as the manifest is
+ *                            used. Must not be `NULL`.
+ * @param scratch             Arena for the input walk and the per-output checks.
+ * @param log                 Log that receives every error. Every output is checked even after one
+ *                            fails, so each collision is reported in one run. Must not be `NULL`.
  * @return `0` when every output path is unique, stays out of both input trees, overwrites no input,
  *         and nests under no other, or `-1` on an output inside an input tree, a duplicate, a
- *         prefix collision, an input overwrite, an oversize template path, a failed template walk,
- *         or an allocation failure.
+ *         prefix collision, an input overwrite, an oversize template path, or a failed template
+ *         walk.
  */
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,
-                              const char* config_path,
+                              struct Str config_path,
                               const struct PathList* source_paths,
                               const struct ContentEntry* const* content_entries,
-                              size_t content_entry_count,
-                              char* err,
-                              size_t err_len) __attribute__((nonnull(1, 2, 3, 4)));
-
-/**
- * @brief Derives the output path a configured aggregate or feed template is written to.
- *
- * `manifest_builder_populate` registers this path and `site_writer` writes to it, so the path the
- * manifest checked is the path that is written.
- *
- * @param output_dir    Output directory the template name is rooted under. Must not be `NULL`.
- * @param template_name Safe relative template name. Must not be `NULL`.
- * @param arena         Arena that owns the returned path. Must not be `NULL`.
- * @return Terminated output path owned by `arena`, or `NULL` on allocation failure.
- */
-char* manifest_builder_derive_template_output(const char* output_dir,
-                                              const char* template_name,
-                                              struct Arena* arena)
-    __attribute__((nonnull(1, 2, 3)));
+                              ptrdiff_t content_entry_count,
+                              struct Os* os,
+                              struct Arena* perm,
+                              struct Arena scratch,
+                              struct Log* log) __attribute__((nonnull(1, 2, 4, 7, 8, 10)));
 
 #endif

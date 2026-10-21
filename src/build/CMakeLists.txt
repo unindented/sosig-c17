@@ -10,11 +10,11 @@ target_sources(
 target_link_libraries(sosig_app PRIVATE sosig_vendor_mustache)
 
 if(SOSIG_BUILD_TESTING)
-  foreach(module IN ITEMS entry_renderer job manifest_builder output_path page_renderer site_writer
-                          template
-  )
+  foreach(module IN ITEMS entry_renderer output_path template)
     sosig_add_unit_test(${module})
   endforeach()
-  # The entry-renderer tests drive both parallel phases through these helpers.
-  target_sources(sosig_unit_entry_renderer PRIVATE test_render_support.c)
+  # These read and write only through `runtime/os.h`, so they run against the in-memory host.
+  foreach(module IN ITEMS job manifest_builder page_renderer site_writer)
+    sosig_add_unit_test(${module} OS memory)
+  endforeach()
 endif()

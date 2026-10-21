@@ -36,15 +36,11 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/build/test_manifest_builder.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_output_path.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_page_renderer.c"
-    "${PROJECT_SOURCE_DIR}/src/build/test_render_support.c"
-    "${PROJECT_SOURCE_DIR}/src/build/test_render_support.h"
     "${PROJECT_SOURCE_DIR}/src/build/test_site_writer.c"
     "${PROJECT_SOURCE_DIR}/src/build/test_template.c"
     "${PROJECT_SOURCE_DIR}/src/core/ascii.h"
     "${PROJECT_SOURCE_DIR}/src/core/error.c"
     "${PROJECT_SOURCE_DIR}/src/core/error.h"
-    "${PROJECT_SOURCE_DIR}/src/core/grow.c"
-    "${PROJECT_SOURCE_DIR}/src/core/grow.h"
     "${PROJECT_SOURCE_DIR}/src/core/parse.c"
     "${PROJECT_SOURCE_DIR}/src/core/parse.h"
     "${PROJECT_SOURCE_DIR}/src/core/path.c"
@@ -54,7 +50,6 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/core/sosig_version.h"
     "${PROJECT_SOURCE_DIR}/src/core/test_ascii.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_error.c"
-    "${PROJECT_SOURCE_DIR}/src/core/test_grow.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_parse.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_path.c"
     "${PROJECT_SOURCE_DIR}/src/core/test_path_list.c"
@@ -87,10 +82,20 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/formats/toml.h"
     "${PROJECT_SOURCE_DIR}/src/runtime/fs.c"
     "${PROJECT_SOURCE_DIR}/src/runtime/fs.h"
+    "${PROJECT_SOURCE_DIR}/src/runtime/memory.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/memory.h"
+    "${PROJECT_SOURCE_DIR}/src/runtime/os.h"
     "${PROJECT_SOURCE_DIR}/src/runtime/pool.c"
     "${PROJECT_SOURCE_DIR}/src/runtime/pool.h"
     "${PROJECT_SOURCE_DIR}/src/runtime/test_fs.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/test_memory.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/test_os.c"
     "${PROJECT_SOURCE_DIR}/src/runtime/test_pool.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/test_walk.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/walk.c"
+    "${PROJECT_SOURCE_DIR}/src/runtime/walk.h"
+    "${PROJECT_SOURCE_DIR}/tests/os_memory.c"
+    "${PROJECT_SOURCE_DIR}/tests/os_memory.h"
     "${PROJECT_SOURCE_DIR}/tests/test_support.c"
     "${PROJECT_SOURCE_DIR}/tests/test_support.h"
     "${PROJECT_SOURCE_DIR}/tests/test_test_support.c"
@@ -117,9 +122,11 @@ if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
   set(sosig_clang_tidy_command "")
 endif()
 
-# Production and test targets run cppcheck with the same arguments.
+# Production and test targets run cppcheck with the same arguments. CMake hands cppcheck only the
+# `-I` include directories, not the `-isystem` ones, so the vendored sharedstuff headers are named
+# explicitly: without them cppcheck cannot expand `STR_FMT` and miscounts `printf` arguments.
 set(sosig_cppcheck_property
-    "${sosig_cppcheck_command};--enable=warning,performance,portability;--std=${sosig_cppcheck_standard};--error-exitcode=1;--quiet"
+    "${sosig_cppcheck_command};--enable=warning,performance,portability;--std=${sosig_cppcheck_standard};--error-exitcode=1;--quiet;-I${PROJECT_SOURCE_DIR}/vendor/sharedstuff/include"
 )
 
 function(sosig_enable_project_analysis target)

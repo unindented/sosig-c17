@@ -12,10 +12,19 @@
 #include <unistd.h>
 
 #include "core/error.h"
-#include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
+#include "runtime/os.h"
+#include "shared/buf.h"
+#include "shared/log.h"
+#include "shared/str.h"
 #include "test_support.h"
+
+/**
+ * Size of a buffer for an expected diagnostic. The log never truncates, so this only has to hold
+ * the longest message a test spells out.
+ */
+enum { EXPECTED_SIZE = 8192 };
 
 /** Fixture root template for a config written by `write_temp_config`. */
 #define TEMP_CONFIG_ROOT_TEMPLATE "/tmp/sosig-site-config-test.XXXXXX"
@@ -30,24 +39,46 @@ struct TempConfig {
 };
 
 /**
+ * @brief Loads a config with a fresh long-lived arena and a fresh scratch arena.
+ *
+ * Each call reserves its own two arenas, so the loaded values stay valid for the rest of the test
+ * and never overlap the scratch the load worked in.
+ *
+ * @param site_config Initialized config that receives the values. Must not be `NULL`.
+ * @param config_path Terminated path of the config to load. Must not be `NULL`.
+ * @param log         Log that receives every error the load records. Must not be `NULL`.
+ * @return `0` when the config was loaded with no error, or `-1` when it could not be read or
+ *         parsed, or any key was rejected. `site_config_load` itself returns `0` in the last case,
+ *         which `test_load_returns_zero_with_key_errors` pins.
+ */
+static int load_site_config(struct SiteConfig* site_config,
+                            const char* config_path,
+                            struct Log* log) {
+  struct Arena perm = test_arena();
+  const int rc = site_config_load(site_config, str_from_cstr(config_path), os_posix(), &perm,
+                                  test_arena(), log);
+  return rc != 0 || log->errors > 0 ? -1 : 0;
+}
+
+/**
  * @brief Renders a site configuration into a terminated text buffer.
+ *
+ * `site_config_print` writes to standard output, so its descriptor is captured while it runs.
  *
  * @param site_config  Configuration to render.
  * @param text_out     Buffer that receives the rendered text.
  * @param text_out_len Size of `text_out` in bytes. Must be non-zero.
  * @return `0` on success, or `-1` after recording a test failure.
  */
-static int render(const struct SiteConfig* site_config, char* text_out, size_t text_out_len) {
-  FILE* stream = tmpfile();
-  TEST_CHECK(stream != NULL);
-  if (stream == NULL) {
+static int render(const struct SiteConfig* site_config, char* text_out, ptrdiff_t text_out_len) {
+  text_out[0] = '\0';
+  struct StreamCapture capture;
+  if (capture_begin(stdout, &capture) != 0) {
     return -1;
   }
-  const bool is_printed = TEST_CHECK(site_config_print(stream, site_config) == 0);
-  (void)read_capture(stream, text_out, text_out_len);
-  const int close_rc = fclose(stream);
-  const bool is_closed = TEST_CHECK(close_rc == 0);
-  return is_printed && is_closed ? 0 : -1;
+  const bool is_printed = TEST_CHECK(site_config_print(site_config, os_posix(), test_arena()) == 0);
+  const bool is_captured = capture_end(&capture, text_out, text_out_len) == 0;
+  return is_printed && is_captured ? 0 : -1;
 }
 
 /**
@@ -58,25 +89,24 @@ static int render(const struct SiteConfig* site_config, char* text_out, size_t t
  *
  * @param temp_config_out Receives the fixture root and the config path.
  * @param toml            Terminated TOML text to write.
- * @return The config path, which aliases `temp_config_out->path`, or `NULL` after recording a
- *         test-plumbing failure.
+ * @return `0` on success, or `-1` after recording a test-plumbing failure.
  */
-static const char* write_temp_config(struct TempConfig* temp_config_out, const char* toml) {
+static int write_temp_config(struct TempConfig* temp_config_out, const char* toml) {
   memcpy(temp_config_out->root_dir, TEMP_CONFIG_ROOT_TEMPLATE, sizeof(TEMP_CONFIG_ROOT_TEMPLATE));
-  if (init_fixture_dir(temp_config_out->root_dir) == NULL) {
-    return NULL;
+  if (init_fixture_dir(temp_config_out->root_dir) != 0) {
+    return -1;
   }
   const int n = snprintf(temp_config_out->path, sizeof(temp_config_out->path), "%s/sosig.toml",
                          temp_config_out->root_dir);
   if (!TEST_CHECK(n > 0 && (size_t)n < sizeof(temp_config_out->path))) {
     remove_fixture_tree(temp_config_out->root_dir);
-    return NULL;
+    return -1;
   }
   if (!TEST_CHECK(write_fixture_file(temp_config_out->root_dir, "sosig.toml", toml) == 0)) {
     remove_fixture_tree(temp_config_out->root_dir);
-    return NULL;
+    return -1;
   }
-  return temp_config_out->path;
+  return 0;
 }
 
 /**
@@ -95,19 +125,16 @@ static void check_load_rejects(const char* toml_extra, const char* expected) {
                          toml_extra);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, expected) == 0);
-  TEST_MSG("actual: '%s'", err);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, expected));
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -118,7 +145,7 @@ static void check_load_rejects(const char* toml_extra, const char* expected) {
  * @param expected  Exact diagnostic `site_config_load` must report.
  */
 static void check_load_rejects_permalink(const char* permalink, const char* expected) {
-  char toml_extra[OUTPUT_PATH_RELATIVE_LEN_MAX + 512];
+  char toml_extra[512];
   const int n = snprintf(toml_extra, sizeof(toml_extra), "permalink = \"%s\"\n", permalink);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
   check_load_rejects(toml_extra, expected);
@@ -131,36 +158,34 @@ static void test_load_applies_required_and_defaults(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
 
-  TEST_CHECK(strcmp(config.base_url, "https://example.com") == 0);
-  TEST_CHECK(strcmp(config.title, "Example Site") == 0);
-  TEST_CHECK(strcmp(config.author, "Example Author") == 0);
-  TEST_CHECK(strcmp(config.permalink, "/{section}/{slug}.html") == 0);
-  TEST_CHECK(strcmp(config.content_dir, "content") == 0);
-  TEST_CHECK(strcmp(config.output_dir, "public") == 0);
-  TEST_CHECK(strcmp(config.templates_dir, "templates") == 0);
-  TEST_CHECK(strcmp(config.content_template, "content.html") == 0);
+  TEST_CHECK(str_eq(config.base_url, S("https://example.com")));
+  TEST_CHECK(str_eq(config.title, S("Example Site")));
+  TEST_CHECK(str_eq(config.author, S("Example Author")));
+  TEST_CHECK(str_eq(config.permalink, S("/{section}/{slug}.html")));
+  TEST_CHECK(str_eq(config.content_dir, S("content")));
+  TEST_CHECK(str_eq(config.output_dir, S("public")));
+  TEST_CHECK(str_eq(config.templates_dir, S("templates")));
+  TEST_CHECK(str_eq(config.content_template, S("content.html")));
   if (!TEST_CHECK(config.aggregate_template_count == 1)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(config.aggregate_templates[0], "index.html") == 0);
+  TEST_CHECK(str_eq(config.aggregate_templates[0], S("index.html")));
   if (!TEST_CHECK(config.feed_template_count == 1)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(config.feed_templates[0], "atom.xml") == 0);
+  TEST_CHECK(str_eq(config.feed_templates[0], S("atom.xml")));
   TEST_CHECK(config.feed_count == 10);
 
 cleanup:
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -179,31 +204,29 @@ static void test_load_overrides_optional_keys(void) {
       "feed_templates = []\n"
       "feed_count = 5\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
 
-  TEST_CHECK(strcmp(config.permalink, "/{slug}/index.html") == 0);
-  TEST_CHECK(strcmp(config.content_dir, "posts") == 0);
-  TEST_CHECK(strcmp(config.output_dir, "dist") == 0);
-  TEST_CHECK(strcmp(config.templates_dir, "layouts") == 0);
-  TEST_CHECK(strcmp(config.content_template, "post.html") == 0);
+  TEST_CHECK(str_eq(config.permalink, S("/{slug}/index.html")));
+  TEST_CHECK(str_eq(config.content_dir, S("posts")));
+  TEST_CHECK(str_eq(config.output_dir, S("dist")));
+  TEST_CHECK(str_eq(config.templates_dir, S("layouts")));
+  TEST_CHECK(str_eq(config.content_template, S("post.html")));
   if (!TEST_CHECK(config.aggregate_template_count == 2)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(config.aggregate_templates[0], "index.html") == 0);
-  TEST_CHECK(strcmp(config.aggregate_templates[1], "archive.html") == 0);
+  TEST_CHECK(str_eq(config.aggregate_templates[0], S("index.html")));
+  TEST_CHECK(str_eq(config.aggregate_templates[1], S("archive.html")));
   TEST_CHECK(config.feed_template_count == 0);
   TEST_CHECK(config.feed_count == 5);
 
 cleanup:
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -220,21 +243,19 @@ static void test_load_normalizes_directory_keys(void) {
       "output_dir = \"/srv/www///\"\n"
       "templates_dir = \"../shared/templates/\"\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strcmp(config.content_dir, "content") == 0);
-  TEST_CHECK(strcmp(config.output_dir, "/srv/www") == 0);
-  TEST_CHECK(strcmp(config.templates_dir, "../shared/templates") == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+  TEST_CHECK(log.errors == 0);
+  TEST_CHECK(str_eq(config.content_dir, S("content")));
+  TEST_CHECK(str_eq(config.output_dir, S("/srv/www")));
+  TEST_CHECK(str_eq(config.templates_dir, S("../shared/templates")));
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -250,7 +271,7 @@ static void test_load_normalizes_base_url(void) {
       {"HTTPS://Example.COM", "HTTPS://Example.COM"},  // the scheme matches case-insensitively
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
     char toml[256];
     const int n = snprintf(toml, sizeof(toml),
                            "base_url = \"%s\"\n"
@@ -259,19 +280,17 @@ static void test_load_normalizes_base_url(void) {
                            cases[i][0]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, toml) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-    TEST_CHECK(err[0] == '\0');
-    TEST_CHECK(strcmp(config.base_url, cases[i][1]) == 0);
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+    TEST_CHECK(log.errors == 0);
+    TEST_CHECK(str_eq(config.base_url, str_from_cstr(cases[i][1])));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -286,20 +305,18 @@ static void test_load_leaves_directory_overlap_to_the_build(void) {
       "content_dir = \"posts\"\n"
       "output_dir = \"posts/generated\"\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strcmp(config.content_dir, "posts") == 0);
-  TEST_CHECK(strcmp(config.output_dir, "posts/generated") == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+  TEST_CHECK(log.errors == 0);
+  TEST_CHECK(str_eq(config.content_dir, S("posts")));
+  TEST_CHECK(str_eq(config.output_dir, S("posts/generated")));
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -311,7 +328,8 @@ static void test_load_accepts_valid_permalinks(void) {
       "/posts/{slug}.html",     "{slug}",       "/a.b-c_d/{slug}.html",
   };
 
-  for (size_t i = 0; i < sizeof(permalinks_valid) / sizeof(permalinks_valid[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(permalinks_valid) / sizeof(permalinks_valid[0]));
+       i++) {
     char toml[256];
     const int n = snprintf(toml, sizeof(toml),
                            "base_url = \"https://example.com\"\n"
@@ -321,19 +339,17 @@ static void test_load_accepts_valid_permalinks(void) {
                            permalinks_valid[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, toml) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-    TEST_CHECK(err[0] == '\0');
-    TEST_CHECK(strcmp(config.permalink, permalinks_valid[i]) == 0);
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+    TEST_CHECK(log.errors == 0);
+    TEST_CHECK(str_eq(config.permalink, str_from_cstr(permalinks_valid[i])));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -348,19 +364,17 @@ static void test_load_accepts_zero_feed_count(void) {
       "author = \"Example Author\"\n"
       "feed_count = 0\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+  TEST_CHECK(log.errors == 0);
   TEST_CHECK(config.feed_count == 0);
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -368,19 +382,18 @@ static void test_load_accepts_zero_feed_count(void) {
 static void test_load_rejects_missing_file(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
+  struct Log log = test_log();
   const char* missing_path = "/tmp/sosig-site-config-test-missing.toml";
-  TEST_CHECK(site_config_load(&config, missing_path, err, sizeof(err)) == -1);
+  TEST_CHECK(load_site_config(&config, missing_path, &log) == -1);
   // The cause distinguishes a missing file from an unreadable or malformed one. Derived from the
   // running libc rather than hardcoded, so the assertion is the whole claim and stays portable.
-  char reason[FS_REASON_SIZE];
-  char expected[ERROR_MESSAGE_SIZE];
+  char reason[ERROR_SYSTEM_MESSAGE_SIZE];
+  char expected[EXPECTED_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected), "failed to read config: %s ('%s')",
                error_system_message(reason, sizeof(reason), ENOENT), missing_path);
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(strcmp(err, expected) == 0);
-  site_config_free(&config);
+  TEST_CHECK(test_log_is_one(&log, expected));
 }
 
 // A config larger than `CONFIG_FILE_LEN_MAX` is rejected at the read, from its size, naming the
@@ -389,63 +402,61 @@ static void test_load_rejects_missing_file(void) {
 static void test_load_rejects_oversize_file(void) {
   enum { CONFIG_FILE_LEN_MAX = 1024 * 1024 };
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, "title = \"Site\"\n");
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, "title = \"Site\"\n") != 0) {
     return;
   }
   const off_t config_len = (off_t)CONFIG_FILE_LEN_MAX + 1;
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
+  struct Log log = test_log();
+  char expected[EXPECTED_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected),
                "failed to read config: exceeds max file size (%d bytes) at %jd bytes ('%s')",
-               CONFIG_FILE_LEN_MAX, (intmax_t)config_len, config_path);
+               CONFIG_FILE_LEN_MAX, (intmax_t)config_len, temp_config.path);
   if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
     goto cleanup;
   }
-  if (!TEST_CHECK(truncate(config_path, config_len) == 0)) {
+  if (!TEST_CHECK(truncate(temp_config.path, config_len) == 0)) {
     goto cleanup;
   }
 
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, expected));
 
 cleanup:
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
 // A config file holding an embedded `NUL` is rejected at the read, before the parse, naming the
-// config path. `fs_read_file` rejects it for every caller, because it is the boundary that
-// establishes the `NUL`-free text invariant.
+// config path. `os_read` rejects it for every caller, because the byte has no meaning in any format
+// `sosig` reads or writes.
 static void test_load_rejects_nul_in_file(void) {
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, "");
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, "") != 0) {
     return;
   }
   static const char config_data[] = "title = \"Site\"\0author = \"Example Author\"\n";
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
+  struct Log log = test_log();
+  char expected[EXPECTED_SIZE];
   const int expected_len =
       snprintf(expected, sizeof(expected),
-               "failed to read config: contains an embedded NUL byte ('%s')", config_path);
+               "failed to read config: contains an embedded NUL byte ('%s')", temp_config.path);
   if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
     goto cleanup;
   }
-  if (!TEST_CHECK(fs_write_file(config_path, config_data, sizeof(config_data) - 1, NULL, 0) == 0)) {
+  if (!TEST_CHECK(os_write(os_posix(), str_from_cstr(temp_config.path),
+                           (struct Str){config_data, sizeof(config_data) - 1},
+                           S("failed to write fixture"), &log) == 0)) {
     goto cleanup;
   }
 
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, expected));
 
 cleanup:
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -455,30 +466,113 @@ cleanup:
 static void test_load_rejects_malformed_toml(void) {
   const char toml[] = "base_url = \n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  // The prefix and the trailing path are this module's own contribution. The text between them is
-  // the vendored parser's `errmsg`, left unpinned so rewording it upstream does not fail this test.
-  // The two together are still the whole first-party claim, which neither the missing-key message
-  // nor the read-failure message could satisfy.
-  const char prefix[] = "failed to parse config: ";
-  TEST_CHECK(strncmp(err, prefix, sizeof(prefix) - 1) == 0);
-  char suffix[ERROR_MESSAGE_SIZE];
-  const int n = snprintf(suffix, sizeof(suffix), " ('%s')", config_path);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  // The prefix and the trailing attribution are this module's own contribution. The text between
+  // them is the vendored parser's `errmsg`, left unpinned so rewording it upstream does not fail
+  // this test. The two together are still the whole first-party claim, which neither the
+  // missing-key message nor the read-failure message could satisfy.
+  const struct Str prefix = S("failed to parse config: ");
+  const struct Str message = buf_str(&log.buf);
+  TEST_CHECK(log.errors == 1);
+  TEST_CHECK(str_startswith(message, prefix));
+  char suffix[EXPECTED_SIZE];
+  const int n = snprintf(suffix, sizeof(suffix), " (in '%s')\n", temp_config.path);
   TEST_CHECK(n > 0 && (size_t)n < sizeof(suffix));
-  const size_t err_len = strlen(err);
   // A cause of at least one byte has to sit between the two, or the parser reported nothing.
-  TEST_CHECK(err_len > sizeof(prefix) - 1 + (size_t)n);
-  TEST_CHECK(strcmp(err + err_len - (size_t)n, suffix) == 0);
+  TEST_CHECK(message.len > prefix.len + n);
+  TEST_CHECK(str_endswith(message, (struct Str){suffix, n}));
 
-  site_config_free(&config);
+  remove_fixture_tree(temp_config.root_dir);
+}
+
+/**
+ * A config that parses but holds six independent mistakes, one each for the unknown-key check, a
+ * string key's type, `base_url`, a directory, the permalink, and `feed_count`.
+ */
+static const char TOML_KEYS_INVALID[] =
+    "base_url = \"ftp://example.com\"\n"
+    "title = 1\n"
+    "author = \"Example Author\"\n"
+    "colour = \"blue\"\n"
+    "content_dir = \"/\"\n"
+    "permalink = \"/fixed.html\"\n"
+    "feed_count = -1\n";
+
+// Every invalid key in one config is reported in one load, in the order the load checks them, not
+// only the first.
+static void test_load_reports_every_invalid_key(void) {
+  struct TempConfig temp_config;
+  if (write_temp_config(&temp_config, TOML_KEYS_INVALID) != 0) {
+    return;
+  }
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "unknown config key 'colour'\n"
+                         "config key 'title' must be a string\n"
+                         "config key 'base_url' must be an absolute 'http://' or 'https://' URL "
+                         "with a host: 'ftp://example.com'\n"
+                         "config key 'content_dir' must not be empty\n"
+                         "config key 'permalink' must expand to a distinct path per content entry; "
+                         "include the '{slug}' token: '/fixed.html'\n"
+                         "config key 'feed_count' must be at least 0: -1\n"));
+  TEST_CHECK(log.errors == 6);
+
+  remove_fixture_tree(temp_config.root_dir);
+}
+
+// A config that was read and parsed loads successfully even when keys are rejected: the errors are
+// in the log, and the result only says whether there was a file to check.
+static void test_load_returns_zero_with_key_errors(void) {
+  struct TempConfig temp_config;
+  if (write_temp_config(&temp_config, TOML_KEYS_INVALID) != 0) {
+    return;
+  }
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  struct Log log = test_log();
+  struct Arena perm = test_arena();
+  TEST_CHECK(site_config_load(&config, str_from_cstr(temp_config.path), os_posix(), &perm,
+                              test_arena(), &log) == 0);
+  TEST_CHECK(log.errors == 6);
+
+  remove_fixture_tree(temp_config.root_dir);
+}
+
+// A rejected value is never stored. Each rejected key keeps the default `site_config_init` gave it,
+// so later checks run against a usable config, while the valid keys around them still load. A
+// rejected directory key is marked as such.
+static void test_load_keeps_defaults_for_rejected_keys(void) {
+  struct TempConfig temp_config;
+  if (write_temp_config(&temp_config, TOML_KEYS_INVALID) != 0) {
+    return;
+  }
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(str_eq(config.content_dir, S("content")));
+  TEST_CHECK(config.is_content_dir_rejected);
+  TEST_CHECK(!config.is_output_dir_rejected);
+  TEST_CHECK(!config.is_templates_dir_rejected);
+  TEST_CHECK(str_eq(config.permalink, S("/{section}/{slug}.html")));
+  TEST_CHECK(config.feed_count == 10);
+  TEST_CHECK(config.base_url.len == 0);
+  TEST_CHECK(config.title.len == 0);
+  TEST_CHECK(str_eq(config.author, S("Example Author")));
+
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -488,18 +582,16 @@ static void test_load_rejects_missing_required_key(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "missing required config key 'base_url'") == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, "missing required config key 'base_url'"));
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -510,18 +602,16 @@ static void test_load_rejects_wrong_key_type(void) {
       "title = \"Example Site\"\n"
       "author = \"Example Author\"\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "config key 'base_url' must be a string") == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, "config key 'base_url' must be a string"));
 
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -544,19 +634,17 @@ static void test_load_rejects_unknown_keys(void) {
        "unknown config key 'extra'"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, cases[i][0]) != 0) {
       continue;
     }
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-    TEST_MSG("case %zu: got '%s'", i, err);
-    site_config_free(&config);
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    TEST_CHECK(test_log_is_one(&log, cases[i][1]));
+    TEST_MSG("case %td", i);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -575,19 +663,17 @@ static void test_load_rejects_table_values(void) {
        "config key 'feed_count' must be an integer"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, cases[i][0]) != 0) {
       continue;
     }
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-    TEST_MSG("case %zu: got '%s'", i, err);
-    site_config_free(&config);
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    TEST_CHECK(test_log_is_one(&log, cases[i][1]));
+    TEST_MSG("case %td", i);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -597,12 +683,13 @@ static void test_load_rejects_table_values(void) {
 // user has to change the type, not the number.
 static void test_load_rejects_invalid_integer_type_and_minimum(void) {
   check_load_rejects("feed_count = \"ten\"\n", "config key 'feed_count' must be an integer");
-  check_load_rejects("feed_count = -1\n", "config key 'feed_count' must be at least 0 at -1");
+  check_load_rejects("feed_count = -1\n", "config key 'feed_count' must be at least 0: -1");
 }
 
 // A TOML escape decoding to `U+0000` is rejected per key. tomlc17 accepts the escape and returns a
-// string whose bytes carry an embedded `NUL`, so this is a separate boundary from `fs_read_file`:
-// the file itself holds no `NUL`. Left through, `strlen` would truncate the value silently.
+// string whose bytes carry an embedded `NUL`, so this is a separate boundary from `os_read`: the
+// file itself holds no `NUL`. The byte has no meaning in any format `sosig` reads or writes, so the
+// load refuses it.
 static void test_load_rejects_nul_in_string_values(void) {
   static const char* const cases[][2] = {
       {"base_url = \"a\\u0000b\"\ntitle = \"T\"\nauthor = \"A\"\n",
@@ -617,20 +704,18 @@ static void test_load_rejects_nul_in_string_values(void) {
        "config key 'aggregate_templates' must not contain a NUL byte"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, cases[i][0]);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, cases[i][0]) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    TEST_CHECK(test_log_is_one(&log, cases[i][1]));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -643,7 +728,7 @@ static void test_load_rejects_empty_directory_keys(void) {
       {"templates_dir = \"///\"\n", "config key 'templates_dir' must not be empty"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
     check_load_rejects(cases[i][0], cases[i][1]);
   }
 }
@@ -661,9 +746,11 @@ static void test_load_rejects_relative_base_url(void) {
       "https://",            // scheme with no host
       "https:///path",       // the host ends before it starts
       "https://?draft=1",    // likewise
+      "https://:8080",       // a port with no host before it
   };
 
-  for (size_t i = 0; i < sizeof(base_urls_invalid) / sizeof(base_urls_invalid[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(base_urls_invalid) / sizeof(base_urls_invalid[0]));
+       i++) {
     char toml[256];
     const int n = snprintf(toml, sizeof(toml),
                            "base_url = \"%s\"\n"
@@ -672,25 +759,23 @@ static void test_load_rejects_relative_base_url(void) {
                            base_urls_invalid[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, toml) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    char expected[ERROR_MESSAGE_SIZE];
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    char expected[EXPECTED_SIZE];
     const int expected_len =
         snprintf(expected, sizeof(expected),
                  "config key 'base_url' must be an absolute 'http://' or 'https://' URL with "
                  "a host: '%s'",
                  base_urls_invalid[i]);
     TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    TEST_CHECK(strcmp(err, expected) == 0);
+    TEST_CHECK(test_log_is_one(&log, expected));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -701,12 +786,12 @@ static void test_load_rejects_relative_base_url(void) {
 static void test_load_rejects_unsafe_content_template(void) {
   const char* const unsafe_names[] = {"../evil.html", "/etc/passwd", ""};
 
-  for (size_t i = 0; i < sizeof(unsafe_names) / sizeof(unsafe_names[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(unsafe_names) / sizeof(unsafe_names[0])); i++) {
     char toml_extra[256];
     const int n =
         snprintf(toml_extra, sizeof(toml_extra), "content_template = \"%s\"\n", unsafe_names[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml_extra));
-    char expected[ERROR_MESSAGE_SIZE];
+    char expected[EXPECTED_SIZE];
     const int expected_len =
         snprintf(expected, sizeof(expected),
                  "config key 'content_template' must be a safe relative template name: '%s'",
@@ -728,6 +813,41 @@ static void test_load_rejects_invalid_template_arrays(void) {
                      "names: '../evil.html'");
 }
 
+// Every element of a template array is checked even after one fails, so each unsafe name is
+// reported in element order. A wrong type or a `NUL` byte is reported once however many elements
+// have it, since its message names no element. The rejected key keeps its default.
+static void test_load_reports_every_invalid_template_name(void) {
+  struct TempConfig temp_config;
+  if (write_temp_config(
+          &temp_config,
+          "base_url = \"https://example.com\"\n"
+          "title = \"Example Site\"\n"
+          "author = \"Example Author\"\n"
+          "feed_templates = [\"../a.xml\", 1, \"a\\u0000b\", \"ok.xml\", \"/b.xml\", 2, "
+          "\"c\\u0000d\"]\n") != 0) {
+    return;
+  }
+
+  struct SiteConfig config;
+  site_config_init(&config);
+  const struct Str* const feed_templates_default = config.feed_templates;
+  const ptrdiff_t feed_template_count_default = config.feed_template_count;
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "config key 'feed_templates' must contain only safe relative template "
+                         "names: '../a.xml'\n"
+                         "config key 'feed_templates' must contain only strings\n"
+                         "config key 'feed_templates' must not contain a NUL byte\n"
+                         "config key 'feed_templates' must contain only safe relative template "
+                         "names: '/b.xml'\n"));
+  TEST_CHECK(log.errors == 4);
+  TEST_CHECK(config.feed_templates == feed_templates_default);
+  TEST_CHECK(config.feed_template_count == feed_template_count_default);
+
+  remove_fixture_tree(temp_config.root_dir);
+}
+
 // A permalink that could escape the output directory, or that uses bytes the expanded path cannot
 // contain, is rejected once at load rather than once per content entry during the render.
 static void test_load_rejects_unsafe_permalink(void) {
@@ -739,7 +859,8 @@ static void test_load_rejects_unsafe_permalink(void) {
       "/{unknown}/{slug}",   // an unrecognized token stays literal and cannot be safe
   };
 
-  for (size_t i = 0; i < sizeof(permalinks_unsafe) / sizeof(permalinks_unsafe[0]); i++) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(permalinks_unsafe) / sizeof(permalinks_unsafe[0]));
+       i++) {
     char toml[256];
     const int n = snprintf(toml, sizeof(toml),
                            "base_url = \"https://example.com\"\n"
@@ -749,16 +870,15 @@ static void test_load_rejects_unsafe_permalink(void) {
                            permalinks_unsafe[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, toml) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    char expected[ERROR_MESSAGE_SIZE];
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    char expected[EXPECTED_SIZE];
     const int expected_len =
         snprintf(expected, sizeof(expected),
                  "config key 'permalink' must expand to a safe relative path using only "
@@ -766,9 +886,8 @@ static void test_load_rejects_unsafe_permalink(void) {
                  "with no empty, '.' or '..' path segment: '%s'",
                  permalinks_unsafe[i]);
     TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    TEST_CHECK(strcmp(err, expected) == 0);
+    TEST_CHECK(test_log_is_one(&log, expected));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
@@ -784,7 +903,8 @@ static void test_load_rejects_permalink_without_slug(void) {
       "/{section}/index.html",  // the same, spelled out
   };
 
-  for (size_t i = 0; i < sizeof(permalinks_indistinct) / sizeof(permalinks_indistinct[0]); i++) {
+  for (ptrdiff_t i = 0;
+       i < (ptrdiff_t)(sizeof(permalinks_indistinct) / sizeof(permalinks_indistinct[0])); i++) {
     char toml[256];
     const int n = snprintf(toml, sizeof(toml),
                            "base_url = \"https://example.com\"\n"
@@ -794,249 +914,51 @@ static void test_load_rejects_permalink_without_slug(void) {
                            permalinks_indistinct[i]);
     TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
     struct TempConfig temp_config;
-    const char* config_path = write_temp_config(&temp_config, toml);
-    if (config_path == NULL) {
+    if (write_temp_config(&temp_config, toml) != 0) {
       continue;
     }
 
     struct SiteConfig config;
     site_config_init(&config);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-    char expected[ERROR_MESSAGE_SIZE];
+    struct Log log = test_log();
+    TEST_CHECK(load_site_config(&config, temp_config.path, &log) == -1);
+    char expected[EXPECTED_SIZE];
     const int expected_len =
         snprintf(expected, sizeof(expected),
                  "config key 'permalink' must expand to a distinct path per content entry; "
                  "include the '{slug}' token: '%s'",
                  permalinks_indistinct[i]);
     TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-    TEST_CHECK(strcmp(err, expected) == 0);
+    TEST_CHECK(test_log_is_one(&log, expected));
 
-    site_config_free(&config);
     remove_fixture_tree(temp_config.root_dir);
   }
 }
 
-// A permalink whose shortest expansion exceeds the output-path limit is rejected at load.
-static void test_load_rejects_oversize_permalink(void) {
-  // Rejected here rather than once per content file, which is what the render phase's own backstop
-  // would do for the same pattern.
-  char pattern[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
-  memset(pattern, 'a', sizeof(pattern) - 1);
-  pattern[sizeof(pattern) - 1] = '\0';
-  pattern[0] = '/';
-  memcpy(pattern + sizeof(pattern) - sizeof("/{slug}.html"), "/{slug}.html",
-         sizeof("/{slug}.html"));
-
-  char toml[sizeof(pattern) + 256];
-  int n = snprintf(toml, sizeof(toml),
-                   "base_url = \"https://example.com\"\n"
-                   "title = \"Example Site\"\n"
-                   "author = \"Example Author\"\n"
-                   "permalink = \"%s\"\n",
-                   pattern);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
-    return;
-  }
-
-  struct SiteConfig config;
-  site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  // `{slug}` and the `slug-a` sample are both six bytes and the pattern has no `{section}`, so the
-  // shortest expansion is the pattern's own length, less the leading `/` the limit excludes.
-  n = snprintf(expected, sizeof(expected),
-               "config key 'permalink' exceeds max output path length (%zu bytes) at %zu bytes "
-               "when expanded",
-               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, sizeof(pattern) - 2);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-  site_config_free(&config);
-  remove_fixture_tree(temp_config.root_dir);
-}
-
-// A permalink that fits with an empty `{section}` but overflows with a populated one is rejected at
-// load, which is what makes the whole-path limit a property of the pattern rather than of its
-// shortest expansion. Leaving this to the render would report it once per content file that happens
-// to sit in a populated section.
-static void test_load_rejects_permalink_oversize_in_populated_section(void) {
-  // `check_permalink`'s sample grid is file-local, so the two expansion tails are spelled out here:
-  // with the samples in `src/domain/site_config.c` the empty-section tail is `/slug-a.html` and the
-  // populated one is `/section/slug-a.html`. Changing `SECTION_SAMPLES` or `SLUG_SAMPLES` must
-  // update these. The filler is sized so the shorter expansion lands exactly on the limit and stays
-  // within it, and is split into segments below the per-segment limit so that limit cannot fire
-  // first.
-  enum { FITTING_TAIL_LEN = sizeof("/slug-a.html") - 1 };
-  enum { OVERFLOWING_TAIL_LEN = sizeof("/section/slug-a.html") - 1 };
-  enum { FILLER_LEN = OUTPUT_PATH_RELATIVE_LEN_MAX - FITTING_TAIL_LEN };
-  enum { FILLER_SEGMENT_LEN = 100 };
-  _Static_assert((size_t)FILLER_SEGMENT_LEN < (size_t)FILENAME_LEN_MAX,
-                 "filler segments must clear the per-segment name limit");
-  _Static_assert(FILLER_LEN + OVERFLOWING_TAIL_LEN > OUTPUT_PATH_RELATIVE_LEN_MAX,
-                 "the populated-section expansion must overflow the whole-path limit");
-
-  char filler[FILLER_LEN + 1];
-  for (size_t i = 0; i < (size_t)FILLER_LEN; i++) {
-    filler[i] = (i + 1) % (FILLER_SEGMENT_LEN + 1) == 0 ? '/' : 'a';
-  }
-  filler[FILLER_LEN] = '\0';
-  // A trailing separator would make the joined pattern contain `//`, which is not a safe relative
-  // path, so the failure under test would be pre-empted by the safety check.
-  TEST_CHECK(filler[FILLER_LEN - 1] != '/');
-
-  char toml[FILLER_LEN + 256];
-  int n = snprintf(toml, sizeof(toml),
-                   "base_url = \"https://example.com\"\n"
-                   "title = \"Example Site\"\n"
-                   "author = \"Example Author\"\n"
-                   "permalink = \"/%s/{section}/{slug}.html\"\n",
-                   filler);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
-    return;
-  }
-
-  struct SiteConfig config;
-  site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  // The reported length is the populated expansion's, which is reachable only by checking every
-  // expansion: the empty-section one sits exactly on the limit and passes.
-  n = snprintf(expected, sizeof(expected),
-               "config key 'permalink' exceeds max output path length (%zu bytes) at %zu bytes "
-               "when expanded",
-               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, (size_t)(FILLER_LEN + OVERFLOWING_TAIL_LEN));
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-  site_config_free(&config);
-  remove_fixture_tree(temp_config.root_dir);
-}
-
-// A permalink with a literal segment longer than the filename limit is rejected at load, against
-// the per-segment limit rather than the whole-path one, so the two stay distinguishable. Only a
-// literal can fail this from the sample grid, since the sample slugs are six bytes. A literal's
-// length is the same for every entry, which is what makes it a config error rather than a per-file
-// one.
-static void test_load_rejects_permalink_with_oversize_segment(void) {
-  char pattern[FILENAME_LEN_MAX + 46];
-  memset(pattern, 's', sizeof(pattern) - 1);
-  pattern[sizeof(pattern) - 1] = '\0';
-  pattern[0] = '/';
-  memcpy(pattern + sizeof(pattern) - sizeof("/{slug}.html"), "/{slug}.html",
-         sizeof("/{slug}.html"));
-  // The offending segment is everything between the two `/`, and the whole path stays well inside
-  // `OUTPUT_PATH_RELATIVE_LEN_MAX` so the whole-path limit cannot fire first.
-  const size_t segment_len = sizeof(pattern) - sizeof("/{slug}.html") - 1;
-
-  char toml[sizeof(pattern) + 256];
-  int n = snprintf(toml, sizeof(toml),
-                   "base_url = \"https://example.com\"\n"
-                   "title = \"Example Site\"\n"
-                   "author = \"Example Author\"\n"
-                   "permalink = \"%s\"\n",
-                   pattern);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(toml));
-  struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
-    return;
-  }
-
-  struct SiteConfig config;
-  site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  n = snprintf(expected, sizeof(expected),
-               "config key 'permalink' exceeds max filename length (%zu bytes) at %zu bytes in an "
-               "expanded path segment: '%s'",
-               (size_t)FILENAME_LEN_MAX, segment_len, pattern);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-  site_config_free(&config);
-  remove_fixture_tree(temp_config.root_dir);
-}
-
-// A permalink without `{slug}` whose literal also breaks a length limit reports the missing token,
-// which is the fix it needs whatever its length. The first sample expansion is judged on length
-// before the second is compared with it, so a check that ran per expansion reported the length.
-static void test_load_prefers_distinctness_over_length(void) {
-  // One pattern breaks the whole-path limit and one the per-segment limit, each with a single
-  // literal segment and no token.
-  char pattern_too_long[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
-  char pattern_segment_too_long[FILENAME_LEN_MAX + 46];
-  char* const patterns[] = {pattern_too_long, pattern_segment_too_long};
-  const size_t pattern_sizes[] = {sizeof(pattern_too_long), sizeof(pattern_segment_too_long)};
-  for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); i++) {
-    memset(patterns[i], 'a', pattern_sizes[i] - 1);
-    patterns[i][0] = '/';
-    patterns[i][pattern_sizes[i] - 1] = '\0';
-
-    // The trailing pattern outgrows the buffer, so the expected text goes through `error_report` to
-    // get the same truncation marker.
-    char expected[ERROR_MESSAGE_SIZE];
-    (void)error_report(expected, sizeof(expected),
-                       "config key 'permalink' must expand to a distinct path per content entry; "
-                       "include the '{slug}' token: '%s'",
-                       patterns[i]);
-    check_load_rejects_permalink(patterns[i], expected);
-  }
-}
-
-// A permalink that is unsafe only with an empty `{section}` reports the unsafe expansion ahead of a
-// length limit or a slug collision that the populated section already shows. The populated section
-// is judged first, so a check that ran per expansion reported the later verdict.
-static void test_load_prefers_safety_over_length_and_distinctness(void) {
+// A permalink that is unsafe only with an empty `{section}` reports the unsafe expansion ahead of
+// the slug collision the populated section shows. The populated section is judged first, so a check
+// that ran per expansion reported the collision.
+static void test_load_prefers_safety_over_distinctness(void) {
   // With an empty section, `{section}.` expands to a `.` segment, which is unsafe. With the
-  // populated sample it expands to `section.`, which is safe.
-  char pattern_too_long[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
-  char pattern_segment_too_long[FILENAME_LEN_MAX + 64];
-  char* const patterns_long[] = {pattern_too_long, pattern_segment_too_long};
-  const size_t pattern_sizes[] = {sizeof(pattern_too_long), sizeof(pattern_segment_too_long)};
-  static const char tail[] = "/{section}./{slug}";
-  for (size_t i = 0; i < sizeof(patterns_long) / sizeof(patterns_long[0]); i++) {
-    memset(patterns_long[i], 'a', pattern_sizes[i] - 1);
-    patterns_long[i][0] = '/';
-    memcpy(patterns_long[i] + pattern_sizes[i] - sizeof(tail), tail, sizeof(tail));
-  }
-  const char* const patterns[] = {
-      pattern_too_long,          // overflows the whole-path limit with a populated section
-      pattern_segment_too_long,  // holds an oversize literal segment
-      "/{section}./index.html",  // collides across slugs with a populated section
-  };
-
-  for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); i++) {
-    // A long pattern outgrows the buffer, so the expected text goes through `error_report` to get
-    // the same truncation marker.
-    char expected[ERROR_MESSAGE_SIZE];
-    (void)error_report(expected, sizeof(expected),
-                       "config key 'permalink' must expand to a safe relative path using only "
-                       "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
-                       "with no empty, '.' or '..' path segment: '%s'",
-                       patterns[i]);
-    check_load_rejects_permalink(patterns[i], expected);
-  }
+  // populated sample it expands to `section.`, which is safe, and the same path for every slug.
+  const char* pattern = "/{section}./index.html";
+  char expected[EXPECTED_SIZE];
+  (void)snprintf(expected, sizeof(expected),
+                 "config key 'permalink' must expand to a safe relative path using only "
+                 "letters, digits, '_', '-', '.', '/' and the '{slug}'/'{section}' tokens, "
+                 "with no empty, '.' or '..' path segment: '%s'",
+                 pattern);
+  check_load_rejects_permalink(pattern, expected);
 }
 
 // Printing emits every key, with the defaults `site_config_init` supplies for the optional ones.
-// `base_url`, `title` and `author` have no default and are set here only because
-// `site_config_print` requires them non-`NULL`.
+// `base_url`, `title` and `author` have no default and are set here so the output shows each.
 static void test_print_defaults(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://example.com";
-  config.title = "Example Site";
-  config.author = "Example Author";
+  config.base_url = S("https://example.com");
+  config.title = S("Example Site");
+  config.author = S("Example Author");
 
   char config_out[1024];
   TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
@@ -1055,8 +977,6 @@ static void test_print_defaults(void) {
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
                     "feed_count = 10\n") == 0);
-
-  site_config_free(&config);
 }
 
 // Printing escapes quotes, backslashes, and every named control escape (\t \b \n \f \r). It uses
@@ -1064,10 +984,10 @@ static void test_print_defaults(void) {
 static void test_print_escapes_strings(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://example.com";
-  config.title = "Quote \" and \\ backslash";
+  config.base_url = S("https://example.com");
+  config.title = S("Quote \" and \\ backslash");
   // Each hex escape is followed by a non-hex-digit char ('Z', 'G') so it ends after one byte.
-  config.author = "a\tA\bB\nC\fD\rE\x01Z\x7FG";
+  config.author = S("a\tA\bB\nC\fD\rE\x01Z\x7FG");
 
   char config_out[1024];
   TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
@@ -1085,28 +1005,26 @@ static void test_print_escapes_strings(void) {
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
                     "feed_count = 10\n") == 0);
-
-  site_config_free(&config);
 }
 
 // Printing a config and loading the printed output back yields the same field values, exercising
 // the round-trip invariant documented on `site_config_print` across escaped strings (including a
 // `U+007F` byte), a non-default permalink, and multi-element template arrays.
 static void test_print_load_round_trips(void) {
-  static const char* aggregates[] = {"index.html", "archive.html"};
-  static const char* feeds[] = {"atom.xml"};
+  static const struct Str aggregates[] = {STR_INIT("index.html"), STR_INIT("archive.html")};
+  static const struct Str feeds[] = {STR_INIT("atom.xml")};
 
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://example.com/base";
+  config.base_url = S("https://example.com/base");
   // '!' after `\x7F` is not a hex digit, so the escape ends after the single `DEL` byte.
-  config.title = "Quote \" back\\slash\nnewline\ttab\x7F!";
-  config.author = "Example Author";
-  config.permalink = "/{slug}/index.html";
-  config.content_dir = "posts";
-  config.output_dir = "dist";
-  config.templates_dir = "layouts";
-  config.content_template = "post.html";
+  config.title = S("Quote \" back\\slash\nnewline\ttab\x7F!");
+  config.author = S("Example Author");
+  config.permalink = S("/{slug}/index.html");
+  config.content_dir = S("posts");
+  config.output_dir = S("dist");
+  config.templates_dir = S("layouts");
+  config.content_template = S("post.html");
   config.aggregate_templates = aggregates;
   config.aggregate_template_count = 2;
   config.feed_templates = feeds;
@@ -1117,39 +1035,35 @@ static void test_print_load_round_trips(void) {
   TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
 
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, config_out);
-  if (config_path == NULL) {
-    site_config_free(&config);
+  if (write_temp_config(&temp_config, config_out) != 0) {
     return;
   }
 
   struct SiteConfig reloaded;
   site_config_init(&reloaded);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(site_config_load(&reloaded, config_path, err, sizeof(err)) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&reloaded, temp_config.path, &log) == 0);
 
-  TEST_CHECK(strcmp(reloaded.base_url, config.base_url) == 0);
-  TEST_CHECK(strcmp(reloaded.title, config.title) == 0);
-  TEST_CHECK(strcmp(reloaded.author, config.author) == 0);
-  TEST_CHECK(strcmp(reloaded.permalink, config.permalink) == 0);
-  TEST_CHECK(strcmp(reloaded.content_dir, config.content_dir) == 0);
-  TEST_CHECK(strcmp(reloaded.output_dir, config.output_dir) == 0);
-  TEST_CHECK(strcmp(reloaded.templates_dir, config.templates_dir) == 0);
-  TEST_CHECK(strcmp(reloaded.content_template, config.content_template) == 0);
+  TEST_CHECK(str_eq(reloaded.base_url, config.base_url));
+  TEST_CHECK(str_eq(reloaded.title, config.title));
+  TEST_CHECK(str_eq(reloaded.author, config.author));
+  TEST_CHECK(str_eq(reloaded.permalink, config.permalink));
+  TEST_CHECK(str_eq(reloaded.content_dir, config.content_dir));
+  TEST_CHECK(str_eq(reloaded.output_dir, config.output_dir));
+  TEST_CHECK(str_eq(reloaded.templates_dir, config.templates_dir));
+  TEST_CHECK(str_eq(reloaded.content_template, config.content_template));
   if (!TEST_CHECK(reloaded.aggregate_template_count == 2)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(reloaded.aggregate_templates[0], "index.html") == 0);
-  TEST_CHECK(strcmp(reloaded.aggregate_templates[1], "archive.html") == 0);
+  TEST_CHECK(str_eq(reloaded.aggregate_templates[0], S("index.html")));
+  TEST_CHECK(str_eq(reloaded.aggregate_templates[1], S("archive.html")));
   if (!TEST_CHECK(reloaded.feed_template_count == 1)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(reloaded.feed_templates[0], "atom.xml") == 0);
+  TEST_CHECK(str_eq(reloaded.feed_templates[0], S("atom.xml")));
   TEST_CHECK(reloaded.feed_count == config.feed_count);
 
 cleanup:
-  site_config_free(&reloaded);
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
@@ -1165,16 +1079,15 @@ static void test_print_empty_template_arrays(void) {
       "aggregate_templates = []\n"
       "feed_templates = []\n";
   struct TempConfig temp_config;
-  const char* config_path = write_temp_config(&temp_config, toml);
-  if (config_path == NULL) {
+  if (write_temp_config(&temp_config, toml) != 0) {
     return;
   }
 
   struct SiteConfig config;
   site_config_init(&config);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(site_config_load(&config, config_path, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
+  struct Log log = test_log();
+  TEST_CHECK(load_site_config(&config, temp_config.path, &log) == 0);
+  TEST_CHECK(log.errors == 0);
   if (!TEST_CHECK(config.aggregate_template_count == 0)) {
     goto cleanup;
   }
@@ -1204,37 +1117,31 @@ static void test_print_empty_template_arrays(void) {
                     "feed_count = 10\n") == 0);
 
 cleanup:
-  site_config_free(&config);
   remove_fixture_tree(temp_config.root_dir);
 }
 
-// A stream that latched a write error makes `site_config_print` report `-1` with `errno` set, which
-// is what lets `cmd_config_run` name a reason instead of reporting success over truncated output.
-// The reason is `EIO` rather than the underlying `EBADF`: a latched error's own `errno` may have
-// been overwritten by the time it is noticed, so the contract substitutes a generic I/O failure
-// rather than relaying a stale value. A read-mode stream is the deterministic way to reach that
-// branch, since the writes fail while `fflush` itself succeeds. The same shape is asserted for
-// `cli_print_version` by `test_print_version_reports_write_failure`.
+// A standard output that refuses the write makes `site_config_print` report `-1` with the write's
+// own `errno`, which is what lets `cmd_config_run` name a reason instead of reporting success over
+// lost output. A read-only descriptor in place of standard output is the deterministic way to get
+// one: every write fails with `EBADF`. The same shape is asserted for `cli_print_version` by
+// `test_print_version_reports_write_failure`.
 static void test_print_reports_write_failure(void) {
   struct SiteConfig config;
   site_config_init(&config);
-  config.base_url = "https://example.com";
-  config.title = "Example Site";
-  config.author = "Example Author";
+  config.base_url = S("https://example.com");
+  config.title = S("Example Site");
+  config.author = S("Example Author");
 
-  FILE* stream = fopen("/dev/null", "r");
-  TEST_ASSERT(stream != NULL);
-  if (stream == NULL) {
-    site_config_free(&config);
+  struct StreamCapture capture;
+  if (capture_begin_unwritable(stdout, &capture) != 0) {
     return;
   }
   errno = 0;
-  TEST_CHECK(site_config_print(stream, &config) == -1);
-  TEST_CHECK(errno == EIO);
-  const int close_rc = fclose(stream);
-  TEST_CHECK(close_rc == 0);
-
-  site_config_free(&config);
+  const int rc = site_config_print(&config, os_posix(), test_arena());
+  const int print_errno = errno;
+  TEST_CHECK(capture_end(&capture, NULL, 0) == 0);
+  TEST_CHECK(rc == -1);
+  TEST_CHECK(print_errno == EBADF);
 }
 
 TEST_LIST = {
@@ -1249,6 +1156,9 @@ TEST_LIST = {
     {"load rejects oversize file", test_load_rejects_oversize_file},
     {"load rejects nul in file", test_load_rejects_nul_in_file},
     {"load rejects malformed toml", test_load_rejects_malformed_toml},
+    {"load reports every invalid key", test_load_reports_every_invalid_key},
+    {"load returns zero with key errors", test_load_returns_zero_with_key_errors},
+    {"load keeps defaults for rejected keys", test_load_keeps_defaults_for_rejected_keys},
     {"load rejects missing required key", test_load_rejects_missing_required_key},
     {"load rejects wrong key type", test_load_rejects_wrong_key_type},
     {"load rejects unknown keys", test_load_rejects_unknown_keys},
@@ -1260,16 +1170,10 @@ TEST_LIST = {
     {"load rejects relative base url", test_load_rejects_relative_base_url},
     {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
     {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
+    {"load reports every invalid template name", test_load_reports_every_invalid_template_name},
     {"load rejects unsafe permalink", test_load_rejects_unsafe_permalink},
     {"load rejects permalink without slug", test_load_rejects_permalink_without_slug},
-    {"load rejects oversize permalink", test_load_rejects_oversize_permalink},
-    {"load rejects permalink oversize in populated section",
-     test_load_rejects_permalink_oversize_in_populated_section},
-    {"load rejects permalink with oversize segment",
-     test_load_rejects_permalink_with_oversize_segment},
-    {"load prefers distinctness over length", test_load_prefers_distinctness_over_length},
-    {"load prefers safety over length and distinctness",
-     test_load_prefers_safety_over_length_and_distinctness},
+    {"load prefers safety over distinctness", test_load_prefers_safety_over_distinctness},
     {"print defaults", test_print_defaults},
     {"print escapes strings", test_print_escapes_strings},
     {"print load round trips", test_print_load_round_trips},

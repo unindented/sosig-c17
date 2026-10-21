@@ -1,12 +1,15 @@
 #include <acutest.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <tomlc17.h>
 
-#include "core/error.h"
 #include "formats/toml.h"
 #include "shared/arena.h"
+#include "shared/log.h"
+#include "shared/str.h"
+#include "test_support.h"
 
 /**
  * @brief Parses a one-value TOML document.
@@ -18,22 +21,39 @@
 static toml_datum_t parse_value(const char* value, toml_result_t* result_out) {
   char doc[128];
   const int n = snprintf(doc, sizeof(doc), "x = %s\n", value);
-  TEST_ASSERT(n > 0 && (size_t)n < sizeof(doc));
-  *result_out = toml_parse_named(doc, n, "test");
-  TEST_ASSERT(result_out->ok);
+  TEST_ASSERT(n > 0 && n < (int)sizeof(doc));
+  struct Log log = test_log();
+  TEST_ASSERT(toml_parse_document((struct Str){doc, n}, S("test.toml"), result_out,
+                                  S("failed to parse test"), &log) == 0);
   return toml_get(result_out->toptab, "x");
 }
 
-// A plain string is text. A string carrying a `NUL` decoded from an escape is not. Every caller
-// that turns a TOML string into an owned C string checks this first, so a datum that passes here is
-// one `strlen` can measure. Without the escape case the check would pass for the wrong reason,
-// since no `NUL` can appear literally in a TOML document.
+// A parse error is logged once against the file, after the caller's operation and before tomlc17's
+// own message, and the call returns `-1` with nothing left to free. The expected text came from a
+// run.
+static void test_parse_document_logs_parse_error(void) {
+  struct Log log = test_log();
+  toml_result_t result;
+  TEST_CHECK(toml_parse_document(S("x = \n"), S("site.toml"), &result, S("failed to parse config"),
+                                 &log) == -1);
+  TEST_CHECK(
+      test_log_is_one(&log, "failed to parse config: (line 1) missing value (in 'site.toml')"));
+}
+
+// A plain string is text. A string carrying a `NUL` decoded from an escape is not, though its view
+// still counts every byte. Every caller that turns a TOML string into a value checks this first.
+// Without the escape case the check would pass for the wrong reason, since no `NUL` can appear
+// literally in a TOML document.
 static void test_is_text_rejects_embedded_nul(void) {
   toml_result_t result;
-  TEST_CHECK(toml_datum_is_text(parse_value("\"plain\"", &result)));
+  toml_datum_t value = parse_value("\"plain\"", &result);
+  TEST_CHECK(toml_datum_is_text(value));
+  TEST_CHECK(str_eq(toml_datum_str(value), S("plain")));
   toml_free(result);
 
-  TEST_CHECK(!toml_datum_is_text(parse_value("\"pre\\u0000post\"", &result)));
+  value = parse_value("\"pre\\u0000post\"", &result);
+  TEST_CHECK(!toml_datum_is_text(value));
+  TEST_CHECK(str_eq(toml_datum_str(value), S("pre\0post")));
   toml_free(result);
 
   // A non-string datum is not text either, so no caller reaches the copy path with an integer.
@@ -107,35 +127,30 @@ static void test_leap_day_converts_in_century_year(void) {
 
 // A date-only value normalizes to midnight UTC, both as an epoch and as a formatted string.
 static void test_date_only_normalizes_to_midnight_utc(void) {
-  struct Arena arena;
-  arena_init(&arena);
+  struct Arena arena = test_arena();
   toml_result_t result;
   toml_datum_t value = parse_value("2030-01-02", &result);
   int64_t epoch = -1;
   TEST_CHECK(toml_datum_to_epoch(value, &epoch) == 0);
   TEST_CHECK(epoch == 1893542400);
-  const char* text = toml_datum_format_rfc3339(value, &arena);
-  TEST_CHECK(text != NULL && strcmp(text, "2030-01-02T00:00:00Z") == 0);
+  const struct Str text = toml_datum_format_rfc3339(value, &arena);
+  TEST_CHECK(str_eq(text, S("2030-01-02T00:00:00Z")));
   toml_free(result);
-  arena_free(&arena);
 }
 
 // A UTC datetime round-trips unchanged.
 static void test_utc_datetime_round_trips(void) {
-  struct Arena arena;
-  arena_init(&arena);
+  struct Arena arena = test_arena();
   toml_result_t result;
   toml_datum_t value = parse_value("2026-07-01T12:00:00Z", &result);
-  const char* text = toml_datum_format_rfc3339(value, &arena);
-  TEST_CHECK(text != NULL && strcmp(text, "2026-07-01T12:00:00Z") == 0);
+  const struct Str text = toml_datum_format_rfc3339(value, &arena);
+  TEST_CHECK(str_eq(text, S("2026-07-01T12:00:00Z")));
   toml_free(result);
-  arena_free(&arena);
 }
 
 // Negative and positive offsets convert to the same UTC instant.
 static void test_offsets_convert_to_same_utc_instant(void) {
-  struct Arena arena;
-  arena_init(&arena);
+  struct Arena arena = test_arena();
   toml_result_t neg;
   toml_result_t pos;
   toml_result_t utc;
@@ -146,27 +161,25 @@ static void test_offsets_convert_to_same_utc_instant(void) {
   int64_t neg_epoch = -1;
   int64_t pos_epoch = -1;
   int64_t utc_epoch = -1;
-  const char* neg_text = toml_datum_format_rfc3339(neg_value, &arena);
-  const char* pos_text = toml_datum_format_rfc3339(pos_value, &arena);
+  const struct Str neg_text = toml_datum_format_rfc3339(neg_value, &arena);
+  const struct Str pos_text = toml_datum_format_rfc3339(pos_value, &arena);
   TEST_CHECK(toml_datum_to_epoch(neg_value, &neg_epoch) == 0);
   TEST_CHECK(toml_datum_to_epoch(pos_value, &pos_epoch) == 0);
   TEST_CHECK(toml_datum_to_epoch(utc_value, &utc_epoch) == 0);
 
   TEST_CHECK(neg_epoch == utc_epoch);
   TEST_CHECK(pos_epoch == utc_epoch);
-  TEST_CHECK(neg_text != NULL && strcmp(neg_text, "2026-07-05T09:00:00-07:00") == 0);
-  TEST_CHECK(pos_text != NULL && strcmp(pos_text, "2026-07-05T18:00:00+02:00") == 0);
+  TEST_CHECK(str_eq(neg_text, S("2026-07-05T09:00:00-07:00")));
+  TEST_CHECK(str_eq(pos_text, S("2026-07-05T18:00:00+02:00")));
 
   toml_free(neg);
   toml_free(pos);
   toml_free(utc);
-  arena_free(&arena);
 }
 
 // Fractional seconds are preserved (trailing zeros trimmed) and truncated for the epoch.
 static void test_fractional_seconds_preserved(void) {
-  struct Arena arena;
-  arena_init(&arena);
+  struct Arena arena = test_arena();
   toml_result_t half;
   toml_result_t micros;
   toml_result_t trailing;
@@ -176,12 +189,12 @@ static void test_fractional_seconds_preserved(void) {
   toml_datum_t trailing_value = parse_value("2026-07-01T12:00:00.120000Z", &trailing);
   toml_datum_t whole_value = parse_value("2026-07-01T12:00:00Z", &whole);
 
-  const char* half_text = toml_datum_format_rfc3339(half_value, &arena);
-  const char* micros_text = toml_datum_format_rfc3339(micros_value, &arena);
-  const char* trailing_text = toml_datum_format_rfc3339(trailing_value, &arena);
-  TEST_CHECK(half_text != NULL && strcmp(half_text, "2026-07-01T12:00:00.5Z") == 0);
-  TEST_CHECK(micros_text != NULL && strcmp(micros_text, "2026-07-01T12:00:00.123456Z") == 0);
-  TEST_CHECK(trailing_text != NULL && strcmp(trailing_text, "2026-07-01T12:00:00.12Z") == 0);
+  const struct Str half_text = toml_datum_format_rfc3339(half_value, &arena);
+  const struct Str micros_text = toml_datum_format_rfc3339(micros_value, &arena);
+  const struct Str trailing_text = toml_datum_format_rfc3339(trailing_value, &arena);
+  TEST_CHECK(str_eq(half_text, S("2026-07-01T12:00:00.5Z")));
+  TEST_CHECK(str_eq(micros_text, S("2026-07-01T12:00:00.123456Z")));
+  TEST_CHECK(str_eq(trailing_text, S("2026-07-01T12:00:00.12Z")));
 
   // A fraction of all zeros yields no fractional part at all, not a bare `.`. That is a separate
   // path from the trimming above rather than its extreme: `toml_datum_format_rfc3339` prints no `.`
@@ -189,8 +202,8 @@ static void test_fractional_seconds_preserved(void) {
   // written with an explicit `.000000` is the reachable way in.
   toml_result_t zeros;
   toml_datum_t zeros_value = parse_value("2026-07-01T12:00:00.000000Z", &zeros);
-  const char* zeros_text = toml_datum_format_rfc3339(zeros_value, &arena);
-  TEST_CHECK(zeros_text != NULL && strcmp(zeros_text, "2026-07-01T12:00:00Z") == 0);
+  const struct Str zeros_text = toml_datum_format_rfc3339(zeros_value, &arena);
+  TEST_CHECK(str_eq(zeros_text, S("2026-07-01T12:00:00Z")));
   toml_free(zeros);
 
   // The epoch drops sub-second precision, so fractional value matches its whole-second sibling.
@@ -204,20 +217,18 @@ static void test_fractional_seconds_preserved(void) {
   toml_free(micros);
   toml_free(trailing);
   toml_free(whole);
-  arena_free(&arena);
 }
 
 // A timezone-less datetime is treated as UTC: emitted with `Z` and converted as the UTC instant.
 static void test_timezoneless_datetime_treated_as_utc(void) {
-  struct Arena arena;
-  arena_init(&arena);
+  struct Arena arena = test_arena();
   toml_result_t local;
   toml_result_t utc;
   toml_datum_t local_value = parse_value("2026-07-01T12:00:00", &local);
   toml_datum_t utc_value = parse_value("2026-07-01T12:00:00Z", &utc);
 
-  const char* text = toml_datum_format_rfc3339(local_value, &arena);
-  TEST_CHECK(text != NULL && strcmp(text, "2026-07-01T12:00:00Z") == 0);
+  const struct Str text = toml_datum_format_rfc3339(local_value, &arena);
+  TEST_CHECK(str_eq(text, S("2026-07-01T12:00:00Z")));
 
   int64_t local_epoch = -1;
   int64_t utc_epoch = -1;
@@ -227,18 +238,16 @@ static void test_timezoneless_datetime_treated_as_utc(void) {
 
   toml_free(local);
   toml_free(utc);
-  arena_free(&arena);
 }
 
-// A datum that is neither a date nor a datetime is rejected. The test uses two forms with different
-// failure modes. A string populates `u.str` and cannot produce a plausible timestamp. A time-only
-// datum uses the same `u.ts` payload as accepted types. Only its `year`, `month`, and `day` fields
-// differ; each contains `-1`. Adding `TOML_TIME` to the accepted set is a plausible slip. It would
-// turn `date = 12:00:00` into a garbage epoch and an `-001--1--1T12:00:00Z` timestamp in the page
-// and the feed instead of a diagnostic.
+// A datum that is neither a date nor a datetime is rejected by the epoch conversion, which every
+// caller runs before formatting the datum. The test uses two forms with different failure modes. A
+// string populates `u.str` and cannot produce a plausible timestamp. A time-only datum uses the
+// same `u.ts` payload as accepted types. Only its `year`, `month`, and `day` fields differ; each
+// contains `-1`. Adding `TOML_TIME` to the accepted set is a plausible slip. It would turn
+// `date = 12:00:00` into a garbage epoch and an `-001--1--1T12:00:00Z` timestamp in the page and
+// the feed instead of a diagnostic.
 static void test_rejects_non_datetime_values(void) {
-  struct Arena arena;
-  arena_init(&arena);
   toml_result_t result;
   toml_datum_t value = parse_value("\"not a date\"", &result);
   int64_t epoch = -1;
@@ -246,7 +255,6 @@ static void test_rejects_non_datetime_values(void) {
   // `epoch_out` is written only on success, so the sentinel set above survives. A caller keeping a
   // previously computed epoch in the same variable across a failed call depends on this.
   TEST_CHECK(epoch == -1);
-  TEST_CHECK(toml_datum_format_rfc3339(value, &arena) == NULL);
   toml_free(result);
 
   toml_result_t time_result;
@@ -254,60 +262,92 @@ static void test_rejects_non_datetime_values(void) {
   int64_t time_epoch = -1;
   TEST_CHECK(toml_datum_to_epoch(time_value, &time_epoch) == -1);
   TEST_CHECK(time_epoch == -1);
-  TEST_CHECK(toml_datum_format_rfc3339(time_value, &arena) == NULL);
   toml_free(time_result);
-
-  arena_free(&arena);
 }
 
 // A table holding only listed keys passes, whatever their order, and so does an empty table checked
-// against an empty list.
+// against an empty list. Neither records anything.
 static void test_require_known_keys_accepts_known_keys(void) {
-  static const char* const known_keys[] = {"title", "date"};
-  char err[ERROR_MESSAGE_SIZE] = "";
+  static const struct Str known_keys[] = {STR_INIT("title"), STR_INIT("date")};
+  struct Log log = test_log();
   toml_result_t result;
   TEST_CHECK(toml_require_known_keys(parse_value("{ date = 1, title = 2 }", &result), known_keys,
-                                     sizeof(known_keys) / sizeof(known_keys[0]), "config", "", err,
-                                     sizeof(err)) == 0);
+                                     sizeof(known_keys) / sizeof(known_keys[0]), S("config"), S(""),
+                                     (struct Str){0}, &log) == 0);
   toml_free(result);
 
-  TEST_CHECK(toml_require_known_keys(parse_value("{}", &result), NULL, 0, "config", "", err,
-                                     sizeof(err)) == 0);
+  TEST_CHECK(toml_require_known_keys(parse_value("{}", &result), NULL, 0, S("config"), S(""),
+                                     (struct Str){0}, &log) == 0);
   toml_free(result);
+  TEST_CHECK(test_log_is_empty(&log));
 }
 
 // An unlisted key is rejected, named with the caller's key kind and table prefix. Keys match
 // exactly, so a prefix of a known key, or one extending it, is as unknown as a typo, and an empty
 // list rejects every key.
 static void test_require_known_keys_rejects_unknown_keys(void) {
-  static const char* const known_keys[] = {"title", "date"};
+  static const struct Str known_keys[] = {STR_INIT("title"), STR_INIT("date")};
   static const char* const cases[][4] = {
-      {"{ title = 1, ttile = 2 }", "config", "", "unknown config key 'ttile'"},
-      {"{ titl = 1 }", "frontmatter", "", "unknown frontmatter key 'titl'"},
-      {"{ titles = 1 }", "frontmatter", "", "unknown frontmatter key 'titles'"},
-      {"{ titel = true }", "frontmatter", "extra.", "unknown frontmatter key 'extra.titel'"},
+      {"{ title = 1, ttile = 2 }", "config", "", "unknown config key 'ttile'\n"},
+      {"{ titl = 1 }", "frontmatter", "", "unknown frontmatter key 'titl'\n"},
+      {"{ titles = 1 }", "frontmatter", "", "unknown frontmatter key 'titles'\n"},
+      {"{ titel = true }", "frontmatter", "extra.", "unknown frontmatter key 'extra.titel'\n"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    char err[ERROR_MESSAGE_SIZE] = "";
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct Log log = test_log();
     toml_result_t result;
     TEST_CHECK(toml_require_known_keys(parse_value(cases[i][0], &result), known_keys,
-                                       sizeof(known_keys) / sizeof(known_keys[0]), cases[i][1],
-                                       cases[i][2], err, sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][3]) == 0);
-    TEST_MSG("case %zu: got '%s'", i, err);
+                                       sizeof(known_keys) / sizeof(known_keys[0]),
+                                       str_from_cstr(cases[i][1]), str_from_cstr(cases[i][2]),
+                                       (struct Str){0}, &log) == -1);
+    TEST_CHECK(test_log_is(&log, "%s", cases[i][3]));
+    TEST_MSG("case %td", i);
     toml_free(result);
   }
 
-  char err[ERROR_MESSAGE_SIZE] = "";
+  struct Log log = test_log();
   toml_result_t result;
-  TEST_CHECK(toml_require_known_keys(parse_value("{ title = 1 }", &result), NULL, 0, "config", "",
-                                     err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "unknown config key 'title'") == 0);
+  TEST_CHECK(toml_require_known_keys(parse_value("{ title = 1 }", &result), NULL, 0, S("config"),
+                                     S(""), (struct Str){0}, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "unknown config key 'title'\n"));
+  toml_free(result);
+}
+
+// A quoted key holding a `NUL` decoded from an escape is rejected without being named, since `%.*s`
+// would stop at the `NUL` and name the known key in front of it. Each such key is still one unknown
+// key, beside an ordinary unknown key that keeps its name.
+static void test_require_known_keys_rejects_nul_key_unnamed(void) {
+  static const struct Str known_keys[] = {STR_INIT("title")};
+  struct Log log = test_log();
+  toml_result_t result;
+  TEST_CHECK(toml_require_known_keys(parse_value("{ \"title\\u0000x\" = 1, ttile = 2 }", &result),
+                                     known_keys, sizeof(known_keys) / sizeof(known_keys[0]),
+                                     S("frontmatter"), S(""), S("content/a.md"), &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "frontmatter key must not contain a NUL byte (in 'content/a.md')\n"
+                         "unknown frontmatter key 'ttile' (in 'content/a.md')\n"));
+  TEST_CHECK(log.errors == 2);
+  toml_free(result);
+}
+
+// Every unknown key is reported, in table order, each naming the file when one is given.
+static void test_require_known_keys_reports_every_unknown_key(void) {
+  static const struct Str known_keys[] = {STR_INIT("title")};
+  struct Log log = test_log();
+  toml_result_t result;
+  TEST_CHECK(toml_require_known_keys(parse_value("{ ttile = 1, title = 2, dtae = 3 }", &result),
+                                     known_keys, sizeof(known_keys) / sizeof(known_keys[0]),
+                                     S("frontmatter"), S(""), S("content/a.md"), &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "unknown frontmatter key 'ttile' (in 'content/a.md')\n"
+                         "unknown frontmatter key 'dtae' (in 'content/a.md')\n"));
+  TEST_CHECK(log.errors == 2);
   toml_free(result);
 }
 
 TEST_LIST = {
+    {"parse document logs parse error", test_parse_document_logs_parse_error},
     {"is text rejects embedded nul", test_is_text_rejects_embedded_nul},
     {"unix epoch anchor converts to zero", test_unix_epoch_anchor_converts_to_zero},
     {"pre epoch dates convert to negative", test_pre_epoch_dates_convert_to_negative},
@@ -320,5 +360,8 @@ TEST_LIST = {
     {"rejects non-datetime values", test_rejects_non_datetime_values},
     {"require known keys accepts known keys", test_require_known_keys_accepts_known_keys},
     {"require known keys rejects unknown keys", test_require_known_keys_rejects_unknown_keys},
+    {"require known keys rejects nul key unnamed", test_require_known_keys_rejects_nul_key_unnamed},
+    {"require known keys reports every unknown key",
+     test_require_known_keys_reports_every_unknown_key},
     {NULL, NULL},
 };

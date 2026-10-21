@@ -2,100 +2,50 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 
-#include "shared/arena.h"
-
-/**
- * @brief Expands a permalink pattern, writing into `url_out` when given and returning the length.
- *
- * One implementation both sizes the buffer and fills it. Called with `url_out` as `NULL` it writes
- * nothing and only counts, so the length and the bytes can never disagree.
- *
- * @param pattern Permalink pattern to expand. Must not be `NULL`.
- * @param section Section value substituted for `{section}`. Must not be `NULL`.
- * @param slug    Slug value substituted for `{slug}`. Must not be `NULL`.
- * @param url_out Destination for the expansion, excluding the terminator, or `NULL` to only
- *                measure.
- * @return Length of the expansion in bytes, excluding the terminator.
- */
-static size_t permalink_expand_into(const char* pattern,
-                                    const char* section,
-                                    const char* slug,
-                                    char* url_out) __attribute__((nonnull(1, 2, 3)));
+#include "shared/buf.h"
+#include "shared/str.h"
 
 /**
- * @brief Writes one byte at `*url_len` when `url` is given, and advances it either way.
+ * @brief Appends a token's replacement, tracking whether the URL now ends on a separator.
  *
- * @param url     Destination buffer, or `NULL` to only advance the length.
- * @param url_len Running length, used as the write offset and incremented. Must not be `NULL`.
- * @param c       Byte to write.
+ * An empty replacement leaves `*is_after_slash` exactly as it was, which collapses the two `/`
+ * around an empty `{section}` into one. Resetting it once per token, the natural-looking change,
+ * emits `//` for every top-level entry.
+ *
+ * @param buffer         URL being built. Must not be `NULL`.
+ * @param replacement    Bytes substituted for the token.
+ * @param is_after_slash Whether the URL ends on a separator, updated. Must not be `NULL`.
  */
-static void put_char(char* url, size_t* url_len, char c) __attribute__((nonnull(2)));
+static void permalink_expand_token(struct Buf* buffer, struct Str replacement, bool* is_after_slash)
+    __attribute__((nonnull(1, 3)));
 
-char* permalink_expand(const char* pattern,
-                       const char* section,
-                       const char* slug,
-                       struct Arena* arena) {
-  // This builds the URL directly in arena storage. The expansion is the entry's `url_path`, which
-  // the arena owns for the rest of the build, so a growable heap buffer would only be copied there
-  // and freed.
-  const size_t url_len = permalink_expand_into(pattern, section, slug, NULL);
-  char* url = arena_alloc(arena, url_len + 1);
-  if (url == NULL) {
-    return NULL;
-  }
-  (void)permalink_expand_into(pattern, section, slug, url);
-  url[url_len] = '\0';
-  return url;
-}
-
-static size_t permalink_expand_into(const char* pattern,
-                                    const char* section,
-                                    const char* slug,
-                                    char* url_out) {
-  size_t url_out_len = 0;
-
+struct Str permalink_expand(struct Str pattern,
+                            struct Str section,
+                            struct Str slug,
+                            struct Arena* arena) {
   // Root the URL at `/`, then substitute tokens while collapsing redundant separators so an empty
   // section (or a doubled `/` in the pattern) leaves no gap.
-  put_char(url_out, &url_out_len, '/');
+  struct Buf url = {.arena = arena};
+  buf_append_char(&url, '/');
   bool is_after_slash = true;
-  for (const char* p = pattern; *p != '\0';) {
-    const char* replacement = NULL;
-    // `strncmp` stops at a terminator in either argument, so matching the 9-byte `{section}`
-    // against a shorter pattern tail such as `/{sec` compares only as far as that tail's `NUL` and
-    // never reads past the pattern. `memcmp` has no such stop and would be an out-of-bounds read
-    // here, which is the substitution a reader makes to avoid the terminator scan.
-    if (strncmp(p, "{slug}", sizeof("{slug}") - 1) == 0) {
-      replacement = slug;
-      p += sizeof("{slug}") - 1;
-    } else if (strncmp(p, "{section}", sizeof("{section}") - 1) == 0) {
-      replacement = section;
-      p += sizeof("{section}") - 1;
-    }
-
-    if (replacement != NULL) {
-      // An empty replacement runs this loop zero times and so leaves `is_after_slash` exactly as it
-      // was, which collapses the two `/` around an empty `{section}` into one. Resetting
-      // `is_after_slash` once per token, the natural-looking change, emits `//` for every top-level
-      // entry.
-      for (const char* c = replacement; *c != '\0'; c++) {
-        put_char(url_out, &url_out_len, *c);
-        is_after_slash = *c == '/';
-      }
+  while (pattern.len > 0) {
+    if (str_startswith(pattern, S("{slug}"))) {
+      permalink_expand_token(&url, slug, &is_after_slash);
+      pattern = str_tail(pattern, S("{slug}").len);
       continue;
     }
-
-    if (*p == '/') {
-      if (!is_after_slash) {
-        put_char(url_out, &url_out_len, '/');
-        is_after_slash = true;
-      }
-    } else {
-      put_char(url_out, &url_out_len, *p);
-      is_after_slash = false;
+    if (str_startswith(pattern, S("{section}"))) {
+      permalink_expand_token(&url, section, &is_after_slash);
+      pattern = str_tail(pattern, S("{section}").len);
+      continue;
     }
-    p++;
+    const char c = pattern.data[0];
+    if (c != '/' || !is_after_slash) {
+      buf_append_char(&url, c);
+    }
+    is_after_slash = c == '/';
+    pattern = str_tail(pattern, 1);
   }
 
   // An expansion ending on a separator publishes the directory's index document. The condition is
@@ -103,17 +53,16 @@ static size_t permalink_expand_into(const char* pattern,
   // the expansion ending on the separator written before it, so `/{slug}/{section}` publishes an
   // index document for a top-level entry too.
   if (is_after_slash) {
-    static const char INDEX_DOCUMENT[] = "index.html";
-    for (size_t i = 0; i < sizeof(INDEX_DOCUMENT) - 1; i++) {
-      put_char(url_out, &url_out_len, INDEX_DOCUMENT[i]);
-    }
+    buf_append(&url, S("index.html"));
   }
-  return url_out_len;
+  return buf_str(&url);
 }
 
-static void put_char(char* url, size_t* url_len, char c) {
-  if (url != NULL) {
-    url[*url_len] = c;
+static void permalink_expand_token(struct Buf* buffer,
+                                   struct Str replacement,
+                                   bool* is_after_slash) {
+  if (replacement.len > 0) {
+    buf_append(buffer, replacement);
+    *is_after_slash = replacement.data[replacement.len - 1] == '/';
   }
-  (*url_len)++;
 }

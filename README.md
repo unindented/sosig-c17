@@ -19,7 +19,7 @@ Download a prebuilt binary from the [Releases](https://github.com/unindented/sos
 
 `sosig` is command-based:
 
-- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the number of worker threads. The value must be from 1 through 1024. By default, the tool uses the detected CPU count. Use `-v, --verbose` to print build progress to `stderr`.
+- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the most worker threads the build runs. The value must be a positive integer. By default, the tool uses the detected CPU count. A build never runs more workers than it has content files, or more than four for each online CPU. Use `-v, --verbose` to print build progress to `stderr`.
 - `sosig config`: Print the resolved project configuration as TOML.
 
 Run these commands for help:
@@ -57,6 +57,8 @@ The search follows symlinked directories but reads each directory only once. A d
 The content and template directories must exist.
 
 The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
+
+The build reserves its memory once, when it starts, in fixed sizes that these limits bound. Reserved memory that the build does not use costs address space but no memory. Under an address-space limit (`ulimit -v`) that refuses the reservation, the build first halves its worker count, down to one, and then halves the reservation until it fits, up to six times, and once more to leave room for the memory it does not reserve, and then holds correspondingly less. So the limit a build needs does not grow with `-w`: it needs about 280 MB (`ulimit -v 270000`), and under less it stops at startup with `sosig: out of memory`. A limit that leaves less room beside a reservation that fits than the worker threads' stacks need, about 24 MB at two workers, makes the build fail with `cannot start worker thread`. A build that needs more than it reserved, such as a template whose nested sections expand without bound, prints the errors the command and the failing job logged so far and `sosig: out of memory (in '<file>')`, and exits with status 1. Each worker keeps the errors it reports in at least 256 MiB, so a worker that reports about a million one-line errors, or about 290 files that each hold about 16,000 unknown keys, can also end the build in that report.
 
 Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.
 
@@ -211,7 +213,7 @@ The repository and release archives do not include starter templates. A site pro
 
 Vendored dependencies are included under `vendor/`:
 
-- [`sharedstuff`](https://github.com/unindented/sharedstuff-c17): Arena allocation and string buffers.
+- [`sharedstuff`](https://github.com/unindented/sharedstuff-c17): Arena allocation, counted strings, output buffers, and the diagnostic log.
 - [`copt`](https://github.com/fardaniqbal/copt): Command line option parsing.
 - [`tomlc17`](https://github.com/cktan/tomlc17): TOML configuration and frontmatter parsing.
 - [`md4c`](https://github.com/mity/md4c): Markdown-to-HTML conversion.
@@ -275,7 +277,7 @@ The binaries are `build/multi/bin/Debug/sosig` and `build/multi/bin/RelWithDebIn
 
 ### Testing
 
-CTest registers the colocated unit test suite and the end-to-end golden test suite.
+CTest registers the unit test suite and the end-to-end golden test suite.
 
 #### Debug tests
 

@@ -2,10 +2,10 @@
 
 #include "core/sosig_version.h"
 
-const char* sosig_version_string(void) {
-  return "@PROJECT_VERSION@";
+struct Str sosig_version_string(void) {
+  return S("@PROJECT_VERSION@");
 }
 
-const char* sosig_generator_string(void) {
-  return "@PROJECT_NAME@ @PROJECT_VERSION@";
+struct Str sosig_generator_string(void) {
+  return S("@PROJECT_NAME@ @PROJECT_VERSION@");
 }

@@ -1,197 +1,168 @@
-#define _DARWIN_C_SOURCE
-#define _DEFAULT_SOURCE
-
 #include <acutest.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "build/manifest_builder.h"
-#include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "domain/content_entry.h"
 #include "domain/manifest.h"
 #include "domain/site_config.h"
-#include "runtime/fs.h"
+#include "os_memory.h"
 #include "shared/arena.h"
+#include "shared/buf.h"
+#include "shared/log.h"
+#include "shared/str.h"
 #include "test_support.h"
 
+// Every test here runs against the in-memory host. The identity checks see what they would see on
+// disk: two spellings of one directory, a symlink and its target, and two hard links to one file
+// share an identity, and `..` resolves against the directory actually reached.
+
+/** Path of the fixture's configuration file. */
+#define CONFIG_PATH S("site/sosig.toml")
+
 /**
- * @brief Creates a fixture holding `sosig.toml` and `templates/content.html`, and points a
+ * @brief Creates a host holding `site/sosig.toml` and `site/templates/content.html`, and points a
  *        configuration at it.
  *
- * `content_dir` is `content`, `output_dir` is `public`, and `templates_dir` is `templates`, each
- * below `root_dir`. No aggregate or feed template is configured. Only the two files exist, so no
+ * `content_dir` is `site/content`, `output_dir` is `site/public`, and `templates_dir` is
+ * `site/templates`. No aggregate or feed template is configured. Only the two files exist, so no
  * source or output is present.
  *
- * @param root_dir    Writable `mkdtemp` template. Receives the created directory path.
- * @param arena       Arena that owns the joined paths. Must not be `NULL`.
- * @param site_config Configuration to initialize. The caller releases it with `site_config_free`.
- *                    Must not be `NULL`.
- * @return The path of the fixture's `sosig.toml`, owned by `arena`, or `NULL` after recording a
- *         test-plumbing failure, with the fixture removed and `site_config` released.
+ * @param site_config Configuration to initialize. Must not be `NULL`.
+ * @return The host.
  */
-static char* init_manifest_fixture(char* root_dir,
-                                   struct Arena* arena,
-                                   struct SiteConfig* site_config) {
+static struct Os* init_manifest_fixture(struct SiteConfig* site_config) {
   site_config_init(site_config);
-  if (init_fixture_dir(root_dir) == NULL) {
-    return NULL;
-  }
-  char* config_path = path_join(root_dir, "sosig.toml", arena);
-  site_config->content_dir = path_join(root_dir, "content", arena);
-  site_config->output_dir = path_join(root_dir, "public", arena);
-  site_config->templates_dir = path_join(root_dir, "templates", arena);
+  site_config->content_dir = S("site/content");
+  site_config->output_dir = S("site/public");
+  site_config->templates_dir = S("site/templates");
   site_config->aggregate_template_count = 0;
   site_config->feed_template_count = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", "title = 'x'\n") == 0)) {
-    goto fail;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "content") == 0)) {
-    goto fail;
-  }
-  if (!TEST_CHECK(config_path != NULL && site_config->content_dir != NULL &&
-                  site_config->output_dir != NULL && site_config->templates_dir != NULL)) {
-    goto fail;
-  }
-  return config_path;
+  struct Os* os = os_memory();
+  os_memory_write(os, "site/sosig.toml", "title = 'x'\n");
+  os_memory_write(os, "site/templates/content.html", "content");
+  return os;
+}
 
-fail:
-  site_config_free(site_config);
-  remove_fixture_tree(root_dir);
-  return NULL;
+/**
+ * @brief Populates a manifest from content entries, as the build does, with no sources claimed.
+ *
+ * The manifest's data goes in a reservation of its own, never in the log's arena, so a failure the
+ * log records cannot grow over the paths the populate is still using.
+ *
+ * @param manifest            Manifest that receives the outputs. Must not be `NULL`.
+ * @param site_config         Configuration to populate from. Must not be `NULL`.
+ * @param source_paths        Claimed content sources, or `NULL` for none.
+ * @param content_entries     Array of `content_entry_count` entries. May be `NULL` only when
+ *                            `content_entry_count` is 0.
+ * @param content_entry_count Number of entries.
+ * @param os                  Host the fixture is on. Must not be `NULL`.
+ * @param log                 Log that receives every error. Must not be `NULL`.
+ * @return The result of `manifest_builder_populate`.
+ */
+static int populate(struct Manifest* manifest,
+                    const struct SiteConfig* site_config,
+                    const struct PathList* source_paths,
+                    const struct ContentEntry* const* content_entries,
+                    ptrdiff_t content_entry_count,
+                    struct Os* os,
+                    struct Log* log) {
+  static const struct PathList empty = {0};
+  struct Arena perm = test_arena();
+  return manifest_builder_populate(manifest, site_config, CONFIG_PATH,
+                                   source_paths != NULL ? source_paths : &empty, content_entries,
+                                   content_entry_count, os, &perm, test_arena(), log);
 }
 
 /**
  * @brief Populates a manifest with one content entry and checks the input-root rejection.
  *
- * @param config      Configuration whose roots the output is checked against. Must not be `NULL`.
- * @param config_path Path of the fixture's `sosig.toml`. Must not be `NULL`.
- * @param output_path Output path of the single entry, joined onto `config->output_dir`. Must not be
- *                    `NULL`.
+ * @param site_config Configuration whose roots the output is checked against. Must not be `NULL`.
+ * @param output_path Terminated output path of the single entry. Must not be `NULL`.
  * @param root_key    Config key of the root the diagnostic must name. Must not be `NULL`.
+ * @param os          Host the fixture is on. Must not be `NULL`.
  */
-static void check_rejects_output_in_root(const struct SiteConfig* config,
-                                         const char* config_path,
+static void check_rejects_output_in_root(const struct SiteConfig* site_config,
                                          const char* output_path,
-                                         const char* root_key) {
-  struct ContentEntry entry = {.output_path = output_path, .source_path = "content/a.md"};
+                                         const char* root_key,
+                                         struct Os* os) {
+  struct ContentEntry entry = {.output_path = str_from_cstr(output_path),
+                               .source_path = S("content/a.md")};
   const struct ContentEntry* entries[] = {&entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(manifest_builder_populate(&manifest, config, config_path, &empty, entries, 1, err,
-                                       sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "output path would write inside '%s' for '%s': '%s'",
-               root_key, "content/a.md", output_path);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-  TEST_MSG("actual: '%s'", err);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+  TEST_CHECK(populate(&manifest, site_config, NULL, entries, 1, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "output path would write inside '%s' for 'content/a.md': '%s'\n",
+                         root_key, output_path));
 }
 
 /**
- * @brief Checks that `manifest_builder_check_output_dir` rejects `config->output_dir` and creates
- *        nothing.
+ * @brief Checks that `manifest_builder_check_output_dir` rejects `site_config->output_dir` and
+ *        creates nothing.
  *
- * @param config   Configuration whose `output_dir` lies at or below an input root. Must not be
- *                 `NULL`.
- * @param root_key Config key of the root the diagnostic must name. Must not be `NULL`.
+ * @param site_config Configuration whose `output_dir` lies at or below an input root. Must not be
+ *                    `NULL`.
+ * @param root_key    Config key of the root the diagnostic must name. Must not be `NULL`.
+ * @param os          Host the fixture is on. Must not be `NULL`.
  */
-static void check_rejects_output_dir_in_root(const struct SiteConfig* config,
-                                             const char* root_key) {
-  const bool had_output_dir = access(config->output_dir, F_OK) == 0;
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(manifest_builder_check_output_dir(config, err, sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "output directory would write inside '%s': '%s'",
-               root_key, config->output_dir);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    return;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-  TEST_MSG("actual: '%s'", err);
-  TEST_CHECK((access(config->output_dir, F_OK) == 0) == had_output_dir);
+static void check_rejects_output_dir_in_root(const struct SiteConfig* site_config,
+                                             const char* root_key,
+                                             struct Os* os) {
+  struct Arena arena = test_arena();
+  const char* output_dir = str_cstr(site_config->output_dir, &arena);
+  const bool had_output_dir = os_memory_has_path(os, output_dir);
+  struct Log log = test_log();
+  TEST_CHECK(manifest_builder_check_output_dir(site_config, os, test_arena(), &log) == -1);
+  TEST_CHECK(test_log_is(&log, "output directory would write inside '%s': '%.*s'\n", root_key,
+                         STR_FMT(site_config->output_dir)));
+  TEST_CHECK(os_memory_has_path(os, output_dir) == had_output_dir);
+  TEST_MSG("output_dir: '%s'", output_dir);
+}
+
+/**
+ * @brief Builds a content entry with the given output and source paths.
+ *
+ * @param output_path Terminated output path. Must not be `NULL`.
+ * @param source_path Terminated source path. Must not be `NULL`.
+ * @return The entry, borrowing both strings.
+ */
+static struct ContentEntry entry_at(const char* output_path, const char* source_path) {
+  return (struct ContentEntry){.output_path = str_from_cstr(output_path),
+                               .source_path = str_from_cstr(source_path)};
 }
 
 // Every content entry, aggregate, and feed output is registered exactly once.
 static void test_registers_complete_output_set(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* first_source = path_join(config.content_dir, "a.md", &arena);
-  char* second_source = path_join(config.content_dir, "b.md", &arena);
-  char* first_output = path_join(config.output_dir, "a/index.html", &arena);
-  char* second_output = path_join(config.output_dir, "b/index.html", &arena);
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  os_memory_write(os, "site/content/b.md", "source");
+  os_memory_write(os, "site/templates/index.html", "index");
+  os_memory_write(os, "site/templates/feed.xml", "feed");
+  static const struct Str aggregates[] = {STR_INIT("index.html")};
+  static const struct Str feeds[] = {STR_INIT("feed.xml")};
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  site_config.feed_templates = feeds;
+  site_config.feed_template_count = 1;
+  const struct ContentEntry first = entry_at("site/public/a/index.html", "site/content/a.md");
+  const struct ContentEntry second = entry_at("site/public/b/index.html", "site/content/b.md");
+  const struct ContentEntry* entries[] = {&first, &second};
+  struct Arena arena = test_arena();
+  struct PathList sources = {0};
+  path_list_push(&sources, first.source_path, &arena);
+  path_list_push(&sources, second.source_path, &arena);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  static const char* const aggregates[] = {"index.html"};
-  static const char* const feeds[] = {"feed.xml"};
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  config.feed_templates = feeds;
-  config.feed_template_count = 1;
-  struct ContentEntry first_entry = {.output_path = first_output, .source_path = first_source};
-  struct ContentEntry second_entry = {.output_path = second_output, .source_path = second_source};
-  const struct ContentEntry* entries[] = {&first_entry, &second_entry};
-  struct PathList sources;
-  path_list_init(&sources);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "source") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/b.md", "source") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/feed.xml", "feed") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(first_source != NULL && second_source != NULL && first_output != NULL &&
-                  second_output != NULL)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(path_list_push(&sources, first_source) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(path_list_push(&sources, second_source) == 0)) {
-    goto cleanup;
-  }
-
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &sources, entries, 2, err,
-                                       sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_MSG("actual: '%s'", err);
+  TEST_CHECK(populate(&manifest, &site_config, &sources, entries, 2, os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(manifest.count == 4);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&sources);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
 }
 
 // A `templates_dir` that does not exist holds no file an output could overwrite, so it claims
@@ -199,184 +170,97 @@ cleanup:
 // manifest runs, as `test_reports_absent_templates_dir` in `src/app/test_cmd_build.c` pins, so this
 // is the module's own contract rather than a path the build reaches.
 static void test_accepts_missing_templates_dir(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* entry_output = path_join(config.output_dir, "a.html", &arena);
-  char* templates_dir = path_join(root_dir, "missing", &arena);
-  config.templates_dir = templates_dir;
-  struct ContentEntry entry = {.output_path = entry_output, .source_path = "content/a.md"};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  site_config.templates_dir = S("site/missing");
+  const struct ContentEntry entry = entry_at("site/public/a.html", "content/a.md");
   const struct ContentEntry* entries[] = {&entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  if (!TEST_CHECK(entry_output != NULL && templates_dir != NULL)) {
-    goto cleanup;
-  }
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 1, err,
-                                       sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 1, os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(manifest.count == 1);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
 }
 
 // An output beside an input root, in a directory whose name only starts with the root's name, is
 // accepted, because the root check compares whole directories rather than path prefixes.
 static void test_accepts_output_beside_input_roots(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  config.output_dir = root_dir;
-  char* content_output = path_join(root_dir, "contentx/index.html", &arena);
-  char* templates_output = path_join(root_dir, "templatesx/index.html", &arena);
-  struct ContentEntry content_entry = {.output_path = content_output,
-                                       .source_path = "content/a.md"};
-  struct ContentEntry templates_entry = {.output_path = templates_output,
-                                         .source_path = "content/b.md"};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  os_memory_write(os, "site/contentx/old.html", "old");
+  site_config.output_dir = S("site");
+  const struct ContentEntry content_entry = entry_at("site/contentx/index.html", "content/a.md");
+  const struct ContentEntry templates_entry =
+      entry_at("site/templatesx/index.html", "content/b.md");
   const struct ContentEntry* entries[] = {&content_entry, &templates_entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "source") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "contentx/old.html", "old") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(content_output != NULL && templates_output != NULL)) {
-    goto cleanup;
-  }
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 2, err,
-                                       sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_MSG("actual: '%s'", err);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 2, os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
 }
 
 // An `output_dir` outside every input root passes the early check whether or not it exists yet.
 // That includes a directory whose name only starts with a root's name, and one that holds the roots
 // rather than lying inside them, which is the `output_dir = "."` layout.
 static void test_check_output_dir_accepts_dir_outside_input_roots(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  if (init_manifest_fixture(root_dir, &arena, &config) == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  const char* const output_dirs[] = {
-      root_dir,
-      path_join(root_dir, "public", &arena),
-      path_join(root_dir, "contentx/new", &arena),
-      path_join(root_dir, "content/../public/new", &arena),
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  static const struct Str output_dirs[] = {
+      STR_INIT("site"),
+      STR_INIT("site/public"),
+      STR_INIT("site/contentx/new"),
+      STR_INIT("site/content/../public/new"),
   };
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "source") == 0)) {
-    goto cleanup;
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(output_dirs) / sizeof(output_dirs[0])); i++) {
+    site_config.output_dir = output_dirs[i];
+    struct Log log = test_log();
+    TEST_CHECK(manifest_builder_check_output_dir(&site_config, os, test_arena(), &log) == 0);
+    TEST_CHECK(test_log_is_empty(&log));
+    TEST_MSG("output_dir: '%.*s'", STR_FMT(output_dirs[i]));
   }
-  for (size_t i = 0; i < sizeof(output_dirs) / sizeof(output_dirs[0]); i++) {
-    if (!TEST_CHECK(output_dirs[i] != NULL)) {
-      goto cleanup;
-    }
-    config.output_dir = output_dirs[i];
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(manifest_builder_check_output_dir(&config, err, sizeof(err)) == 0);
-    TEST_MSG("output_dir: '%s', actual: '%s'", output_dirs[i], err);
-  }
-
-cleanup:
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
-}
-
-// A configured template's output path is its name joined below `output_dir`, nested directories
-// included. `site_writer` writes to this same path, so it is the one the manifest checked.
-static void test_derive_template_output_joins_output_dir(void) {
-  struct Arena arena;
-  arena_init(&arena);
-  const char* top = manifest_builder_derive_template_output("public", "index.html", &arena);
-  const char* nested = manifest_builder_derive_template_output("public", "feeds/atom.xml", &arena);
-  TEST_ASSERT(top != NULL && nested != NULL);
-  TEST_CHECK(strcmp(top, "public/index.html") == 0);
-  TEST_CHECK(strcmp(nested, "public/feeds/atom.xml") == 0);
-  arena_free(&arena);
 }
 
 // Two entries claiming the same output path are rejected with a diagnostic naming the path.
 static void test_rejects_duplicate(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* output_path = path_join(config.output_dir, "post/index.html", &arena);
-  char* first_label = path_join(config.content_dir, "a.md", &arena);
-  char* second_label = path_join(config.content_dir, "b.md", &arena);
-  struct ContentEntry first_entry = {.output_path = output_path, .source_path = first_label};
-  struct ContentEntry second_entry = {.output_path = output_path, .source_path = second_label};
-  const struct ContentEntry* entries[] = {&first_entry, &second_entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(output_path != NULL && first_label != NULL && second_label != NULL)) {
-    goto cleanup;
-  }
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  const struct ContentEntry first = entry_at("site/public/post/index.html", "site/content/a.md");
+  const struct ContentEntry second = entry_at("site/public/post/index.html", "site/content/b.md");
+  const struct ContentEntry* entries[] = {&first, &second};
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 2, err,
-                                       sizeof(err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               first_label, second_label, output_path);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
+                         "'site/public/post/index.html'\n"));
+}
 
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+// Every collision is reported in one run, in registration order, rather than only the first. A
+// rejected claim is not recorded, so the manifest keeps one path from each pair.
+static void test_reports_every_collision(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  const struct ContentEntry entry_a = entry_at("site/public/one/index.html", "site/content/a.md");
+  const struct ContentEntry entry_b = entry_at("site/public/one/index.html", "site/content/b.md");
+  const struct ContentEntry entry_c = entry_at("site/public/two/index.html", "site/content/c.md");
+  const struct ContentEntry entry_d = entry_at("site/public/two/index.html", "site/content/d.md");
+  const struct ContentEntry* entries[] = {&entry_a, &entry_b, &entry_c, &entry_d};
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 4, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
+                         "'site/public/one/index.html'\n"
+                         "duplicate output path for 'site/content/c.md' and 'site/content/d.md': "
+                         "'site/public/two/index.html'\n"));
+  TEST_CHECK(log.errors == 2);
+  TEST_CHECK(manifest.count == 2);
 }
 
 // Two entries whose output paths differ only in ASCII case claim one file on a case-insensitive
@@ -384,152 +268,80 @@ cleanup:
 // They are rejected as a duplicate on every platform, so a site that builds on Linux does not break
 // on macOS. The trailing path is the second claim's own spelling.
 static void test_rejects_case_folded_duplicate(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* first_output = path_join(config.output_dir, "About/index.html", &arena);
-  char* second_output = path_join(config.output_dir, "about/index.html", &arena);
-  char* first_label = path_join(config.content_dir, "a.md", &arena);
-  char* second_label = path_join(config.content_dir, "b.md", &arena);
-  struct ContentEntry first_entry = {.output_path = first_output, .source_path = first_label};
-  struct ContentEntry second_entry = {.output_path = second_output, .source_path = second_label};
-  const struct ContentEntry* entries[] = {&first_entry, &second_entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(first_output != NULL && second_output != NULL && first_label != NULL &&
-                  second_label != NULL)) {
-    goto cleanup;
-  }
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  const struct ContentEntry first = entry_at("site/public/About/index.html", "site/content/a.md");
+  const struct ContentEntry second = entry_at("site/public/about/index.html", "site/content/b.md");
+  const struct ContentEntry* entries[] = {&first, &second};
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 2, err,
-                                       sizeof(err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               first_label, second_label, second_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
+                         "'site/public/about/index.html'\n"));
 }
 
 // Two entries whose output paths collide as a file and a directory, where one is a `/`-delimited
 // prefix of the other, are rejected even though neither is a duplicate. The two producers lead the
-// message ahead of the one unbounded path. The ancestor path is not repeated because it is a prefix
-// of the path that is printed.
+// message and the path trails. The ancestor path is not repeated because it is a prefix of the path
+// that is printed.
 static void test_rejects_prefix_collision(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* file_output = path_join(config.output_dir, "post", &arena);
-  char* nested_output = path_join(config.output_dir, "post/index.html", &arena);
-  char* file_label = path_join(config.content_dir, "a.md", &arena);
-  char* nested_label = path_join(config.content_dir, "b.md", &arena);
-  struct ContentEntry file_entry = {.output_path = file_output, .source_path = file_label};
-  struct ContentEntry nested_entry = {.output_path = nested_output, .source_path = nested_label};
-  const struct ContentEntry* entries[] = {&file_entry, &nested_entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(file_output != NULL && nested_output != NULL && file_label != NULL &&
-                  nested_label != NULL)) {
-    goto cleanup;
-  }
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  const struct ContentEntry file = entry_at("site/public/post", "site/content/a.md");
+  const struct ContentEntry nested = entry_at("site/public/post/index.html", "site/content/b.md");
+  const struct ContentEntry* entries[] = {&file, &nested};
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 2, err,
-                                       sizeof(err)) == -1);
-  expected_len = snprintf(expected, sizeof(expected),
-                          "output path for '%s' nests under output path for '%s': '%s'",
-                          nested_label, file_label, nested_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path for 'site/content/b.md' nests under output path for "
+                         "'site/content/a.md': 'site/public/post/index.html'\n"));
+}
 
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+// Every output that nests under another is reported in one run, not only the first.
+static void test_rejects_every_prefix_collision(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  const struct ContentEntry post = entry_at("site/public/post", "site/content/a.md");
+  const struct ContentEntry post_index =
+      entry_at("site/public/post/index.html", "site/content/b.md");
+  const struct ContentEntry page = entry_at("site/public/page", "site/content/c.md");
+  const struct ContentEntry page_index =
+      entry_at("site/public/page/index.html", "site/content/d.md");
+  const struct ContentEntry* entries[] = {&post, &post_index, &page, &page_index};
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 4, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path for 'site/content/b.md' nests under output path for "
+                         "'site/content/a.md': 'site/public/post/index.html'\n"
+                         "output path for 'site/content/d.md' nests under output path for "
+                         "'site/content/c.md': 'site/public/page/index.html'\n"));
+  TEST_CHECK(log.errors == 2);
 }
 
 // A content entry and a configured `index.html` aggregate collide before any writer runs. The entry
 // is labeled by its source path, a real path, rather than a placeholder another entry could share.
 static void test_rejects_entry_aggregate_collision(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* output_path = path_join(config.output_dir, "index.html", &arena);
-  char* source_path = path_join(config.content_dir, "index.md", &arena);
-  static const char* const aggregates[] = {"index.html"};
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  struct ContentEntry entry = {.output_path = output_path, .source_path = source_path};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/templates/index.html", "aggregate");
+  static const struct Str aggregates[] = {STR_INIT("index.html")};
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  const struct ContentEntry entry = entry_at("site/public/index.html", "site/content/index.md");
   const struct ContentEntry* entries[] = {&entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "aggregate") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(output_path != NULL && source_path != NULL)) {
-    goto cleanup;
-  }
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 1, err,
-                                       sizeof(err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               source_path, "aggregate_templates[0]", output_path);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, entries, 1, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/content/index.md' and "
+                         "'aggregate_templates[0]': 'site/public/index.html'\n"));
 }
 
 // `manifest_builder_populate` rejects two configured templates that claim one output path. It names
@@ -539,127 +351,55 @@ cleanup:
 // about which key to edit. Both cases are asserted because a label carrying only the config key
 // would distinguish them in the second case but not the first.
 static void test_rejects_duplicate_template(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* template_output = path_join(config.output_dir, "dup.html", &arena);
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest one_list_manifest;
-  manifest_init(&one_list_manifest);
-  struct Manifest shared_manifest;
-  manifest_init(&shared_manifest);
-  char one_list_err[ERROR_MESSAGE_SIZE] = "";
-  char shared_err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(template_output != NULL)) {
-    goto cleanup;
-  }
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
 
   // First case: the same name twice inside `aggregate_templates`, so the two indexes differ.
-  static const char* const aggregates[] = {"dup.html", "dup.html"};
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 2;
-  TEST_CHECK(manifest_builder_populate(&one_list_manifest, &config, config_path, &empty, NULL, 0,
-                                       one_list_err, sizeof(one_list_err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               "aggregate_templates[0]", "aggregate_templates[1]", template_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(one_list_err, expected) == 0);
+  static const struct Str aggregates[] = {STR_INIT("dup.html"), STR_INIT("dup.html")};
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 2;
+  struct Manifest one_list_manifest = {0};
+  struct Log one_list_log = test_log();
+  TEST_CHECK(populate(&one_list_manifest, &site_config, NULL, NULL, 0, os, &one_list_log) == -1);
+  TEST_CHECK(test_log_is(&one_list_log,
+                         "duplicate output path for 'aggregate_templates[0]' and "
+                         "'aggregate_templates[1]': 'site/public/dup.html'\n"));
 
   // Second case: one name in each list, so the two keys differ.
-  static const char* const shared[] = {"dup.html"};
-  config.aggregate_templates = shared;
-  config.aggregate_template_count = 1;
-  config.feed_templates = shared;
-  config.feed_template_count = 1;
-  TEST_CHECK(manifest_builder_populate(&shared_manifest, &config, config_path, &empty, NULL, 0,
-                                       shared_err, sizeof(shared_err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "duplicate output path for '%s' and '%s': '%s'",
-               "aggregate_templates[0]", "feed_templates[0]", template_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(shared_err, expected) == 0);
-
-cleanup:
-  manifest_free(&shared_manifest);
-  manifest_free(&one_list_manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  static const struct Str shared[] = {STR_INIT("dup.html")};
+  site_config.aggregate_templates = shared;
+  site_config.aggregate_template_count = 1;
+  site_config.feed_templates = shared;
+  site_config.feed_template_count = 1;
+  struct Manifest shared_manifest = {0};
+  struct Log shared_log = test_log();
+  TEST_CHECK(populate(&shared_manifest, &site_config, NULL, NULL, 0, os, &shared_log) == -1);
+  TEST_CHECK(test_log_is(&shared_log,
+                         "duplicate output path for 'aggregate_templates[0]' and "
+                         "'feed_templates[0]': 'site/public/dup.html'\n"));
 }
 
 // `manifest_builder_populate` rejects an output path that names one of the build's own input files,
 // so a build cannot overwrite its own source. Here an entry's output is a hard link to its own
-// content source, so the two paths differ and only filesystem identity sees the collision. An
-// output inside `content_dir` fails the root check first, as `test_rejects_output_in_content_dir`
-// pins.
+// content source, so the two paths differ and only file identity sees the collision. An output
+// inside `content_dir` fails the root check first, as `test_rejects_output_in_content_dir` pins.
 static void test_rejects_input_overwrite(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* source_path = path_join(config.content_dir, "a.md", &arena);
-  char* entry_output = path_join(config.output_dir, "a.md", &arena);
-  struct ContentEntry entry = {.output_path = entry_output, .source_path = source_path};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  os_memory_link(os, "site/content/a.md", "site/public/a.md");
+  const struct ContentEntry entry = entry_at("site/public/a.md", "site/content/a.md");
   const struct ContentEntry* entries[] = {&entry};
-  struct PathList sources;
-  path_list_init(&sources);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "source") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(source_path != NULL && entry_output != NULL)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(fs_mkdir_p(config.output_dir, NULL, 0) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(link(source_path, entry_output) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(path_list_push(&sources, source_path) == 0)) {
-    goto cleanup;
-  }
+  struct Arena arena = test_arena();
+  struct PathList sources = {0};
+  path_list_push(&sources, entry.source_path, &arena);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &sources, entries, 1, err,
-                                       sizeof(err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               source_path, entry_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&sources);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, &sources, entries, 1, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path would overwrite build input for 'site/content/a.md': "
+                         "'site/public/a.md'\n"));
 }
 
 // The input check finds an aimed-at source wherever it falls among many claimed inputs, and still
@@ -668,75 +408,39 @@ cleanup:
 // output is a hard link to its source, for the reason `test_rejects_input_overwrite` gives.
 static void test_rejects_input_overwrite_among_many_inputs(void) {
   enum { SOURCE_COUNT = 32 };
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/public/existing.html", "output");
+  struct Arena arena = test_arena();
+  struct PathList sources = {0};
+  for (ptrdiff_t i = SOURCE_COUNT; i > 0; i--) {
+    char path[48];
+    (void)snprintf(path, sizeof(path), "site/content/%02td.md", i - 1);
+    os_memory_write(os, path, "source");
   }
-  char* existing_output = path_join(config.output_dir, "existing.html", &arena);
-  struct PathList sources;
-  path_list_init(&sources);
-  if (!TEST_CHECK(write_fixture_file(root_dir, "public/existing.html", "output") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(existing_output != NULL)) {
-    goto cleanup;
-  }
-  for (size_t i = SOURCE_COUNT; i > 0; i--) {
-    char relative[32];
-    (void)snprintf(relative, sizeof(relative), "content/%02zu.md", i - 1);
-    if (!TEST_CHECK(write_fixture_file(root_dir, relative, "source") == 0)) {
-      goto cleanup;
-    }
-  }
-  for (size_t i = 0; i < SOURCE_COUNT; i++) {
-    char name[16];
-    (void)snprintf(name, sizeof(name), "%02zu.md", i);
-    char* source_path = path_join(config.content_dir, name, &arena);
-    if (!TEST_CHECK(source_path != NULL && path_list_push(&sources, source_path) == 0)) {
-      goto cleanup;
-    }
+  for (ptrdiff_t i = 0; i < SOURCE_COUNT; i++) {
+    char path[48];
+    (void)snprintf(path, sizeof(path), "site/content/%02td.md", i);
+    path_list_push(&sources, str_from_cstr(path), &arena);
   }
 
-  static const size_t targets[] = {0, SOURCE_COUNT / 2, SOURCE_COUNT - 1};
-  for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++) {
-    const char* target = sources.items[targets[i]];
-    char name[16];
-    (void)snprintf(name, sizeof(name), "%02zu.html", targets[i]);
-    char* output = path_join(config.output_dir, name, &arena);
-    if (!TEST_CHECK(output != NULL && link(target, output) == 0)) {
-      goto cleanup;
-    }
+  static const ptrdiff_t targets[] = {0, SOURCE_COUNT / 2, SOURCE_COUNT - 1};
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(targets) / sizeof(targets[0])); i++) {
+    const char* target = str_cstr(sources.items[targets[i]], &arena);
+    char output[32];
+    (void)snprintf(output, sizeof(output), "site/public/%02td.html", targets[i]);
+    os_memory_link(os, target, output);
     // The existing output comes first, so a lookup that wrongly matched it would name it instead.
-    struct ContentEntry existing = {.output_path = existing_output, .source_path = "content/x.md"};
-    struct ContentEntry aimed = {.output_path = output, .source_path = target};
+    const struct ContentEntry existing = entry_at("site/public/existing.html", "content/x.md");
+    const struct ContentEntry aimed = entry_at(output, target);
     const struct ContentEntry* entries[] = {&existing, &aimed};
-    struct Manifest manifest;
-    manifest_init(&manifest);
-    char err[ERROR_MESSAGE_SIZE] = "";
+    struct Manifest manifest = {0};
+    struct Log log = test_log();
 
-    TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &sources, entries, 2, err,
-                                         sizeof(err)) == -1);
-    char expected[ERROR_MESSAGE_SIZE];
-    const int expected_len =
-        snprintf(expected, sizeof(expected),
-                 "output path would overwrite build input for '%s': '%s'", target, output);
-    if (TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-      TEST_CHECK(strcmp(err, expected) == 0);
-      TEST_MSG("target %zu: '%s'", targets[i], err);
-    }
-    manifest_free(&manifest);
+    TEST_CHECK(populate(&manifest, &site_config, &sources, entries, 2, os, &log) == -1);
+    TEST_CHECK(test_log_is(&log, "output path would overwrite build input for '%s': '%s'\n", target,
+                           output));
   }
-
-cleanup:
-  path_list_free(&sources);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
 }
 
 // The config file is an input like any other, so an output path naming it is rejected. Without this
@@ -744,42 +448,19 @@ cleanup:
 // the project root plus an aggregate template named `sosig.toml` is all it takes, and the loss is
 // unrecoverable.
 static void test_rejects_config_overwrite(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  static const char* const aggregates[] = {"sosig.toml"};
-  config.output_dir = root_dir;
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  static const struct Str aggregates[] = {STR_INIT("sosig.toml")};
+  site_config.output_dir = S("site");
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, NULL, 0, err,
-                                       sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               "aggregate_templates[0]", config_path);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path would overwrite build input for 'aggregate_templates[0]': "
+                         "'site/sosig.toml'\n"));
 }
 
 // Every file below `templates_dir` is a build input, so an output naming a configured template, an
@@ -790,444 +471,199 @@ cleanup:
 // the walk of the template tree can claim it, which is the case a claim of just the configured
 // templates would miss.
 static void test_rejects_template_overwrite(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* aggregate_path = path_join(config.templates_dir, "index.html", &arena);
-  char* override_path = path_join(config.templates_dir, "custom.html", &arena);
-  char* partial_path = path_join(config.templates_dir, "partials/card.html", &arena);
-  char* aggregate_output = path_join(config.output_dir, "index.html", &arena);
-  char* override_output = path_join(config.output_dir, "custom.html", &arena);
-  char* partial_output = path_join(config.output_dir, "card.html", &arena);
-  struct ContentEntry aggregate_entry = {.output_path = aggregate_output,
-                                         .source_path = "content/a.md"};
-  const struct ContentEntry* aggregate_entries[] = {&aggregate_entry};
-  struct ContentEntry override_entry = {
-      .output_path = override_output, .source_path = "content/b.md", .template = "custom.html"};
-  const struct ContentEntry* override_entries[] = {&override_entry};
-  struct ContentEntry partial_entry = {.output_path = partial_output,
-                                       .source_path = "content/c.md"};
-  const struct ContentEntry* partial_entries[] = {&partial_entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest aggregate_manifest;
-  manifest_init(&aggregate_manifest);
-  struct Manifest override_manifest;
-  manifest_init(&override_manifest);
-  struct Manifest partial_manifest;
-  manifest_init(&partial_manifest);
-  char aggregate_err[ERROR_MESSAGE_SIZE] = "";
-  char override_err[ERROR_MESSAGE_SIZE] = "";
-  char partial_err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/index.html", "index") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/custom.html", "custom") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/partials/card.html", "card") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(aggregate_path != NULL && override_path != NULL && partial_path != NULL &&
-                  aggregate_output != NULL && override_output != NULL && partial_output != NULL)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(fs_mkdir_p(config.output_dir, NULL, 0) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(link(aggregate_path, aggregate_output) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(link(override_path, override_output) == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(link(partial_path, partial_output) == 0)) {
-    goto cleanup;
-  }
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/templates/index.html", "index");
+  os_memory_write(os, "site/templates/custom.html", "custom");
+  os_memory_write(os, "site/templates/partials/card.html", "card");
+  os_memory_link(os, "site/templates/index.html", "site/public/index.html");
+  os_memory_link(os, "site/templates/custom.html", "site/public/custom.html");
+  os_memory_link(os, "site/templates/partials/card.html", "site/public/card.html");
 
-  // First case: an entry lands on a hard link to a template named in `aggregate_templates`.
-  static const char* const aggregates[] = {"index.html"};
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  TEST_CHECK(manifest_builder_populate(&aggregate_manifest, &config, config_path, &empty,
-                                       aggregate_entries, 1, aggregate_err,
-                                       sizeof(aggregate_err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               "content/a.md", aggregate_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(aggregate_err, expected) == 0);
+  // First case: an entry lands on a hard link to a template named in `aggregate_templates`. The
+  // aggregate's own output is that same link, so every output is checked and both are reported.
+  static const struct Str aggregates[] = {STR_INIT("index.html")};
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  const struct ContentEntry aggregate_entry = entry_at("site/public/index.html", "content/a.md");
+  const struct ContentEntry* aggregate_entries[] = {&aggregate_entry};
+  struct Manifest aggregate_manifest = {0};
+  struct Log aggregate_log = test_log();
+  TEST_CHECK(populate(&aggregate_manifest, &site_config, NULL, aggregate_entries, 1, os,
+                      &aggregate_log) == -1);
+  TEST_CHECK(test_log_is(&aggregate_log,
+                         "output path would overwrite build input for 'content/a.md': "
+                         "'site/public/index.html'\n"
+                         "output path would overwrite build input for 'aggregate_templates[0]': "
+                         "'site/public/index.html'\n"));
 
   // Second case: an entry lands on a hard link to its own `template` override, which no configured
   // list names.
-  config.aggregate_template_count = 0;
-  TEST_CHECK(manifest_builder_populate(&override_manifest, &config, config_path, &empty,
-                                       override_entries, 1, override_err,
-                                       sizeof(override_err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               "content/b.md", override_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(override_err, expected) == 0);
+  site_config.aggregate_template_count = 0;
+  struct ContentEntry override_entry = entry_at("site/public/custom.html", "content/b.md");
+  override_entry.template = S("custom.html");
+  const struct ContentEntry* override_entries[] = {&override_entry};
+  struct Manifest override_manifest = {0};
+  struct Log override_log = test_log();
+  TEST_CHECK(populate(&override_manifest, &site_config, NULL, override_entries, 1, os,
+                      &override_log) == -1);
+  TEST_CHECK(test_log_is(&override_log,
+                         "output path would overwrite build input for 'content/b.md': "
+                         "'site/public/custom.html'\n"));
 
   // Third case: an entry lands on a hard link to an unconfigured partial.
-  TEST_CHECK(manifest_builder_populate(&partial_manifest, &config, config_path, &empty,
-                                       partial_entries, 1, partial_err, sizeof(partial_err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected), "output path would overwrite build input for '%s': '%s'",
-               "content/c.md", partial_output);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(partial_err, expected) == 0);
-
-cleanup:
-  manifest_free(&partial_manifest);
-  manifest_free(&override_manifest);
-  manifest_free(&aggregate_manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  const struct ContentEntry partial_entry = entry_at("site/public/card.html", "content/c.md");
+  const struct ContentEntry* partial_entries[] = {&partial_entry};
+  struct Manifest partial_manifest = {0};
+  struct Log partial_log = test_log();
+  TEST_CHECK(
+      populate(&partial_manifest, &site_config, NULL, partial_entries, 1, os, &partial_log) == -1);
+  TEST_CHECK(test_log_is(&partial_log,
+                         "output path would overwrite build input for 'content/c.md': "
+                         "'site/public/card.html'\n"));
 }
 
 // An `output_dir` at or below an input root is rejected before anything walks or writes, whether or
 // not it exists yet, and the check creates none of it. A missing `output_dir` is judged by the
 // directory it would be created in, so a nested path, a `..` past a missing component, and a path
-// through a symlinked root all land where `fs_mkdir_p` would put them.
+// through a symlinked root all land where `os_mkdirs` would put them.
 static void test_check_output_dir_rejects_dir_in_input_root(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  if (init_manifest_fixture(root_dir, &arena, &config) == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  const char* content_link = path_join(root_dir, "content-link", &arena);
-  const char* const content_output_dirs[] = {
-      config.content_dir,
-      path_join(root_dir, "content/public", &arena),
-      path_join(root_dir, "content/new/deeper", &arena),
-      path_join(root_dir, "missing/../content/new", &arena),
-      path_join(root_dir, "content-link/new", &arena),
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/public/old.html", "old");
+  os_memory_symlink(os, "content", "site/content-link");
+  static const struct Str content_output_dirs[] = {
+      STR_INIT("site/content"),
+      STR_INIT("site/content/public"),
+      STR_INIT("site/content/new/deeper"),
+      STR_INIT("site/missing/../content/new"),
+      STR_INIT("site/content-link/new"),
   };
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/public/old.html", "old") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(content_link != NULL)) {
-    goto cleanup;
-  }
-  TEST_CHECK(symlink(config.content_dir, content_link) == 0);
-  for (size_t i = 0; i < sizeof(content_output_dirs) / sizeof(content_output_dirs[0]); i++) {
-    if (!TEST_CHECK(content_output_dirs[i] != NULL)) {
-      goto cleanup;
-    }
-    config.output_dir = content_output_dirs[i];
-    check_rejects_output_dir_in_root(&config, "content_dir");
+  for (ptrdiff_t i = 0;
+       i < (ptrdiff_t)(sizeof(content_output_dirs) / sizeof(content_output_dirs[0])); i++) {
+    site_config.output_dir = content_output_dirs[i];
+    check_rejects_output_dir_in_root(&site_config, "content_dir", os);
   }
 
-  config.output_dir = path_join(root_dir, "templates/partials", &arena);
-  if (!TEST_CHECK(config.output_dir != NULL)) {
-    goto cleanup;
-  }
-  check_rejects_output_dir_in_root(&config, "templates_dir");
-
-cleanup:
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  site_config.output_dir = S("site/templates/partials");
+  check_rejects_output_dir_in_root(&site_config, "templates_dir", os);
 }
 
 // An output that would land below `content_dir` is rejected even though no file sits at its path
 // yet, because the next build could parse it as a content source. The root is compared by identity,
-// so an alternate spelling of it, a symlink to it, a symlink inside `output_dir` that leads into
-// it, and an `output_dir` inside it are rejected the same way.
+// so an alternate spelling of it, a symlink to it, and a symlink inside `output_dir` that leads
+// into it are rejected the same way.
 static void test_rejects_output_in_content_dir(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  const char* content_dir = config.content_dir;
-  const char* content_link = path_join(root_dir, "content-link", &arena);
-  const char* output_dir = path_join(root_dir, "out", &arena);
-  const char* output_link = path_join(root_dir, "out/link", &arena);
-  struct ContentEntry entry = {.source_path = "content/a.md"};
-  const struct ContentEntry* entries[] = {&entry};
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "content/a.md", "source") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(content_link != NULL && output_dir != NULL && output_link != NULL)) {
-    goto cleanup;
-  }
-  TEST_CHECK(symlink(content_dir, content_link) == 0);
-  TEST_CHECK(fs_mkdir_p(output_dir, NULL, 0) == 0);
-  TEST_CHECK(symlink(content_dir, output_link) == 0);
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  os_memory_symlink(os, "content", "site/content-link");
+  os_memory_symlink(os, "../content", "site/out/link");
 
   // The output is a new file below the root, reached from an `output_dir` that holds the root.
-  config.output_dir = root_dir;
-  check_rejects_output_in_root(&config, config_path, path_join(root_dir, "content/b.md", &arena),
-                               "content_dir");
+  site_config.output_dir = S("site");
+  check_rejects_output_in_root(&site_config, "site/content/b.md", "content_dir", os);
 
   // The root is configured through a symlink and spelled with a `./` component.
-  config.content_dir = path_join(root_dir, "./content-link", &arena);
-  check_rejects_output_in_root(&config, config_path,
-                               path_join(root_dir, "content/sub/b.md", &arena), "content_dir");
+  site_config.content_dir = S("site/./content-link");
+  check_rejects_output_in_root(&site_config, "site/content/sub/b.md", "content_dir", os);
 
   // A symlink inside `output_dir` leads into the root.
-  config.content_dir = content_dir;
-  config.output_dir = output_dir;
-  check_rejects_output_in_root(&config, config_path, path_join(output_dir, "link/b.md", &arena),
-                               "content_dir");
-
-  // `output_dir` itself lies inside the root, and does not exist yet. Populate runs the early check
-  // itself, so a caller that skipped it is still refused, with the early check's diagnostic.
-  config.output_dir = path_join(root_dir, "content/public", &arena);
-  if (!TEST_CHECK(config.output_dir != NULL)) {
-    goto cleanup;
-  }
-  entry.output_path = path_join(config.output_dir, "a.html", &arena);
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, entries, 1, err,
-                                       sizeof(err)) == -1);
-  expected_len =
-      snprintf(expected, sizeof(expected),
-               "output directory would write inside 'content_dir': '%s'", config.output_dir);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-  TEST_MSG("actual: '%s'", err);
-  TEST_CHECK(manifest.count == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  site_config.content_dir = S("site/content");
+  site_config.output_dir = S("site/out");
+  check_rejects_output_in_root(&site_config, "site/out/link/b.md", "content_dir", os);
 }
 
 // An output that would land below `templates_dir` is rejected even though no file sits at its path
 // yet, because the same build's render could read it back as a partial. The check covers configured
 // template outputs as well as content entries.
 static void test_rejects_output_in_templates_dir(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  config.output_dir = root_dir;
-  check_rejects_output_in_root(&config, config_path,
-                               path_join(root_dir, "templates/partials/b.html", &arena),
-                               "templates_dir");
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  site_config.output_dir = S("site");
+  check_rejects_output_in_root(&site_config, "site/templates/partials/b.html", "templates_dir", os);
 
   // A configured template whose name leads into the template tree is rejected by its list entry.
-  static const char* const aggregates[] = {"templates/index.html"};
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, NULL, 0, err,
-                                       sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len = snprintf(expected, sizeof(expected),
-                                    "output path would write inside 'templates_dir' for "
-                                    "'aggregate_templates[0]': '%s/templates/index.html'",
-                                    root_dir);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-  TEST_MSG("actual: '%s'", err);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  static const struct Str aggregates[] = {STR_INIT("templates/index.html")};
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path would write inside 'templates_dir' for "
+                         "'aggregate_templates[0]': 'site/templates/index.html'\n"));
 }
 
 // A `templates_dir` that exists but cannot be walked fails the manifest rather than claiming
-// nothing, because a partial the walk could not see would stay overwritable. A regular file in
-// place of the directory is the portable way to make the walk fail. The reason names the path the
-// walk failed on, so the configured root is not repeated ahead of it.
+// nothing, because a partial the walk could not see would stay overwritable. The reason names the
+// path the walk failed on, so the configured root is not repeated ahead of it. A regular file in
+// place of the directory and a subdirectory that refuses to be listed fail the same way.
 static void test_rejects_unlistable_templates_dir(void) {
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  char* templates_dir = path_join(root_dir, "templates-file", &arena);
-  config.templates_dir = templates_dir;
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  char expected[ERROR_MESSAGE_SIZE];
-  int expected_len = 0;
-  if (!TEST_CHECK(write_fixture_file(root_dir, "templates-file", "not a directory") == 0)) {
-    goto cleanup;
-  }
-  if (!TEST_CHECK(templates_dir != NULL)) {
-    goto cleanup;
-  }
-
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, NULL, 0, err,
-                                       sizeof(err)) == -1);
-  char reason[FS_REASON_SIZE];
-  expected_len = snprintf(expected, sizeof(expected),
-                          "failed to list template files: cannot open directory: %s ('%s')",
-                          error_system_message(reason, sizeof(reason), ENOTDIR), templates_dir);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/templates-file", "not a directory");
+  site_config.templates_dir = S("site/templates-file");
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(
+      &log, "failed to list template files: cannot open directory: %s ('site/templates-file')\n",
+      strerror(ENOTDIR)));
   TEST_CHECK(manifest.count == 0);
 
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  os_memory_write(os, "site/templates/partials/card.html", "card");
+  os_memory_fail(os, OS_MEMORY_OP_LIST, "site/templates/partials", EACCES);
+  site_config.templates_dir = S("site/templates");
+  log = test_log();
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(
+      &log,
+      "failed to list template files: cannot open directory: %s ('site/templates/partials')\n",
+      strerror(EACCES)));
 }
 
-// A configured template whose output path exceeds the whole-path limit is rejected, and the
-// diagnostic still carries the limit. This branch is reachable only when the template name is
-// longer than `OUTPUT_PATH_RELATIVE_LEN_MAX`, which is larger than `ERROR_MESSAGE_SIZE`, so leading
-// with the name would make the limit clause unreachable at every triggering input. The message
-// would be 511 bytes of filename and nothing else. Asserting the head is what pins the ordering.
+// A configured template whose output path exceeds the whole-path limit is rejected with a message
+// naming the limit, the measured length, the list entry, and the whole name.
 static void test_rejects_oversize_template_path(void) {
   char name[OUTPUT_PATH_RELATIVE_LEN_MAX + 64];
   memset(name, 'a', sizeof(name) - 1);
   name[sizeof(name) - 1] = '\0';
-  const char* aggregates[] = {name};
+  const struct Str aggregates[] = {{name, (ptrdiff_t)sizeof(name) - 1}};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  site_config.aggregate_templates = aggregates;
+  site_config.aggregate_template_count = 1;
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  config.aggregate_templates = aggregates;
-  config.aggregate_template_count = 1;
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, NULL, 0, err,
-                                       sizeof(err)) == -1);
-  char expected_head[128];
-  const int expected_head_len =
-      snprintf(expected_head, sizeof(expected_head),
-               "output path exceeds max output path length (%zu bytes) at %zu bytes (for "
-               "'aggregate_templates[0]'): '",
-               (size_t)OUTPUT_PATH_RELATIVE_LEN_MAX, sizeof(name) - 1);
-  TEST_CHECK(expected_head_len > 0 && (size_t)expected_head_len < sizeof(expected_head));
-  TEST_CHECK(strncmp(err, expected_head, (size_t)expected_head_len) == 0);
-  // The head is a prefix, so on its own it says nothing about the rest of the buffer. The name is
-  // `OUTPUT_PATH_RELATIVE_LEN_MAX + 63` bytes, so the composed message cannot fit `err` and must
-  // come back truncated: asserting the exact length proves that is still true. The marker proves
-  // the cut is visible to the user. The `...` is spelled out because `TRUNCATION_MARKER` is
-  // file-local to `core/error.c`. Changing it there must update this line.
-  const size_t err_actual_len = strlen(err);
-  TEST_CHECK(err_actual_len == ERROR_MESSAGE_SIZE - 1);
-  TEST_CHECK(err_actual_len >= 3 && strcmp(err + err_actual_len - 3, "...") == 0);
-
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path for 'aggregate_templates[0]' exceeds max output path length "
+                         "(%d bytes) at %td bytes: '%.*s'\n",
+                         OUTPUT_PATH_RELATIVE_LEN_MAX, aggregates[0].len, STR_FMT(aggregates[0])));
 }
 
 // A configured template with one overlong path segment is rejected against the per-filename limit
-// rather than the whole-path one, so the two limits stay distinguishable. The whole message fits,
-// so it is asserted in full. A feed template exercises the second configured list.
+// rather than the whole-path one, so the two limits stay distinguishable. A feed template exercises
+// the second configured list.
 static void test_rejects_oversize_template_segment(void) {
   char name[FILENAME_LEN_MAX + 32];
   memset(name, 'b', sizeof(name) - 1);
   name[sizeof(name) - 1] = '\0';
-  const char* feeds[] = {name};
+  const struct Str feeds[] = {{name, (ptrdiff_t)sizeof(name) - 1}};
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  site_config.feed_templates = feeds;
+  site_config.feed_template_count = 1;
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
 
-  char root_dir[] = "/tmp/sosig-manifest-XXXXXX";
-  struct Arena arena;
-  arena_init(&arena);
-  struct SiteConfig config;
-  const char* config_path = init_manifest_fixture(root_dir, &arena, &config);
-  if (config_path == NULL) {
-    arena_free(&arena);
-    return;
-  }
-  config.feed_templates = feeds;
-  config.feed_template_count = 1;
-  struct PathList empty;
-  path_list_init(&empty);
-  struct Manifest manifest;
-  manifest_init(&manifest);
-  char err[ERROR_MESSAGE_SIZE] = "";
-
-  TEST_CHECK(manifest_builder_populate(&manifest, &config, config_path, &empty, NULL, 0, err,
-                                       sizeof(err)) == -1);
-  char expected[ERROR_MESSAGE_SIZE];
-  const int expected_len =
-      snprintf(expected, sizeof(expected),
-               "output path segment exceeds max filename length (%zu bytes) at %zu "
-               "bytes (for 'feed_templates[0]'): '%s'",
-               (size_t)FILENAME_LEN_MAX, sizeof(name) - 1, name);
-  if (!TEST_CHECK(expected_len > 0 && (size_t)expected_len < sizeof(expected))) {
-    goto cleanup;
-  }
-  TEST_CHECK(strcmp(err, expected) == 0);
-
-cleanup:
-  manifest_free(&manifest);
-  path_list_free(&empty);
-  site_config_free(&config);
-  arena_free(&arena);
-  remove_fixture_tree(root_dir);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path segment for 'feed_templates[0]' exceeds max filename length "
+                         "(%d bytes) at %zu bytes: '%s'\n",
+                         FILENAME_LEN_MAX, sizeof(name) - 1, name));
 }
 
 // The writing this module guards lives in `site_writer` and is tested in
@@ -1240,10 +676,11 @@ TEST_LIST = {
     {"accepts output beside input roots", test_accepts_output_beside_input_roots},
     {"check output dir accepts dir outside input roots",
      test_check_output_dir_accepts_dir_outside_input_roots},
-    {"derive template output joins output dir", test_derive_template_output_joins_output_dir},
     {"rejects duplicate", test_rejects_duplicate},
+    {"reports every collision", test_reports_every_collision},
     {"rejects case folded duplicate", test_rejects_case_folded_duplicate},
     {"rejects prefix collision", test_rejects_prefix_collision},
+    {"rejects every prefix collision", test_rejects_every_prefix_collision},
     {"rejects entry aggregate collision", test_rejects_entry_aggregate_collision},
     {"rejects duplicate template", test_rejects_duplicate_template},
     {"rejects input overwrite", test_rejects_input_overwrite},

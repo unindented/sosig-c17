@@ -2,7 +2,6 @@
 #define _DEFAULT_SOURCE
 
 #include <acutest.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -11,8 +10,9 @@
 
 #include "app/cli_dispatch.h"
 #include "app/exit_code.h"
-#include "core/error.h"
 #include "core/sosig_version.h"
+#include "runtime/fs.h"
+#include "shared/str.h"
 #include "test_support.h"
 
 /**
@@ -48,7 +48,7 @@ static enum ExitCode dispatch_capturing(int argc,
   struct StreamCapture stderr_capture;
   if (capture_begin(stdout, &stdout_capture) == 0) {
     if (capture_begin(stderr, &stderr_capture) == 0) {
-      rc = cli_dispatch(argc, argv);
+      rc = cli_dispatch(argc, argv, os_posix());
       has_plumbing_failed = capture_end(&stderr_capture, dispatch_out->stderr_out,
                                         sizeof(dispatch_out->stderr_out)) != 0;
     }
@@ -60,18 +60,17 @@ static enum ExitCode dispatch_capturing(int argc,
 }
 
 /**
- * @brief Creates and enters a minimal buildable site fixture.
+ * @brief Creates and enters a minimal buildable site fixture with two sources.
  *
  * Cleans partial setup before returning a failure.
  *
  * @param root_dir         Writable `mkdtemp` template. Receives the fixture root.
  * @param saved_dir_fd_out Receives the saved working directory for `leave_site_fixture`.
- * @return `root_dir` on success, or `NULL` after recording a test-plumbing failure.
+ * @return `0` on success, or `-1` after recording a test-plumbing failure.
  */
-static const char* enter_site_fixture(char root_dir[static 1], int* saved_dir_fd_out) {
-  const char* created_root_dir = init_fixture_dir(root_dir);
-  if (created_root_dir == NULL) {
-    return NULL;
+static int enter_site_fixture(char root_dir[static 1], int* saved_dir_fd_out) {
+  if (init_fixture_dir(root_dir) != 0) {
+    return -1;
   }
 
   static const char config[] =
@@ -86,16 +85,16 @@ static const char* enter_site_fixture(char root_dir[static 1], int* saved_dir_fd
       "date = 2026-07-01T00:00:00Z\n"
       "+++\n"
       "Body\n";
-  const bool written =
-      write_fixture_file(created_root_dir, "sosig.toml", config) == 0 &&
-      write_fixture_file(created_root_dir, "content/hello.md", entry) == 0 &&
-      write_fixture_file(created_root_dir, "templates/content.html", "{{{body}}}\n") == 0;
+  const bool written = write_fixture_file(root_dir, "sosig.toml", config) == 0 &&
+                       write_fixture_file(root_dir, "content/hello.md", entry) == 0 &&
+                       write_fixture_file(root_dir, "content/world.md", entry) == 0 &&
+                       write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0;
   TEST_CHECK(written);
-  if (!written || working_dir_enter(created_root_dir, saved_dir_fd_out) != 0) {
-    remove_fixture_tree(created_root_dir);
-    return NULL;
+  if (!written || working_dir_enter(root_dir, saved_dir_fd_out) != 0) {
+    remove_fixture_tree(root_dir);
+    return -1;
   }
-  return created_root_dir;
+  return 0;
 }
 
 /**
@@ -114,9 +113,9 @@ static void test_version_action_reports_ok(void) {
   char* argv[] = {"sosig", "--version", NULL};
   struct DispatchOutput dispatch_out;
   TEST_CHECK(dispatch_capturing(2, argv, &dispatch_out) == EXIT_CODE_OK);
+  const struct Str version = sosig_version_string();
   char expected[64];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "sosig %s\n", sosig_version_string());
+  const int expected_len = snprintf(expected, sizeof(expected), "sosig %.*s\n", STR_FMT(version));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(dispatch_out.stdout_out, expected) == 0);
   TEST_CHECK(dispatch_out.stderr_out[0] == '\0');
@@ -138,10 +137,9 @@ static void test_help_action_reports_ok(void) {
 // configuration lands on `stdout` and no `public/` directory appears. Dispatching it to the wrong
 // command would otherwise still exit `0` in a valid site.
 static void test_config_command_is_dispatched(void) {
-  char root_dir_template[] = "/tmp/sosig-dispatch-site.XXXXXX";
+  char root_dir[] = "/tmp/sosig-dispatch-site.XXXXXX";
   int saved_dir_fd = -1;
-  const char* root_dir = enter_site_fixture(root_dir_template, &saved_dir_fd);
-  if (root_dir == NULL) {
+  if (enter_site_fixture(root_dir, &saved_dir_fd) != 0) {
     return;
   }
 
@@ -170,32 +168,34 @@ static void test_config_command_is_dispatched(void) {
 // The `build` command is dispatched to `cmd_build_run` with the parsed options attached, so the
 // worker count and the verbose flag reach the build rather than being dropped on the way. The
 // verbose phase lines naming the requested count are the only externally visible evidence that both
-// fields were carried across.
+// fields were carried across. The test asks for one worker, so a dropped count would show the
+// detected count, on a host with more than one core. One worker also finishes the jobs in order, so
+// the progress lines can be compared.
 static void test_build_command_receives_parsed_options(void) {
-  char root_dir_template[] = "/tmp/sosig-dispatch-site.XXXXXX";
+  char root_dir[] = "/tmp/sosig-dispatch-site.XXXXXX";
   int saved_dir_fd = -1;
-  const char* root_dir = enter_site_fixture(root_dir_template, &saved_dir_fd);
-  if (root_dir == NULL) {
+  if (enter_site_fixture(root_dir, &saved_dir_fd) != 0) {
     return;
   }
 
-  char* argv[] = {"sosig", "build", "--verbose", "--workers=3", NULL};
+  char* argv[] = {"sosig", "build", "--verbose", "--workers=1", NULL};
   struct DispatchOutput dispatch_out;
   TEST_CHECK(dispatch_capturing(4, argv, &dispatch_out) == EXIT_CODE_OK);
   TEST_CHECK(dispatch_out.stdout_out[0] == '\0');
   TEST_CHECK(strcmp(dispatch_out.stderr_out,
                     "loading config\n"
                     "discovering content\n"
-                    "parsing content, workers: 3\n"
-                    "\rparsing content 1/1\n"
+                    "parsing content, workers: 1\n"
+                    "\rparsing content 1/2\rparsing content 2/2\n"
                     "collecting content entries\n"
                     "building output manifest\n"
-                    "rendering content, workers: 3\n"
-                    "\rrendering content 1/1\n"
+                    "rendering content, workers: 1\n"
+                    "\rrendering content 1/2\rrendering content 2/2\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
                     "build complete\n") == 0);
   TEST_CHECK(access("public/hello.html", F_OK) == 0);
+  TEST_CHECK(access("public/world.html", F_OK) == 0);
 
   leave_site_fixture(root_dir, saved_dir_fd);
 }
@@ -212,11 +212,11 @@ static void test_parse_error_reports_usage_code(void) {
   TEST_CHECK(dispatch_out.stdout_out[0] == '\0');
 }
 
-// A `stdout` that cannot be written turns a successful print into `EXIT_CODE_FAILURE` and names
-// both the subject and the stream's own reason. Nothing else in the suite reaches this arm. Other
-// tests make a printer fail, but none goes through `cli_dispatch`, so nothing else pins the mapping
-// from a printer's non-zero result to an exit code. A read-only descriptor is the deterministic way
-// there, since the write fails inside the printer's `fflush` rather than at the `fprintf`.
+// A `stdout` that cannot be written turns a successful print into `EXIT_CODE_FAILURE` and prints
+// nothing to `stderr`. Nothing else in the suite reaches this arm. Other tests make a printer fail,
+// but none goes through `cli_dispatch`, so nothing else pins the mapping from a printer's non-zero
+// result to an exit code. A read-only descriptor is the deterministic way there, since every write
+// to it fails with `EBADF`.
 static void test_version_write_failure_reports_failure(void) {
   char* argv[] = {"sosig", "--version", NULL};
   enum ExitCode rc = (enum ExitCode)TEST_PLUMBING_FAILED;
@@ -226,7 +226,7 @@ static void test_version_write_failure_reports_failure(void) {
   struct StreamCapture stderr_capture;
   if (capture_begin_unwritable(stdout, &stdout_capture) == 0) {
     if (capture_begin(stderr, &stderr_capture) == 0) {
-      rc = cli_dispatch(2, argv);
+      rc = cli_dispatch(2, argv, os_posix());
       has_plumbing_failed = capture_end(&stderr_capture, stderr_out, sizeof(stderr_out)) != 0;
     }
     has_plumbing_failed = capture_end(&stdout_capture, NULL, 0) != 0 || has_plumbing_failed;
@@ -234,13 +234,7 @@ static void test_version_write_failure_reports_failure(void) {
 
   TEST_CHECK(!has_plumbing_failed);
   TEST_CHECK(rc == EXIT_CODE_FAILURE);
-  char reason[ERROR_MESSAGE_SIZE];
-  char expected[ERROR_MESSAGE_SIZE * 2];
-  const int expected_len =
-      snprintf(expected, sizeof(expected), "failed to write version to 'stdout': %s\n",
-               error_system_message(reason, sizeof(reason), EBADF));
-  TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
-  TEST_CHECK(strcmp(stderr_out, expected) == 0);
+  TEST_CHECK(strcmp(stderr_out, "") == 0);
 }
 
 TEST_LIST = {

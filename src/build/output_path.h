@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+#include "shared/str.h"
+
+struct Log;
+
 /**
  * @brief Rejects a generated output path that exceeds either output-path limit.
  *
@@ -10,16 +14,14 @@
  * content entry and configured template paths share one wording. The limits themselves are applied
  * by `path_check_output_limits`.
  *
- * @param relative_path Output path relative to the output directory. Must not be `NULL`.
- * @param label         Producer the path was generated for, such as a content source or a config
- *                      key, named in the diagnostic. Must not be `NULL`.
- * @param err           Destination for a diagnostic. May be `NULL` only when `err_len` is 0.
- * @param err_len       Size of `err` in bytes.
- * @return `0` when both limits hold, or `-1` naming the limit that was exceeded.
+ * @param relative_path Output path relative to the output directory.
+ * @param source_label  Producer the path was generated for, such as a content source or a config
+ *                      list entry, named in the diagnostic.
+ * @param log           Log that receives an error naming the limit that was exceeded. Must not be
+ *                      `NULL`.
+ * @return `0` when both limits hold, or `-1` when one is exceeded.
  */
-int output_path_check_limits(const char* relative_path,
-                             const char* label,
-                             char* err,
-                             size_t err_len) __attribute__((nonnull(1, 2)));
+int output_path_check_limits(struct Str relative_path, struct Str source_label, struct Log* log)
+    __attribute__((nonnull(3)));
 
 #endif

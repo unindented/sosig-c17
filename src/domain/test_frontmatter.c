@@ -1,25 +1,65 @@
 #include <acutest.h>
-#include <stdio.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 
-#include "core/error.h"
 #include "domain/content_entry.h"
 #include "domain/frontmatter.h"
+#include "shared/arena.h"
+#include "shared/buf.h"
+#include "shared/log.h"
+#include "shared/str.h"
+#include "test_support.h"
+
+/**
+ * @brief Parses frontmatter into an entry with a fresh long-lived arena and a fresh scratch arena.
+ *
+ * Each call reserves its own two arenas, so the parsed values stay valid for the rest of the test
+ * and never overlap the scratch the parse worked in.
+ *
+ * @param entry       Initialized entry that receives the metadata. Must not be `NULL`.
+ * @param frontmatter Frontmatter TOML bytes.
+ * @param source_path Terminated source file path. Must not be `NULL`.
+ * @param log         Log that receives every error `frontmatter_parse` records. Must not be `NULL`.
+ * @return The result of `frontmatter_parse`.
+ */
+static int parse_frontmatter(struct ContentEntry* entry,
+                             struct Str frontmatter,
+                             const char* source_path,
+                             struct Log* log) {
+  struct Arena perm = test_arena();
+  return frontmatter_parse(entry, frontmatter, str_from_cstr(source_path), &perm, test_arena(),
+                           log);
+}
+
+/**
+ * @brief Reports whether a log holds exactly one error, `expected` attributed to `source_path`, and
+ *        then empties the log for the next check.
+ *
+ * @param log         Log to check and reset. Must not be `NULL`.
+ * @param expected    Terminated message without its attribution. Must not be `NULL`.
+ * @param source_path Terminated source path the message must name. Must not be `NULL`.
+ * @return `true` when the log held exactly that one error.
+ */
+static bool is_one_error_taken(struct Log* log, const char* expected, const char* source_path) {
+  const bool is_match =
+      test_log_is(log, "%s (in '%s')\n", expected, source_path) && TEST_CHECK(log->errors == 1);
+  log->buf.len = 0;
+  log->errors = 0;
+  return is_match;
+}
 
 // A CRLF document splits without an off-by-one: the frontmatter slice keeps its own trailing `\r\n`
-// and the body begins after the closing fence's line ending. Both slices are compared by their
-// paired lengths rather than as C strings, because `struct FrontmatterSplit` disclaims termination.
-// A `strcmp` stops at the enclosing buffer's own terminator and cannot see a wrong length.
+// and the body begins after the closing fence's line ending. `str_eq` compares lengths first, so a
+// slice one byte too long or too short fails.
 static void test_split_handles_crlf_and_body(void) {
   const char doc[] = "+++\r\ntitle = \"x\"\r\n+++\r\nbody\n";
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split(doc, strlen(doc), &split, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(split.frontmatter_len == strlen("title = \"x\"\r\n"));
-  TEST_CHECK(memcmp(split.frontmatter, "title = \"x\"\r\n", split.frontmatter_len) == 0);
-  TEST_CHECK(split.body_len == strlen("body\n"));
-  TEST_CHECK(memcmp(split.body, "body\n", split.body_len) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_split(str_from_cstr(doc), S("content/a.md"), &split, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(split.frontmatter, S("title = \"x\"\r\n")));
+  TEST_CHECK(str_eq(split.body, S("body\n")));
 }
 
 // `frontmatter_split` skips a leading UTF-8 BOM, so it still recognizes the fence on the same line.
@@ -29,13 +69,11 @@ static void test_split_handles_crlf_and_body(void) {
 static void test_split_skips_utf8_bom(void) {
   const char doc[] = "\xEF\xBB\xBF+++\ntitle = \"x\"\n+++\nbody\n";
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split(doc, strlen(doc), &split, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(split.frontmatter_len == strlen("title = \"x\"\n"));
-  TEST_CHECK(memcmp(split.frontmatter, "title = \"x\"\n", split.frontmatter_len) == 0);
-  TEST_CHECK(split.body_len == strlen("body\n"));
-  TEST_CHECK(memcmp(split.body, "body\n", split.body_len) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_split(str_from_cstr(doc), S("content/a.md"), &split, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(split.frontmatter, S("title = \"x\"\n")));
+  TEST_CHECK(str_eq(split.body, S("body\n")));
 }
 
 // The body slice is exactly the bytes after the closing fence's line ending, with no assumption
@@ -44,66 +82,76 @@ static void test_split_skips_utf8_bom(void) {
 static void test_split_reports_body_without_trailing_newline(void) {
   const char doc[] = "+++\ntitle = \"x\"\n+++\nbody";
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split(doc, strlen(doc), &split, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(split.body_len == strlen("body"));
-  TEST_CHECK(memcmp(split.body, "body", split.body_len) == 0);
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_split(str_from_cstr(doc), S("content/a.md"), &split, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(split.body, S("body")));
 }
 
 // A closing fence that is the file's last line with no trailing newline is still a fence. The body
-// is then empty rather than absent. This shape separates the newline strip in
-// `is_frontmatter_fence_line` from an unconditional decrement. Every other fence in this file ends
-// in a line ending, so a guard spelled `line_len > 0` alone, without the `== '\n'` test, matches
-// them all and rejects only this one. Editors that omit the final newline produce it routinely. The
-// bare-`\r` variant is the same boundary for the second strip.
+// is then empty rather than absent. Every other fence in this file ends in a line ending, so a
+// split that required the `\n` after a fence would accept them all and reject only this one.
+// Editors that omit the final newline produce it routinely. The bare-`\r` variant is the same
+// boundary for the `\r` strip.
 static void test_split_accepts_closing_fence_at_end_of_file(void) {
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE] = "";
+  struct Log log = test_log();
   const char doc[] = "+++\ntitle = \"x\"\n+++";
-  TEST_CHECK(frontmatter_split(doc, strlen(doc), &split, err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(split.frontmatter_len == strlen("title = \"x\"\n"));
-  TEST_CHECK(memcmp(split.frontmatter, "title = \"x\"\n", split.frontmatter_len) == 0);
-  TEST_CHECK(split.body_len == 0);
+  TEST_CHECK(frontmatter_split(str_from_cstr(doc), S("content/a.md"), &split, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(split.frontmatter, S("title = \"x\"\n")));
+  TEST_CHECK(split.body.len == 0);
 
   const char doc_cr[] = "+++\ntitle = \"x\"\n+++\r";
-  char err_cr[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split(doc_cr, strlen(doc_cr), &split, err_cr, sizeof(err_cr)) == 0);
-  TEST_CHECK(err_cr[0] == '\0');
-  TEST_CHECK(split.body_len == 0);
+  struct Log log_cr = test_log();
+  TEST_CHECK(frontmatter_split(str_from_cstr(doc_cr), S("content/a.md"), &split, &log_cr) == 0);
+  TEST_CHECK(test_log_is_empty(&log_cr));
+  TEST_CHECK(split.body.len == 0);
+}
+
+// A `NUL` byte in the file is ordinary to the split, which measures lines by length rather than by
+// terminator, so the bytes on both sides of it land in the slices. The file-level rejection of such
+// a byte is `os_read`'s, covered in `test_os.c`.
+static void test_split_keeps_nul_bytes(void) {
+  const struct Str doc = S("+++\ntitle = \"x\"\n+++\nbo\0dy\n");
+  struct FrontmatterSplit split;
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_split(doc, S("content/a.md"), &split, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(split.frontmatter, S("title = \"x\"\n")));
+  TEST_CHECK(str_eq(split.body, S("bo\0dy\n")));
 }
 
 // Missing opening and closing fences produce distinct diagnostics.
 static void test_split_rejects_missing_fences(void) {
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE];
+  struct Log log = test_log();
   const char missing_open[] = "title = \"x\"\n+++\nbody\n";
-  TEST_CHECK(frontmatter_split(missing_open, strlen(missing_open), &split, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "missing opening '+++' frontmatter fence") == 0);
+  TEST_CHECK(frontmatter_split(str_from_cstr(missing_open), S("content/a.md"), &split, &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "missing opening '+++' frontmatter fence", "content/a.md"));
 
   const char missing_close[] = "+++\ntitle = \"x\"\nbody\n";
-  TEST_CHECK(frontmatter_split(missing_close, strlen(missing_close), &split, err, sizeof(err)) !=
-             0);
-  TEST_CHECK(strcmp(err, "missing closing '+++' frontmatter fence") == 0);
+  TEST_CHECK(frontmatter_split(str_from_cstr(missing_close), S("content/a.md"), &split, &log) ==
+             -1);
+  TEST_CHECK(is_one_error_taken(&log, "missing closing '+++' frontmatter fence", "content/a.md"));
 }
 
 // `frontmatter_split` rejects a document with no first line as a missing opening fence rather than
-// reading past its end. Both shapes below make `line_length` return `0`, the only way
-// `is_frontmatter_fence_line` is reached with nothing to inspect. Its `line_len > 0` guards stop
-// the `line[line_len - 1]` probes from indexing at `SIZE_MAX`. `-fsanitize=address` in the debug
-// build catches a regression. A BOM-only file is the reachable second shape, because the splitter
-// consumes the BOM before it measures the line.
+// reading past its end. Both shapes below hand `is_frontmatter_fence_line` an empty line, where a
+// `\r` probe of the last byte would index before the line. `-fsanitize=address` in the debug build
+// catches a regression. A BOM-only file is the reachable second shape, because the splitter
+// consumes the BOM before it cuts the first line.
 static void test_split_rejects_document_without_a_first_line(void) {
   struct FrontmatterSplit split;
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split("", 0, &split, err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "missing opening '+++' frontmatter fence") == 0);
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_split(S(""), S("content/a.md"), &split, &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "missing opening '+++' frontmatter fence", "content/a.md"));
 
   const char bom_only[] = "\xEF\xBB\xBF";
-  char err_bom[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_split(bom_only, strlen(bom_only), &split, err_bom, sizeof(err_bom)) == -1);
-  TEST_CHECK(strcmp(err_bom, "missing opening '+++' frontmatter fence") == 0);
+  struct Log log_bom = test_log();
+  TEST_CHECK(frontmatter_split(str_from_cstr(bom_only), S("content/a.md"), &split, &log_bom) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log_bom, "missing opening '+++' frontmatter fence", "content/a.md"));
 }
 
 // Parsing fills required fields, defaults the description, derives the slug, and copies tags.
@@ -112,18 +160,16 @@ static void test_parse_fills_required_and_defaults(void) {
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "tags = [\"a\", \"b\"]\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strcmp(entry.title, "Title") == 0);
-  TEST_CHECK(strcmp(entry.description, "") == 0);
-  TEST_CHECK(strcmp(entry.slug, "title") == 0);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/title.md", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("Title")));
+  TEST_CHECK(str_eq(entry.description, S("")));
+  TEST_CHECK(str_eq(entry.slug, S("title")));
   TEST_CHECK(entry.tag_count == 2);
-  TEST_CHECK(strcmp(entry.tags[1], "b") == 0);
-  TEST_CHECK(entry.template == NULL);
-  content_entry_free(&entry);
+  TEST_CHECK(str_eq(entry.tags[1], S("b")));
+  TEST_CHECK(entry.template.len == 0);
 }
 
 // An explicit slug is normalized instead of trusted as a path.
@@ -133,34 +179,11 @@ static void test_sanitizes_explicit_slug(void) {
       "date = 2026-07-01T12:00:00Z\n"
       "description = \"Desc\"\n"
       "slug = \"../../Pwned Outside\"\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strcmp(entry.slug, "pwned-outside") == 0);
-  content_entry_free(&entry);
-}
-
-// A slug at exactly the length limit still builds.
-static void test_accepts_max_length_slug(void) {
-  char slug[SLUG_LEN_MAX + 1];
-  memset(slug, 'a', SLUG_LEN_MAX);
-  slug[SLUG_LEN_MAX] = '\0';
-  char fm[SLUG_LEN_MAX + 128];
-  const int n = snprintf(fm, sizeof(fm),
-                         "title = \"Title\"\n"
-                         "date = 2026-07-01T12:00:00Z\n"
-                         "slug = \"%s\"\n",
-                         slug);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(fm));
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strlen(entry.slug) == SLUG_LEN_MAX);
-  content_entry_free(&entry);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/title.md", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.slug, S("pwned-outside")));
 }
 
 // Optional template filename and draft metadata are parsed.
@@ -171,14 +194,12 @@ static void test_parse_fills_optional_template_and_draft(void) {
       "description = \"Desc\"\n"
       "draft = true\n"
       "template = \"article_1.html\"\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
-  TEST_CHECK(strcmp(entry.template, "article_1.html") == 0);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/title.md", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.template, S("article_1.html")));
   TEST_CHECK(entry.is_draft);
-  content_entry_free(&entry);
 }
 
 // The offset is applied before comparison: `09:00-07:00` is 16:00Z, so the entry with the earlier
@@ -192,19 +213,14 @@ static void test_date_epoch_uses_timezone(void) {
       "title = \"Earlier\"\n"
       "date = 2026-07-05T10:00:00Z\n"
       "description = \"Desc\"\n";
-  struct ContentEntry later;
-  struct ContentEntry earlier;
-  content_entry_init(&later);
-  content_entry_init(&earlier);
-  char err[ERROR_MESSAGE_SIZE] = "";
-  TEST_CHECK(frontmatter_parse(&later, fm_later, strlen(fm_later), "content/later.md", err,
-                               sizeof(err)) == 0);
-  TEST_CHECK(frontmatter_parse(&earlier, fm_earlier, strlen(fm_earlier), "content/earlier.md", err,
-                               sizeof(err)) == 0);
-  TEST_CHECK(err[0] == '\0');
+  struct ContentEntry later = {0};
+  struct ContentEntry earlier = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&later, str_from_cstr(fm_later), "content/later.md", &log) == 0);
+  TEST_CHECK(parse_frontmatter(&earlier, str_from_cstr(fm_earlier), "content/earlier.md", &log) ==
+             0);
+  TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(later.date_epoch > earlier.date_epoch);
-  content_entry_free(&later);
-  content_entry_free(&earlier);
 }
 
 // A TOML syntax error is reported at its line in the *file*, not its line in the frontmatter slice
@@ -219,27 +235,20 @@ static void test_date_epoch_uses_timezone(void) {
 // `frontmatter_parse` receives only lines 2-3, so without the synthesized leading line in
 // `frontmatter_parse_toml` the parser would call the bad value line 2 and send the reader to the
 // title.
-//
-// `frontmatter_parse_toml`'s other failure, the oversize rejection, is deliberately left uncovered:
-// reaching it needs a frontmatter slice larger than `INT_MAX - 1`, so a test would have to allocate
-// over 2 GiB.
 static void test_rejects_invalid_toml_at_file_line(void) {
   const char fm[] =
       "title = \"Title\"\n"
       "date = bad\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/bad.md", err, sizeof(err)) == -1);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/bad.md", &log) == -1);
 
   // The line number is the claim and is pinned exactly, anchored at the start so neither the prefix
   // nor the number can drift. What follows is tomlc17's own wording, which is not ours to pin. It
   // is only required to be present, so a reworded upstream message does not fail this test.
   static const char expected_head[] = "failed to parse frontmatter: (line 3) ";
-  TEST_CHECK(strncmp(err, expected_head, sizeof(expected_head) - 1) == 0);
-  TEST_CHECK(strlen(err) > sizeof(expected_head) - 1);
-
-  content_entry_free(&entry);
+  TEST_CHECK(strncmp(buf_cstr(&log.buf), expected_head, sizeof(expected_head) - 1) == 0);
+  TEST_CHECK(log.buf.len > (ptrdiff_t)sizeof(expected_head) - 1);
 }
 
 // A missing required frontmatter key is reported as absent, naming the key. The message must be
@@ -249,22 +258,21 @@ static void test_rejects_missing_required_key(void) {
   const char missing_title[] =
       "date = 2026-07-01T12:00:00Z\n"
       "description = \"Desc\"\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(frontmatter_parse(&entry, missing_title, strlen(missing_title), "content/title.md",
-                               err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "missing required frontmatter key 'title'") == 0);
-  content_entry_free(&entry);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(missing_title), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "missing required frontmatter key 'title'", "content/title.md"));
 
   // `date` is read by its own helper rather than the shared required-string path, so its absence is
   // checked separately.
   const char missing_date[] = "title = \"Title\"\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, missing_date, strlen(missing_date), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "missing required frontmatter key 'date'") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(missing_date), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "missing required frontmatter key 'date'", "content/title.md"));
 }
 
 // A key the schema does not define is rejected, naming the key, so a misspelling cannot silently
@@ -282,15 +290,12 @@ static void test_rejects_unknown_keys(void) {
        "unknown frontmatter key 'extra'"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    struct ContentEntry entry;
-    content_entry_init(&entry);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(frontmatter_parse(&entry, cases[i][0], strlen(cases[i][0]), "content/title.md", err,
-                                 sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-    TEST_MSG("case %zu: got '%s'", i, err);
-    content_entry_free(&entry);
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(cases[i][0]), "content/title.md", &log) ==
+               -1);
+    TEST_CHECK(is_one_error_taken(&log, cases[i][1], "content/title.md"));
   }
 }
 
@@ -307,15 +312,12 @@ static void test_rejects_table_values(void) {
        "frontmatter key 'draft' must be a boolean"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    struct ContentEntry entry;
-    content_entry_init(&entry);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(frontmatter_parse(&entry, cases[i][0], strlen(cases[i][0]), "content/title.md", err,
-                                 sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-    TEST_MSG("case %zu: got '%s'", i, err);
-    content_entry_free(&entry);
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(cases[i][0]), "content/title.md", &log) ==
+               -1);
+    TEST_CHECK(is_one_error_taken(&log, cases[i][1], "content/title.md"));
   }
 }
 
@@ -327,14 +329,13 @@ static void test_rejects_unsafe_template(void) {
       "date = 2026-07-01T12:00:00Z\n"
       "description = \"Desc\"\n"
       "template = \"../content-entry.html\"\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err,
-                    "frontmatter key 'template' must be a safe relative template name: "
-                    "'../content-entry.html'") == 0);
-  content_entry_free(&entry);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/title.md", &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log,
+                                "frontmatter key 'template' must be a safe relative template name: "
+                                "'../content-entry.html'",
+                                "content/title.md"));
 }
 
 // Wrong-typed metadata is rejected with the offending key named and the expected type stated. A
@@ -344,122 +345,104 @@ static void test_rejects_invalid_metadata(void) {
       "title = \"Title\"\n"
       "date = \"2030-01-02\"\n"
       "description = \"Desc\"\n";
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(frontmatter_parse(&entry, bad_date, strlen(bad_date), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'date' must be a TOML date/datetime") == 0);
-  content_entry_free(&entry);
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_date), "content/title.md", &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "frontmatter key 'date' must be a TOML date/datetime",
+                                "content/title.md"));
 
   const char bad_description[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "description = 7\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_description, strlen(bad_description), "content/title.md",
-                               err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'description' must be a string") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_description), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(is_one_error_taken(&log, "frontmatter key 'description' must be a string",
+                                "content/title.md"));
 
   // A non-array `tags` and an array holding a non-string are different failures.
   const char bad_tags_type[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "tags = \"one\"\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_tags_type, strlen(bad_tags_type), "content/title.md",
-                               err, sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'tags' must be an array") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_tags_type), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key 'tags' must be an array", "content/title.md"));
 
   const char bad_tags[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "description = \"Desc\"\n"
       "tags = [\"ok\", 3]\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_tags, strlen(bad_tags), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'tags' must contain only strings") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_tags), "content/title.md", &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "frontmatter key 'tags' must contain only strings",
+                                "content/title.md"));
 
   const char bad_title[] =
       "title = 7\n"
       "date = 2026-07-01T12:00:00Z\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_title, strlen(bad_title), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'title' must be a string") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_title), "content/title.md", &log) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key 'title' must be a string", "content/title.md"));
 
   const char bad_slug[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "slug = 7\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_slug, strlen(bad_slug), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'slug' must be a string") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_slug), "content/title.md", &log) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key 'slug' must be a string", "content/title.md"));
 
   const char bad_draft[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "draft = \"yes\"\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_draft, strlen(bad_draft), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'draft' must be a boolean") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_draft), "content/title.md", &log) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key 'draft' must be a boolean", "content/title.md"));
 
   const char bad_template[] =
       "title = \"Title\"\n"
       "date = 2026-07-01T12:00:00Z\n"
       "template = 7\n";
-  content_entry_init(&entry);
-  TEST_CHECK(frontmatter_parse(&entry, bad_template, strlen(bad_template), "content/title.md", err,
-                               sizeof(err)) == -1);
-  TEST_CHECK(strcmp(err, "frontmatter key 'template' must be a string") == 0);
-  content_entry_free(&entry);
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_template), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key 'template' must be a string", "content/title.md"));
 }
 
-// An overlong slug fails early, with a diagnostic naming the limit, the measured length, and the
-// slug itself.
-static void test_rejects_overlong_slug(void) {
-  char slug[SLUG_LEN_MAX + 2];
-  memset(slug, 'a', SLUG_LEN_MAX + 1);
-  slug[SLUG_LEN_MAX + 1] = '\0';
-  char fm[SLUG_LEN_MAX + 128];
-  int n = snprintf(fm, sizeof(fm),
-                   "title = \"Title\"\n"
-                   "date = 2026-07-01T12:00:00Z\n"
-                   "slug = \"%s\"\n",
-                   slug);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(fm));
-  struct ContentEntry entry;
-  content_entry_init(&entry);
-  char err[ERROR_MESSAGE_SIZE];
-  TEST_CHECK(frontmatter_parse(&entry, fm, strlen(fm), "content/title.md", err, sizeof(err)) == -1);
-
-  char expected[ERROR_MESSAGE_SIZE];
-  // The message names every part the limits rule asks for: the limit, the measured length, and the
-  // offending slug. The slug trails, so an arbitrarily long one truncates itself rather than the
-  // reason. The source path is deliberately absent. The wrapping caller in `entry_renderer` appends
-  // it, and naming it here too would both print it twice and push the limit clause out of the
-  // buffer for a long path.
-  n = snprintf(expected, sizeof(expected),
-               "slug exceeds max slug length (%zu bytes) at %zu bytes: '%s'", (size_t)SLUG_LEN_MAX,
-               strlen(slug), slug);
-  TEST_CHECK(n > 0 && (size_t)n < sizeof(expected));
-  TEST_CHECK(strcmp(err, expected) == 0);
-  content_entry_free(&entry);
+// Every bad key in one frontmatter is reported by the one parse, unknown keys first and then the
+// fields in schema order, so a file with several mistakes is fixed in one pass.
+static void test_parse_reports_every_bad_key(void) {
+  const char fm[] =
+      "title = 7\n"
+      "date = 2026-07-01T12:00:00Z\n"
+      "draft = \"yes\"\n"
+      "colour = \"red\"\n"
+      "tags = \"one\"\n";
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(fm), "content/title.md", &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "unknown frontmatter key 'colour' (in 'content/title.md')\n"
+                         "frontmatter key 'title' must be a string (in 'content/title.md')\n"
+                         "frontmatter key 'tags' must be an array (in 'content/title.md')\n"
+                         "frontmatter key 'draft' must be a boolean (in 'content/title.md')\n"));
+  TEST_CHECK(log.errors == 4);
 }
 
 // A TOML escape decoding to `U+0000` is rejected per key, not copied. tomlc17 accepts the escape
-// and hands back a string whose bytes carry an embedded `NUL`, which `fs_read_file`'s check cannot
-// see because the parser manufactured it. Left through, `strlen` would truncate the value at the
-// `NUL` and the entry would render with silently shortened metadata.
+// and hands back a string whose bytes carry an embedded `NUL`, which `os_read`'s check cannot see
+// because the parser manufactured it. The byte has no meaning in any format `sosig` reads or
+// writes, so the input policy refuses it here rather than passing it into a page.
 static void test_rejects_nul_in_string_values(void) {
   static const char* const cases[][2] = {
       {"title = \"a\\u0000b\"\ndate = 2026-07-01T12:00:00Z\n",
@@ -474,15 +457,37 @@ static void test_rejects_nul_in_string_values(void) {
        "frontmatter key 'template' must not contain a NUL byte"},
   };
 
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    struct ContentEntry entry;
-    content_entry_init(&entry);
-    char err[ERROR_MESSAGE_SIZE] = "";
-    TEST_CHECK(frontmatter_parse(&entry, cases[i][0], strlen(cases[i][0]), "content/title.md", err,
-                                 sizeof(err)) == -1);
-    TEST_CHECK(strcmp(err, cases[i][1]) == 0);
-    content_entry_free(&entry);
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(cases[i][0]), "content/title.md", &log) ==
+               -1);
+    TEST_CHECK(is_one_error_taken(&log, cases[i][1], "content/title.md"));
   }
+}
+
+// A quoted key holding a `NUL` decoded from an escape is rejected without its name, since the name
+// printed through `%.*s` would stop at the `NUL` and read as the known key `draft`.
+static void test_rejects_nul_in_key(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(
+                 &entry,
+                 S("title = \"Title\"\ndate = 2026-07-01T12:00:00Z\n\"draft\\u0000\" = true\n"),
+                 "content/title.md", &log) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "frontmatter key must not contain a NUL byte", "content/title.md"));
+}
+
+// A raw `NUL` byte inside the frontmatter reaches tomlc17 with the rest of the slice instead of
+// ending it early, and tomlc17 rejects it as invalid TOML, at the file line it sits on.
+static void test_parse_rejects_raw_nul_in_frontmatter(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter(&entry, S("title = \"Title\"\ndate = 2026-07-01T12:00:00Z\n\0\n"),
+                               "content/title.md", &log) == -1);
+  static const char expected_head[] = "failed to parse frontmatter: (line 4) ";
+  TEST_CHECK(strncmp(buf_cstr(&log.buf), expected_head, sizeof(expected_head) - 1) == 0);
 }
 
 TEST_LIST = {
@@ -491,12 +496,12 @@ TEST_LIST = {
     {"split reports body without trailing newline",
      test_split_reports_body_without_trailing_newline},
     {"split accepts closing fence at end of file", test_split_accepts_closing_fence_at_end_of_file},
+    {"split keeps nul bytes", test_split_keeps_nul_bytes},
     {"split rejects missing fences", test_split_rejects_missing_fences},
     {"split rejects document without a first line",
      test_split_rejects_document_without_a_first_line},
     {"parse fills required and defaults", test_parse_fills_required_and_defaults},
     {"sanitizes explicit slug", test_sanitizes_explicit_slug},
-    {"accepts max length slug", test_accepts_max_length_slug},
     {"parse fills optional template and draft", test_parse_fills_optional_template_and_draft},
     {"date epoch uses timezone", test_date_epoch_uses_timezone},
     {"rejects invalid toml at file line", test_rejects_invalid_toml_at_file_line},
@@ -505,7 +510,9 @@ TEST_LIST = {
     {"rejects table values", test_rejects_table_values},
     {"rejects unsafe template", test_rejects_unsafe_template},
     {"rejects invalid metadata", test_rejects_invalid_metadata},
-    {"rejects overlong slug", test_rejects_overlong_slug},
+    {"parse reports every bad key", test_parse_reports_every_bad_key},
     {"rejects nul in string values", test_rejects_nul_in_string_values},
+    {"rejects nul in key", test_rejects_nul_in_key},
+    {"parse rejects raw nul in frontmatter", test_parse_rejects_raw_nul_in_frontmatter},
     {NULL, NULL},
 };

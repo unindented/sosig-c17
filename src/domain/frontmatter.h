@@ -3,25 +3,22 @@
 
 #include <stddef.h>
 
+#include "shared/str.h"
+
+struct Arena;
 struct ContentEntry;
+struct Log;
 
 /**
- * Borrowed slices that split a Markdown file around its frontmatter fences. Neither slice is
- * terminated. Both point into the caller's file buffer, and the caller must read them with their
- * paired length for as long as that buffer lives.
+ * Borrowed slices that split a Markdown file around its frontmatter fences. Both point into the
+ * caller's file buffer and live as long as it does.
  */
 struct FrontmatterSplit {
   /** TOML bytes between the opening and closing fences. */
-  const char* frontmatter;
-
-  /** Length of `frontmatter` in bytes. */
-  size_t frontmatter_len;
+  struct Str frontmatter;
 
   /** Body bytes after the closing fence. */
-  const char* body;
-
-  /** Length of `body` in bytes. */
-  size_t body_len;
+  struct Str body;
 };
 
 /**
@@ -31,42 +28,40 @@ struct FrontmatterSplit {
  * endings. The returned slices borrow into `markdown`, and the function writes them only on
  * success.
  *
- * @param markdown     Full file bytes. Must hold at least `markdown_len` bytes. Must not be `NULL`.
- * @param markdown_len Number of file bytes.
- * @param split_out    Receives the frontmatter and body slices. Must not be `NULL`.
- * @param err          Buffer for a diagnostic message on failure.
- * @param err_len      Size of `err` in bytes.
- * @return `0` on success, or `-1` when a fence is missing (with a diagnostic in `err`).
+ * @param markdown    Full file bytes.
+ * @param source_path File the bytes came from, named in the error.
+ * @param split_out   Receives the frontmatter and body slices. Must not be `NULL`.
+ * @param log         Log that receives the error. Must not be `NULL`.
+ * @return `0` on success, or `-1` when a fence is missing.
  */
-int frontmatter_split(const char* markdown,
-                      size_t markdown_len,
+int frontmatter_split(struct Str markdown,
+                      struct Str source_path,
                       struct FrontmatterSplit* split_out,
-                      char* err,
-                      size_t err_len) __attribute__((nonnull(1, 3)));
+                      struct Log* log) __attribute__((nonnull(3, 4)));
 
 /**
- * @brief Parses TOML frontmatter and applies it to an initialized content entry.
+ * @brief Parses TOML frontmatter and applies it to a zeroed content entry.
  *
- * Populates required and optional metadata in the entry's arena. It rejects a key outside the
- * schema and validates value types, the slug length, and the template name.
+ * Populates required and optional metadata, copying every value it keeps into `perm`. It rejects a
+ * key outside the schema and validates value types and the template name.
  *
- * @param entry           Initialized entry that receives the parsed metadata. On failure the parse
- *                        may leave it partially populated, and the caller still owns it. Must not
- *                        be `NULL`.
- * @param frontmatter     Frontmatter TOML bytes. Must hold at least `frontmatter_len` bytes. Must
- *                        not be `NULL`.
- * @param frontmatter_len Number of frontmatter bytes.
- * @param source_path     Source file path, used for slug fallback and diagnostics. Must not be
- *                        `NULL`.
- * @param err             Buffer for a diagnostic message on failure.
- * @param err_len         Size of `err` in bytes.
- * @return `0` on success, or `-1` on a parse or validation error (with a diagnostic in `err`).
+ * @param entry       Zeroed entry that receives the parsed metadata. On failure the parse may leave
+ *                    it partially populated, and the values it already copied stay in `perm`. Must
+ *                    not be `NULL`.
+ * @param frontmatter Frontmatter TOML bytes, shorter than `INT_MAX` bytes, which the content file
+ *                    limit guarantees.
+ * @param source_path Source file path, used for slug fallback and named in every error.
+ * @param perm        Arena that owns the values copied onto the entry. Must not be `NULL`.
+ * @param scratch     Arena for the parse's temporaries.
+ * @param log         Log that receives every error. Every key is checked even after one fails, so
+ *                    all of a file's mistakes are reported at once. Must not be `NULL`.
+ * @return `0` on success, or `-1` on a parse or any validation error.
  */
 int frontmatter_parse(struct ContentEntry* entry,
-                      const char* frontmatter,
-                      size_t frontmatter_len,
-                      const char* source_path,
-                      char* err,
-                      size_t err_len) __attribute__((nonnull(1, 2, 4)));
+                      struct Str frontmatter,
+                      struct Str source_path,
+                      struct Arena* perm,
+                      struct Arena scratch,
+                      struct Log* log) __attribute__((nonnull(1, 4, 6)));
 
 #endif
