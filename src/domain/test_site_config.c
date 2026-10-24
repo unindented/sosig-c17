@@ -174,6 +174,7 @@ static void test_load_applies_required_and_defaults(void) {
   TEST_CHECK(str_eq(config.content_dir, S("content")));
   TEST_CHECK(str_eq(config.output_dir, S("public")));
   TEST_CHECK(str_eq(config.templates_dir, S("templates")));
+  TEST_CHECK(str_eq(config.static_dir, S("static")));
   TEST_CHECK(str_eq(config.content_template, S("content.html")));
   if (!TEST_CHECK(config.aggregate_template_count == 1)) {
     goto cleanup;
@@ -199,6 +200,7 @@ static void test_load_overrides_optional_keys(void) {
       "content_dir = \"posts\"\n"
       "output_dir = \"dist\"\n"
       "templates_dir = \"layouts\"\n"
+      "static_dir = \"files\"\n"
       "content_template = \"post.html\"\n"
       "aggregate_templates = [\"index.html\", \"archive.html\"]\n"
       "feed_templates = []\n"
@@ -217,6 +219,7 @@ static void test_load_overrides_optional_keys(void) {
   TEST_CHECK(str_eq(config.content_dir, S("posts")));
   TEST_CHECK(str_eq(config.output_dir, S("dist")));
   TEST_CHECK(str_eq(config.templates_dir, S("layouts")));
+  TEST_CHECK(str_eq(config.static_dir, S("files")));
   TEST_CHECK(str_eq(config.content_template, S("post.html")));
   if (!TEST_CHECK(config.aggregate_template_count == 2)) {
     goto cleanup;
@@ -241,7 +244,8 @@ static void test_load_normalizes_directory_keys(void) {
       "author = \"Example Author\"\n"
       "content_dir = \"content/\"\n"
       "output_dir = \"/srv/www///\"\n"
-      "templates_dir = \"../shared/templates/\"\n";
+      "templates_dir = \"../shared/templates/\"\n"
+      "static_dir = \"files/\"\n";
   struct TempConfig temp_config;
   if (write_temp_config(&temp_config, toml) != 0) {
     return;
@@ -255,6 +259,7 @@ static void test_load_normalizes_directory_keys(void) {
   TEST_CHECK(str_eq(config.content_dir, S("content")));
   TEST_CHECK(str_eq(config.output_dir, S("/srv/www")));
   TEST_CHECK(str_eq(config.templates_dir, S("../shared/templates")));
+  TEST_CHECK(str_eq(config.static_dir, S("files")));
 
   remove_fixture_tree(temp_config.root_dir);
 }
@@ -567,6 +572,7 @@ static void test_load_keeps_defaults_for_rejected_keys(void) {
   TEST_CHECK(config.is_content_dir_rejected);
   TEST_CHECK(!config.is_output_dir_rejected);
   TEST_CHECK(!config.is_templates_dir_rejected);
+  TEST_CHECK(!config.is_static_dir_rejected);
   TEST_CHECK(str_eq(config.permalink, S("/{section}/{slug}.html")));
   TEST_CHECK(config.feed_count == 10);
   TEST_CHECK(config.base_url.len == 0);
@@ -726,6 +732,7 @@ static void test_load_rejects_empty_directory_keys(void) {
       {"content_dir = \"\"\n", "config key 'content_dir' must not be empty"},
       {"output_dir = \"/\"\n", "config key 'output_dir' must not be empty"},
       {"templates_dir = \"///\"\n", "config key 'templates_dir' must not be empty"},
+      {"static_dir = \"\"\n", "config key 'static_dir' must not be empty"},
   };
 
   for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
@@ -973,6 +980,7 @@ static void test_print_defaults(void) {
                     "content_dir = \"content\"\n"
                     "output_dir = \"public\"\n"
                     "templates_dir = \"templates\"\n"
+                    "static_dir = \"static\"\n"
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
@@ -1001,6 +1009,7 @@ static void test_print_escapes_strings(void) {
                     "content_dir = \"content\"\n"
                     "output_dir = \"public\"\n"
                     "templates_dir = \"templates\"\n"
+                    "static_dir = \"static\"\n"
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
@@ -1024,6 +1033,7 @@ static void test_print_load_round_trips(void) {
   config.content_dir = S("posts");
   config.output_dir = S("dist");
   config.templates_dir = S("layouts");
+  config.static_dir = S("files");
   config.content_template = S("post.html");
   config.aggregate_templates = aggregates;
   config.aggregate_template_count = 2;
@@ -1051,6 +1061,7 @@ static void test_print_load_round_trips(void) {
   TEST_CHECK(str_eq(reloaded.content_dir, config.content_dir));
   TEST_CHECK(str_eq(reloaded.output_dir, config.output_dir));
   TEST_CHECK(str_eq(reloaded.templates_dir, config.templates_dir));
+  TEST_CHECK(str_eq(reloaded.static_dir, config.static_dir));
   TEST_CHECK(str_eq(reloaded.content_template, config.content_template));
   if (!TEST_CHECK(reloaded.aggregate_template_count == 2)) {
     goto cleanup;
@@ -1111,6 +1122,7 @@ static void test_print_empty_template_arrays(void) {
                     "content_dir = \"content\"\n"
                     "output_dir = \"public\"\n"
                     "templates_dir = \"templates\"\n"
+                    "static_dir = \"static\"\n"
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = []\n"
                     "feed_templates = []\n"

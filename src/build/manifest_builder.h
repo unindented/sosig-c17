@@ -14,8 +14,8 @@ struct PathList;
 struct SiteConfig;
 
 /**
- * @brief Rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not it
- *        exists yet.
+ * @brief Rejects an `output_dir` at or below `content_dir`, `templates_dir`, or `static_dir`,
+ *        whether or not it exists yet.
  *
  * A build runs this before it walks an input tree or creates anything. An `output_dir` inside a
  * root puts every output inside it, where the next build would read them back as inputs, so this
@@ -26,8 +26,8 @@ struct SiteConfig;
  * itself once it exists, so the answer does not depend on whether an earlier build created it. A
  * root that does not exist holds nothing to protect and is skipped.
  *
- * @param site_config Configuration supplying `content_dir`, `output_dir`, and `templates_dir`. Must
- *                    not be `NULL`.
+ * @param site_config Configuration supplying `content_dir`, `output_dir`, `templates_dir`, and
+ *                    `static_dir`. Must not be `NULL`.
  * @param os          Host the directories are on. Must not be `NULL`.
  * @param scratch     Arena for the ancestor paths the check builds.
  * @param log         Log that receives the error. Must not be `NULL`.
@@ -42,16 +42,17 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * @brief Records every intended output path in the build manifest, rejecting duplicates and any
  *        output that would land inside a build input tree or overwrite a build input file.
  *
- * Registers content entry and template output paths before writing any file, so it catches a
- * collision between two producers up front. It rejects four kinds of collision:
- * - an output path at or below `content_dir` or `templates_dir`
+ * Registers content entry, template, and static file output paths before writing any file, so it
+ * catches a collision between two producers up front. It rejects four kinds of collision:
+ * - an output path at or below `content_dir`, `templates_dir`, or `static_dir`
  * - an output path that names a build input
  * - two producers that claim one output path, compared after folding ASCII case
  * - an output path that is a `/`-delimited directory prefix of another output path
  *
  * The first case catches an output that would be read back as an input without overwriting one: a
- * new Markdown file below `content_dir` is parsed as a source by the next build, and a new file
- * below `templates_dir` can be read as a partial by the render of this same build. The caller has
+ * new Markdown file below `content_dir` is parsed as a source by the next build and one below
+ * `static_dir` is copied as a static file by the next build, and a new file below `templates_dir`
+ * can be read as a partial by the render of this same build. The caller has
  * already run `manifest_builder_check_output_dir`, so this compares each root by `(device, inode)`
  * against each existing directory between `output_dir` and the output. That catches a symlink
  * inside `output_dir` that leads into a root. A root that does not exist holds nothing to protect
@@ -67,21 +68,25 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * not match: `output_dir = "."` with a template named `sosig.toml` produces `./sosig.toml` against
  * the config path `sosig.toml`. Comparing `(device, inode)` also rejects a collision created by a
  * symlink, a hard link, or a case-insensitive filesystem. It claims the config, every discovered
- * source, and every file below `templates_dir`, so it still protects an input that a link places
- * outside both roots. Claiming the whole template tree covers partials even though
- * `template_render_file` resolves them lazily from names inside template bytes. The template walk
- * leaves out `output_dir`, so a generated file that a symlink inside `templates_dir` reaches is not
- * mistaken for a template. A missing `templates_dir` claims nothing, because it holds no file to
- * overwrite. A full build never gets here with one: loading the build inputs already rejects it.
+ * source and static file, and every file below `templates_dir`, so it still protects an input that
+ * a link places outside all three roots. Claiming the whole template tree covers partials even
+ * though `template_render_file` resolves them lazily from names inside template bytes. The template
+ * walk leaves out `output_dir`, so a generated file that a symlink inside `templates_dir` reaches
+ * is not mistaken for a template. A missing `templates_dir` claims nothing, because it holds no
+ * file to overwrite. A full build never gets here with one: loading the build inputs already
+ * rejects it.
  *
  * @param manifest            Manifest that receives the output paths. Must not be `NULL`.
  * @param site_config         Configuration supplying `content_dir`, `output_dir`, `templates_dir`,
- *                            and the template lists. Must not be `NULL`.
+ *                            `static_dir`, and the template lists. Must not be `NULL`.
  * @param config_path         Path the configuration itself was loaded from. Claimed as an input
  *                            like any other, so a build cannot overwrite the file that configured
  *                            it.
  * @param source_paths        Every discovered content source path, drafts included, whose files
  *                            must not be overwritten. Must not be `NULL`.
+ * @param static_paths        Every enumerated file below `static_dir`, each claimed as an input and
+ *                            registered at its path relative to `static_dir`, below `output_dir`.
+ *                            Must not be `NULL`.
  * @param content_entries     Rendered non-draft content entries whose output paths, each joined
  *                            onto `output_dir`, are recorded. May be `NULL` only when
  *                            `content_entry_count` is 0.
@@ -92,20 +97,20 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * @param scratch             Arena for the input walk and the per-output checks.
  * @param log                 Log that receives every error. Every output is checked even after one
  *                            fails, so each collision is reported in one run. Must not be `NULL`.
- * @return `0` when every output path is unique, stays out of both input trees, overwrites no input,
+ * @return `0` when every output path is unique, stays out of every input tree, overwrites no input,
  *         and nests under no other, or `-1` on an output inside an input tree, a duplicate, a
- *         prefix collision, an input overwrite, an oversize template path, or a failed template
- *         walk.
+ *         prefix collision, an input overwrite, an oversize path, or a failed template walk.
  */
 int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,
                               struct Str config_path,
                               const struct PathList* source_paths,
+                              const struct PathList* static_paths,
                               const struct ContentEntry* const* content_entries,
                               ptrdiff_t content_entry_count,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
-                              struct Log* log) __attribute__((nonnull(1, 2, 4, 7, 8, 10)));
+                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 8, 9, 11)));
 
 #endif

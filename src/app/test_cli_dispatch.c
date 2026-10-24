@@ -154,6 +154,7 @@ static void test_config_command_is_dispatched(void) {
                     "content_dir = \"content\"\n"
                     "output_dir = \"public\"\n"
                     "templates_dir = \"templates\"\n"
+                    "static_dir = \"static\"\n"
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = []\n"
                     "feed_templates = []\n"
@@ -185,6 +186,7 @@ static void test_build_command_receives_parsed_options(void) {
   TEST_CHECK(strcmp(dispatch_out.stderr_out,
                     "loading config\n"
                     "discovering content\n"
+                    "discovering static files\n"
                     "parsing content, workers: 1\n"
                     "\rparsing content 1/2\rparsing content 2/2\n"
                     "collecting content entries\n"
@@ -193,6 +195,7 @@ static void test_build_command_receives_parsed_options(void) {
                     "\rrendering content 1/2\rrendering content 2/2\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
+                    "copying static files\n"
                     "build complete\n") == 0);
   TEST_CHECK(access("public/hello.html", F_OK) == 0);
   TEST_CHECK(access("public/world.html", F_OK) == 0);

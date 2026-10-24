@@ -4,6 +4,7 @@
 
 #include "build/template.h"
 #include "core/path.h"
+#include "core/path_list.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
 #include "runtime/memory.h"
@@ -11,10 +12,10 @@
 #include "shared/arena.h"
 #include "shared/str.h"
 
-// This module's writer is unit-tested in `src/build/test_site_writer.c`, and CTest's golden test
-// suite exercises it end to end by building every fixture site and comparing each result with its
-// `tests/expected/<site>` tree. Collision checks live in `manifest_builder`, unit-tested in
-// `src/build/test_manifest_builder.c`.
+// This module's two writers are unit-tested in `src/build/test_site_writer.c`, and CTest's golden
+// test suite exercises them end to end by building every fixture site and comparing each result
+// with its `tests/expected/<site>` tree. Collision checks live in `manifest_builder`, unit-tested
+// in `src/build/test_manifest_builder.c`.
 
 /**
  * @brief Renders one configured template and writes it to its matching output path.
@@ -88,4 +89,25 @@ static int write_rendered_template(struct Str templates_dir,
   const struct Str output_path = path_join(output_dir, template_name, &scratch);
   return os_write(os, output_path, (struct OsSource){.bytes = rendered_html},
                   S("failed to write template output"), log);
+}
+
+int site_writer_copy_static_files(const struct SiteConfig* site_config,
+                                  const struct PathList* static_paths,
+                                  struct Os* os,
+                                  struct Arena scratch,
+                                  struct Log* log) {
+  for (ptrdiff_t i = 0; i < static_paths->count; i++) {
+    memory_oom_set_job(static_paths->items[i], NULL);
+    // Each copy works in its own copy of `scratch`, so one file's path is dead before the next.
+    struct Arena copy_scratch = scratch;
+    struct Str relative = {0};
+    (void)path_is_below(static_paths->items[i], site_config->static_dir, &relative);
+    const struct Str output_path = path_join(site_config->output_dir, relative, &copy_scratch);
+    // The copy names the path that failed, the static file or its destination, which mirrors it.
+    const struct OsSource source = {.kind = OS_SOURCE_FILE, .file_path = static_paths->items[i]};
+    if (os_write(os, output_path, source, S("failed to copy static file"), log) != 0) {
+      return -1;
+    }
+  }
+  return 0;
 }

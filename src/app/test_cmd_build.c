@@ -195,7 +195,7 @@ static void test_honors_configured_content_template(void) {
 }
 
 // A build writes exactly the manifest's intended outputs: content pages, aggregate and feed
-// outputs, and nothing for drafts.
+// outputs, static files, and nothing for drafts.
 static void test_writes_exactly_manifest_outputs(void) {
   // The shared config turns off aggregates and feeds, so this fixture writes its own.
   struct Os* os = os_memory();
@@ -215,17 +215,16 @@ static void test_writes_exactly_manifest_outputs(void) {
   os_memory_write(os, "templates/content.html", CONTENT_TEMPLATE);
   os_memory_write(os, "templates/index.html", "index\n");
   os_memory_write(os, "templates/feed.xml", "feed\n");
+  os_memory_write(os, "static/sosig.css", "body{}\n");
 
   struct Log log = test_log();
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   static const char* const expected[] = {
-      "public/alpha.html",
-      "public/beta.html",
-      "public/feed.xml",
-      "public/index.html",
+      "public/alpha.html", "public/beta.html", "public/feed.xml",
+      "public/index.html", "public/sosig.css",
   };
-  TEST_CHECK(is_file_list(os, "public", expected, 4));
+  TEST_CHECK(is_file_list(os, "public", expected, sizeof(expected) / sizeof(expected[0])));
 }
 
 // A trailing slash on `content_dir` does not leak the directory name into the output tree. The
@@ -240,6 +239,34 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
   TEST_CHECK(test_log_is_empty(&log));
   static const char* const expected[] = {"public/post.html"};
   TEST_CHECK(is_file_list(os, "public", expected, 1));
+}
+
+// A site that ships no `static` directory builds. `static_dir` is optional with a default, so an
+// absent one is skipped rather than reported.
+static void test_builds_with_no_static_dir(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  TEST_CHECK(!os_memory_has_path(os, "static"));
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/hello.html", HELLO_PAGE));
+}
+
+// A `static` directory is mirrored into `output_dir` as-is, so a top-level file lands at the output
+// root and a nested one keeps its directories.
+static void test_copies_static_files_when_present(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "static/robots.txt", "User-agent: *\n");
+  os_memory_write(os, "static/assets/sosig.css", "body{}\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/robots.txt", "User-agent: *\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/assets/sosig.css", "body{}\n"));
 }
 
 // A custom pretty permalink publishes `<slug>/index.html` instead of `<slug>.html`. The golden test
@@ -422,10 +449,12 @@ static void test_skips_empty_phases_in_verbose_output(void) {
   TEST_CHECK(os_memory_is_printed(os, 2,
                                   "loading config\n"
                                   "discovering content\n"
+                                  "discovering static files\n"
                                   "collecting content entries\n"
                                   "building output manifest\n"
                                   "rendering aggregate templates\n"
                                   "rendering feed templates\n"
+                                  "copying static files\n"
                                   "build complete\n"));
 }
 
@@ -544,6 +573,18 @@ static void test_reports_a_rejected_directory_key_once(void) {
   TEST_CASE_(NULL);
 }
 
+// A rejected `static_dir` is reported once too, even when its default names something that would
+// fail on its own: here a regular file, which the static walk would report as not a directory.
+static void test_reports_a_rejected_static_dir_once(void) {
+  struct Os* os = site_fixture("static_dir = \"\"\n");
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "static", "not a directory\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is_one(&log, "config key 'static_dir' must not be empty"));
+}
+
 // A `templates_dir` that exists but is a regular file is reported as the wrong type, which is its
 // own cause rather than an `errno`, so the message carries no system text.
 static void test_reports_templates_dir_that_is_a_file(void) {
@@ -626,6 +667,22 @@ static void test_rejects_colliding_source_names(void) {
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'content/cafc3a9.md' and "
                          "'content/caf\xC3\xA9.md': 'public/cafc3a9.html'\n"));
+  TEST_CHECK(!os_memory_has_path(os, "public"));
+}
+
+// A static file copied to the output root shares its paths with the generated pages, so one named
+// after a content page is rejected as a duplicate of it rather than overwriting it or being
+// overwritten. The refused build creates no `output_dir`.
+static void test_rejects_static_file_colliding_with_content_page(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "static/hello.html", "static\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'content/hello.md' and "
+                         "'static/hello.html': 'public/hello.html'\n"));
   TEST_CHECK(!os_memory_has_path(os, "public"));
 }
 
@@ -816,9 +873,10 @@ static void test_rejects_duplicate_output(void) {
 }
 
 // Several independent mistakes in one site are all reported by one build, and the build writes
-// nothing: an unknown config key, two sources whose frontmatter fails in different ways, and two
-// sources that claim one output path. Each kind comes from a different phase, so the order is the
-// phase order, and within a phase it is the sorted walk order the slots follow.
+// nothing: an unknown config key, two sources whose frontmatter fails in different ways, two
+// sources that claim one output path, and a static file that claims a content page. Each kind comes
+// from a different phase, so the order is the phase order, and within a phase it is the sorted walk
+// order the slots follow.
 static void test_reports_every_independent_error(void) {
   const char same_slug[] =
       "+++\n"
@@ -834,6 +892,7 @@ static void test_reports_every_independent_error(void) {
   os_memory_write(os, "content/d.md",
                   "+++\ntitle = \"Draft\"\ndate = 2026-07-01T00:00:00Z\ndraft = \"yes\"\n+++\n"
                   "Body\n");
+  os_memory_write(os, "static/same.html", "static\n");
 
   struct Log log = test_log();
   TEST_CHECK(execute_build(os, &log) == -1);
@@ -842,15 +901,48 @@ static void test_reports_every_independent_error(void) {
                          "missing closing '+++' frontmatter fence (in 'content/c.md')\n"
                          "frontmatter key 'draft' must be a boolean (in 'content/d.md')\n"
                          "duplicate output path for 'content/a.md' and 'content/b.md': "
+                         "'public/same.html'\n"
+                         "duplicate output path for 'content/a.md' and 'static/same.html': "
                          "'public/same.html'\n"));
-  TEST_CHECK(log.errors == 4);
+  TEST_CHECK(log.errors == 5);
   TEST_CHECK(!os_memory_has_path(os, "public"));
+}
+
+// A `static_dir` that exists but is a regular file is reported. Skipping an absent optional root
+// must not also skip a misconfigured one, which is why the skip asks whether anything is there
+// rather than whether a directory is there: the wrong type survives the skip and reaches the type
+// check, which names it.
+static void test_reports_static_dir_that_is_a_file(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "static", "not a directory\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "failed to resolve config directory 'static_dir': not a directory "
+                         "('static')\n"));
+}
+
+// A `static_dir` that cannot be inspected is reported with its cause rather than skipped as absent,
+// because it may well be there. A symlink that resolves to itself stands in for any such cause.
+static void test_reports_static_dir_that_cannot_be_inspected(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_symlink(os, "static", "static");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "failed to resolve config directory 'static_dir': %s ('static')\n",
+                         strerror(ELOOP)));
 }
 
 TEST_LIST = {
     {"honors configured content template", test_honors_configured_content_template},
     {"writes exactly manifest outputs", test_writes_exactly_manifest_outputs},
     {"tolerates trailing slash on content_dir", test_tolerates_trailing_slash_on_content_dir},
+    {"builds with no static dir", test_builds_with_no_static_dir},
+    {"copies static files when present", test_copies_static_files_when_present},
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
@@ -869,11 +961,14 @@ TEST_LIST = {
     {"reports absent content dir", test_reports_absent_content_dir},
     {"reports absent templates dir", test_reports_absent_templates_dir},
     {"reports a rejected directory key once", test_reports_a_rejected_directory_key_once},
+    {"reports a rejected static dir once", test_reports_a_rejected_static_dir_once},
     {"reports templates dir that is a file", test_reports_templates_dir_that_is_a_file},
     {"reports unusable output dir", test_reports_unusable_output_dir},
     {"reports dangling output dir symlink", test_reports_dangling_output_dir_symlink},
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
     {"rejects colliding source names", test_rejects_colliding_source_names},
+    {"rejects static file colliding with content page",
+     test_rejects_static_file_colliding_with_content_page},
     {"reports bad template", test_reports_bad_template},
     {"reports a shared render failure once", test_reports_a_shared_render_failure_once},
     {"reports unwritable output", test_reports_unwritable_output},
@@ -883,5 +978,8 @@ TEST_LIST = {
     {"rejects oversize source at read", test_rejects_oversize_source_at_read},
     {"rejects duplicate output", test_rejects_duplicate_output},
     {"reports every independent error", test_reports_every_independent_error},
+    {"reports static dir that is a file", test_reports_static_dir_that_is_a_file},
+    {"reports static dir that cannot be inspected",
+     test_reports_static_dir_that_cannot_be_inspected},
     {NULL, NULL},
 };

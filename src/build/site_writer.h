@@ -9,6 +9,7 @@
 struct ContentEntry;
 struct Log;
 struct Os;
+struct PathList;
 struct SiteConfig;
 
 // The manifest phase in `manifest_builder` claims every intended output path before this module
@@ -52,5 +53,26 @@ int site_writer_write_templates(const struct SiteConfig* site_config,
                                 struct Arena output,
                                 struct Arena scratch,
                                 struct Log* log) __attribute__((nonnull(1, 7, 10)));
+
+/**
+ * @brief Copies every enumerated static file below `output_dir`.
+ *
+ * Each static file keeps its path relative to `static_dir` below `output_dir`, the path
+ * `manifest_builder_populate` registered.
+ *
+ * @param site_config  Configuration supplying `output_dir` and `static_dir`. Must not be `NULL`.
+ * @param static_paths Every enumerated file below `static_dir`, each already accepted by
+ *                     `manifest_builder_populate`. Must not be `NULL`.
+ * @param os           Host the static files are read from and copied to. Must not be `NULL`.
+ * @param scratch      Arena for each output path.
+ * @param log          Log that receives the first failure, which names the path that could not be
+ *                     read or written. Must not be `NULL`.
+ * @return `0` on success, or `-1` on the first copy failure.
+ */
+int site_writer_copy_static_files(const struct SiteConfig* site_config,
+                                  const struct PathList* static_paths,
+                                  struct Os* os,
+                                  struct Arena scratch,
+                                  struct Log* log) __attribute__((nonnull(1, 2, 3, 5)));
 
 #endif

@@ -58,13 +58,16 @@ _Static_assert(PTRDIFF_MAX > 0xffffffff, "the arenas below need a 64-bit address
 /** Most workers the build starts for each online CPU, however many are requested. */
 enum { BUILD_WORKER_PER_CPU_MAX = 4 };
 
-/** One configured directory the build reads, which must be a usable directory. */
+/** One configured directory the build reads, which must be a usable directory when present. */
 struct ReadRoot {
   /** Configured path, already slash-trimmed by the config load. */
   struct Str path;
 
   /** Config key naming `path`, used by every diagnostic so the user knows what to edit. */
   const char* key;
+
+  /** Whether a site may legitimately not have this directory. */
+  bool is_optional;
 
   /** Whether the config load rejected `key`, so `path` is its default and is not checked. */
   bool is_rejected;
@@ -97,8 +100,8 @@ struct BuildState {
   struct Os* os;
 
   /**
-   * The main thread's perm, the caller's. It receives the configuration, the source paths, the
-   * entry arrays and the manifest.
+   * The main thread's perm, the caller's. It receives the configuration, the source and static file
+   * paths, the entry arrays and the manifest.
    */
   struct Arena perm;
 
@@ -122,6 +125,9 @@ struct BuildState {
    * them.
    */
   struct PathList source_paths;
+
+  /** Discovered static file paths below `static_dir`, left empty when that directory is absent. */
+  struct PathList static_paths;
 
   /** Intended output paths for this build, populated before any file is written. */
   struct Manifest manifest;
@@ -196,18 +202,18 @@ static void build_state_init(struct BuildState* state,
 
 /**
  * @brief Loads `sosig.toml`, rejects an `output_dir` inside an input tree, and discovers content
- *        entry sources.
+ *        entry sources and static files.
  *
- * The `output_dir` check runs before the content walk, and the walk leaves `output_dir` out, so a
- * file an earlier build generated is never read back as a source.
+ * The `output_dir` check runs before either walk, and both walks leave `output_dir` out, so a file
+ * an earlier build generated is never read back as a source or copied as a static file.
  *
  * A config that was read and parsed but holds a bad key has logged it and kept that key's default,
  * so the checks after it still run against it. A rejected directory, permalink or template list key
  * is the exception: its default is a directory or an output the user never chose, so nothing checks
  * or walks it, and the load stops once it has checked the other read roots.
  *
- * @param state Build state that receives the configuration and content entry source paths. Must not
- *              be `NULL`.
+ * @param state Build state that receives the configuration, content entry source paths, and static
+ *              file paths. Must not be `NULL`.
  * @param log   Log that receives every error. Must not be `NULL`.
  * @return `0` when there are sources to check, or `-1` on a configuration that cannot be read, a
  *         rejected directory, permalink or template list key, a directory, output directory, or
@@ -217,16 +223,28 @@ static int load_build_inputs(struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
 
 /**
+ * @brief Lists the static files below `static_dir`, which a site may leave out.
+ *
+ * @param state Build state that receives the static file paths. Must not be `NULL`.
+ * @param log   Log that receives the failure, which names the path the walk failed on. Must not be
+ *              `NULL`.
+ * @return `0` when `static_dir` is absent or was listed, or `-1` on a directory or entry failure.
+ */
+static int load_build_inputs_static(struct BuildState* state, struct Log* log)
+    __attribute__((nonnull(1, 2)));
+
+/**
  * @brief Requires every configured read root to be a usable directory.
  *
- * Walks the `ReadRoot` spec table, so each diagnostic names the config key the user has to edit. A
- * root that cannot be resolved is reported with its cause, and every root is checked except one
- * whose key the config load rejected, which it has reported already.
+ * Walks the `ReadRoot` spec table, so each diagnostic names the config key the user has to edit. An
+ * optional root that is not there is skipped, and any other root that cannot be resolved is
+ * reported with its cause, and every root is checked except one whose key the config load rejected,
+ * which it has reported already.
  *
  * @param state Build state supplying the configured read roots. Must not be `NULL`.
  * @param log   Log that receives every error. Must not be `NULL`.
- * @return `0` when every root is a usable directory, or `-1` when one cannot be resolved or is not
- *         a directory.
+ * @return `0` when every present root is a usable directory, or `-1` when one cannot be resolved or
+ *         is not a directory.
  */
 static int load_build_inputs_require_read_roots(const struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
@@ -318,9 +336,11 @@ static int render_content_pages(struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Renders and writes the configured aggregate and feed templates.
+ * @brief Renders and writes the configured aggregate and feed templates, and copies the static
+ *        files.
  *
- * @param state Build state holding the collected entries. Must not be `NULL`.
+ * @param state Build state holding the collected entries and the static file paths. Must not be
+ *              `NULL`.
  * @param log   Log that receives the failure. Must not be `NULL`.
  * @return `0` when every output was written, or `-1` on the first render or write failure.
  */
@@ -445,12 +465,13 @@ static int load_build_inputs(struct BuildState* state, struct Log* log) {
     return -1;
   }
   // A rejected directory, permalink or template list key holds a default the user never chose, so
-  // the build stops before the checks and the walk that would report that default as a second
+  // the build stops before the checks and the walks that would report that default as a second
   // error, such as a collision with an output the user's own config does not name.
   const struct SiteConfig* site_config = &state->site_config;
   if (load_build_inputs_require_read_roots(state, log) != 0 ||
       site_config->is_content_dir_rejected || site_config->is_output_dir_rejected ||
-      site_config->is_templates_dir_rejected || site_config->is_output_key_rejected) {
+      site_config->is_templates_dir_rejected || site_config->is_static_dir_rejected ||
+      site_config->is_output_key_rejected) {
     return -1;
   }
   if (manifest_builder_check_output_dir(&state->site_config, state->os, state->scratch, log) != 0) {
@@ -461,29 +482,66 @@ static int load_build_inputs(struct BuildState* state, struct Log* log) {
   static const struct Str content_suffixes[] = {STR_INIT(".md")};
   // A failure names the directory or entry that failed, which is more precise than the configured
   // root, so the root is not repeated.
-  return walk_files_with_suffixes(
-      &state->source_paths, state->site_config.content_dir, state->site_config.output_dir,
-      content_suffixes, sizeof(content_suffixes) / sizeof(content_suffixes[0]), false, state->os,
-      &state->perm, state->scratch, S("failed to list Markdown files"), log);
+  if (walk_files_with_suffixes(
+          &state->source_paths, state->site_config.content_dir, state->site_config.output_dir,
+          content_suffixes, sizeof(content_suffixes) / sizeof(content_suffixes[0]), false,
+          state->os, &state->perm, state->scratch, S("failed to list Markdown files"), log) != 0) {
+    return -1;
+  }
+  build_verbose(state, "discovering static files");
+  return load_build_inputs_static(state, log);
+}
+
+static int load_build_inputs_static(struct BuildState* state, struct Log* log) {
+  // An absent `static_dir` leaves `static_paths` empty rather than failing the build. A site that
+  // ships no stylesheet is a supported configuration, and the walk stats its root before
+  // descending, so calling it here would turn "no static files" into a failed build.
+  // `load_build_inputs_require_read_roots` skips the same directory on the same condition. A
+  // failure names the directory or entry that failed, which is more precise than the configured
+  // root, so the root is not repeated.
+  struct OsStat st;
+  if (os_stat(state->os, state->site_config.static_dir, &st) != 0 && errno == ENOENT) {
+    return 0;
+  }
+  static const struct Str static_suffixes[] = {STR_INIT("")};
+  return walk_files_with_suffixes(&state->static_paths, state->site_config.static_dir,
+                                  state->site_config.output_dir, static_suffixes, 1, false,
+                                  state->os, &state->perm, state->scratch,
+                                  S("failed to list static files"), log);
 }
 
 static int load_build_inputs_require_read_roots(const struct BuildState* state, struct Log* log) {
   const struct ReadRoot roots[] = {
-      {state->site_config.content_dir, "content_dir", state->site_config.is_content_dir_rejected},
-      {state->site_config.templates_dir, "templates_dir",
+      {state->site_config.content_dir, "content_dir", false,
+       state->site_config.is_content_dir_rejected},
+      {state->site_config.templates_dir, "templates_dir", false,
        state->site_config.is_templates_dir_rejected},
+      {state->site_config.static_dir, "static_dir", true,
+       state->site_config.is_static_dir_rejected},
   };
   int rc = 0;
   for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(roots) / sizeof(roots[0])); i++) {
+    // A root whose key the config load rejected holds its default, and the load has reported it.
+    // Any other root gets two questions in order, because the second presupposes the first answer.
+    //
+    // Is it there at all? Only an optional root may answer no, and for that root absence is the
+    // expected case rather than a failure, so it is skipped without a message. Only `ENOENT`
+    // answers no. A root that cannot be inspected, such as one below a directory the user may not
+    // search, may well be there, so it is reported like any other.
+    //
+    // Is it usable? The message carries the cause. `ENOENT` and `EACCES` call for different fixes,
+    // and nothing after this point would report either, because the build stops once a root is
+    // unusable. The cause carries no verb of its own, so the operation names what was being
+    // resolved, as in
+    // `failed to resolve config directory 'content_dir': No such file or directory ('content')`.
     if (roots[i].is_rejected) {
       continue;
     }
-    // The message carries the cause. `ENOENT` and `EACCES` call for different fixes, and nothing
-    // after this point would report either, because the build stops once a root is unusable. The
-    // cause carries no verb of its own, so the operation names what was being resolved, as in
-    // `failed to resolve config directory 'content_dir': No such file or directory ('content')`.
     struct OsStat st;
     if (os_stat(state->os, roots[i].path, &st) != 0) {
+      if (roots[i].is_optional && errno == ENOENT) {
+        continue;
+      }
       char message[ERROR_SYSTEM_MESSAGE_SIZE];
       rc = log_error(log, "failed to resolve config directory '%s': %s ('%.*s')", roots[i].key,
                      error_system_message(message, sizeof(message), errno), STR_FMT(roots[i].path));
@@ -575,8 +633,8 @@ static int populate_output_manifest(struct BuildState* state, struct Log* log) {
   // one of this build's own inputs is refused before it can destroy the file.
   return manifest_builder_populate(
       &state->manifest, &state->site_config, SITE_CONFIG_PATH_DEFAULT, &state->source_paths,
-      (const struct ContentEntry* const*)state->content_entries, state->content_entry_count,
-      state->os, &state->perm, state->scratch, log);
+      &state->static_paths, (const struct ContentEntry* const*)state->content_entries,
+      state->content_entry_count, state->os, &state->perm, state->scratch, log);
 }
 
 static int prepare_output_dir(const struct BuildState* state, struct Log* log) {
@@ -613,9 +671,15 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
   const ptrdiff_t feed_entry_count = state->content_entry_count < site_config->feed_count
                                          ? state->content_entry_count
                                          : site_config->feed_count;
-  return site_writer_write_templates(
-      site_config, site_config->feed_templates, site_config->feed_template_count, entries,
-      feed_entry_count, state->site_updated, state->os, state->perm, state->scratch, log);
+  if (site_writer_write_templates(site_config, site_config->feed_templates,
+                                  site_config->feed_template_count, entries, feed_entry_count,
+                                  state->site_updated, state->os, state->perm, state->scratch,
+                                  log) != 0) {
+    return -1;
+  }
+  build_verbose(state, "copying static files");
+  return site_writer_copy_static_files(site_config, &state->static_paths, state->os, state->scratch,
+                                       log);
 }
 
 // A status line runs on the main thread between phases, so it does not need the lock that

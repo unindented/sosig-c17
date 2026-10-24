@@ -57,6 +57,7 @@ const struct Str SITE_CONFIG_PATH_DEFAULT = STR_INIT("sosig.toml");
 #define CONTENT_DIR_DEFAULT S("content")
 #define OUTPUT_DIR_DEFAULT S("public")
 #define TEMPLATES_DIR_DEFAULT S("templates")
+#define STATIC_DIR_DEFAULT S("static")
 #define CONTENT_TEMPLATE_DEFAULT S("content.html")
 static const struct Str AGGREGATE_TEMPLATES_DEFAULT[] = {STR_INIT("index.html")};
 static const struct Str FEED_TEMPLATES_DEFAULT[] = {STR_INIT("atom.xml")};
@@ -75,6 +76,7 @@ static const struct Str config_keys[] = {
     STR_INIT("content_dir"),
     STR_INIT("output_dir"),
     STR_INIT("templates_dir"),
+    STR_INIT("static_dir"),
     STR_INIT("content_template"),
     STR_INIT("aggregate_templates"),
     STR_INIT("feed_templates"),
@@ -379,6 +381,7 @@ void site_config_init(struct SiteConfig* site_config) {
       .content_dir = CONTENT_DIR_DEFAULT,
       .output_dir = OUTPUT_DIR_DEFAULT,
       .templates_dir = TEMPLATES_DIR_DEFAULT,
+      .static_dir = STATIC_DIR_DEFAULT,
       .content_template = CONTENT_TEMPLATE_DEFAULT,
       .aggregate_templates = AGGREGATE_TEMPLATES_DEFAULT,
       .aggregate_template_count =
@@ -419,6 +422,7 @@ int site_config_print(const struct SiteConfig* site_config, struct Os* os, struc
   site_config_print_key_string(&text, "content_dir", site_config->content_dir);
   site_config_print_key_string(&text, "output_dir", site_config->output_dir);
   site_config_print_key_string(&text, "templates_dir", site_config->templates_dir);
+  site_config_print_key_string(&text, "static_dir", site_config->static_dir);
   site_config_print_key_string(&text, "content_template", site_config->content_template);
   site_config_print_string_array(&text, "aggregate_templates", site_config->aggregate_templates,
                                  site_config->aggregate_template_count);
@@ -480,6 +484,8 @@ static void site_config_load_fields(struct SiteConfig* site_config,
       copy_dir(table, "output_dir", OUTPUT_DIR_DEFAULT, perm, &site_config->output_dir, log) != 0;
   site_config->is_templates_dir_rejected = copy_dir(table, "templates_dir", TEMPLATES_DIR_DEFAULT,
                                                     perm, &site_config->templates_dir, log) != 0;
+  site_config->is_static_dir_rejected =
+      copy_dir(table, "static_dir", STATIC_DIR_DEFAULT, perm, &site_config->static_dir, log) != 0;
   if (!path_is_safe_relative(site_config->content_template)) {
     (void)log_error(log,
                     "config key 'content_template' must be a safe relative template name: '%.*s'",

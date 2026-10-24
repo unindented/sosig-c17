@@ -36,6 +36,10 @@ Run the tool from a location with these contents:
 content/
   post-1.md
   post-2.md
+static/
+  robots.txt
+  assets/
+    site.css
 templates/
   partials/
     header.html
@@ -48,26 +52,28 @@ sosig.toml
 
 `sosig.toml` must contain the required metadata fields. The example below also shows the default values for optional fields. It lists every key the file can contain. The tool rejects any other key, so a misspelled key such as `ouput_dir` fails the load instead of leaving the default in place.
 
-The tool removes trailing `/` characters from `content_dir`, `output_dir`, and `templates_dir`. These fields must not be empty. Each field can contain an absolute or parent-relative path.
+The tool removes trailing `/` characters from `content_dir`, `output_dir`, `templates_dir`, and `static_dir`. These fields must not be empty. Each field can contain an absolute or parent-relative path.
 
 The build searches all directories under `content_dir` for regular files that end in `.md`. It creates `output_dir` and all required output subdirectories. It overwrites each output file that the current build generates.
 
-The search follows symlinked directories but reads each directory only once. A directory that more than one path reaches publishes its entries once, not once per path. For example, with `blog` a symlink to `posts`, the entries publish only under `posts`. The build prefers the path that uses no symlink. For a directory that only symlinks reach, it uses the first such path in byte order. A symlink back into its own parent directories is skipped.
+The searches of `content_dir` and `static_dir` follow symlinked directories but read each directory only once. A directory that more than one path reaches publishes its files once, not once per path. For example, with `blog` a symlink to `posts`, the entries publish only under `posts`. The build prefers the path that uses no symlink. For a directory that only symlinks reach, it uses the first such path in byte order. A symlink back into its own parent directories is skipped.
 
-The content and template directories must exist.
+The content and template directories must exist. The static directory is optional: a site that ships none builds without it.
+
+The build copies every file below `static_dir` into `output_dir` as-is, keeping its path relative to `static_dir`. A top-level file such as `static/robots.txt` lands at `output_dir/robots.txt`, and `static/assets/site.css` lands at `output_dir/assets/site.css`. A static file that names the same output path as a content page, aggregate, or feed output is rejected as a conflict, not overwritten.
 
 The build rejects an input file that is too large before it reads the file: a content file over 256 MiB, a config file over 1 MiB, or a template or partial over 4 MiB. The error message gives the limit and the file size.
 
 The build reserves its memory once, when it starts, in fixed sizes that these limits bound. Reserved memory that the build does not use costs address space but no memory. Under an address-space limit (`ulimit -v`) that refuses the reservation, the build first halves its worker count, down to one, and then halves the reservation until it fits, up to six times, and once more to leave room for the memory it does not reserve, and then holds correspondingly less. So the limit a build needs does not grow with `-w`: it needs about 280 MB (`ulimit -v 270000`), and under less it stops at startup with `sosig: out of memory`. A limit that leaves less room beside a reservation that fits than the worker threads' stacks need, about 24 MB at two workers, makes the build fail with `cannot start worker thread`. A build that needs more than it reserved, such as a template whose nested sections expand without bound, prints the errors the command and the failing job logged so far and `sosig: out of memory (in '<file>')`, and exits with status 1. Each worker keeps the errors it reports in at least 256 MiB, so a worker that reports about a million one-line errors, or about 290 files that each hold about 16,000 unknown keys, can also end the build in that report.
 
-Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir` or `templates_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.
+Before the tool searches `content_dir`, it rejects an `output_dir` at or below `content_dir`, `templates_dir`, or `static_dir`, whether or not `output_dir` exists yet. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it. An `output_dir` that holds the input directories, such as `output_dir = "."`, is allowed. Every search of an input directory skips `output_dir`, so a symlink that leads into it cannot feed generated files back in as inputs.
 
 Before the tool renders page templates or writes output files, it rejects an output plan with one of these conflicts:
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
-- An output is at or below `content_dir` or `templates_dir`, even if no file exists at that path yet, such as through a symlink inside `output_dir`. Otherwise the next build would read a generated `.md` file as a content source, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
-- An output overwrites the config, a content source, or any file below `templates_dir`, including partials.
+- An output is at or below `content_dir`, `templates_dir`, or `static_dir`, even if no file exists at that path yet, such as through a symlink inside `output_dir`. Otherwise the next build would read a generated `.md` file as a content source or copy a generated file as a static file, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
+- An output overwrites the config, a content source, a static file, or any file below `templates_dir`, including partials.
 
 The build creates `output_dir` only after these checks pass, so a rejected build creates nothing. The build does not remove stale files from an earlier build. If rendering or writing fails partway, some outputs can be new while others remain unchanged.
 
@@ -97,6 +103,9 @@ output_dir = "public"
 
 # Directory containing templates and partials.
 templates_dir = "templates"
+
+# Directory containing files copied recursively into `output_dir` as-is.
+static_dir = "static"
 
 # Template used for content entries unless a frontmatter template overrides it.
 content_template = "content.html"
@@ -201,7 +210,7 @@ A partial reference loads `templates_dir/partials/<name>.html`. The name can con
 {{> footer}}
 ```
 
-The repository and release archives do not include starter templates. A site project must provide its own.
+The repository and release archives do not include starter templates or static files. A site project must provide its own.
 
 ## Contributing
 

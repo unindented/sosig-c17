@@ -27,9 +27,9 @@
  * byte-equal. A `(device, inode)` comparison also detects cases that text cannot. These include
  * symlinks, hard links, and case-insensitive path aliases.
  *
- * The input roots reject any output below `content_dir` or `templates_dir` first, so this set is
- * what still protects an input outside both trees: the configuration file, and the target of a
- * source or template that is a symlink or hard link to a file elsewhere.
+ * The input roots reject any output below `content_dir`, `templates_dir`, or `static_dir` first, so
+ * this set is what still protects an input outside all three trees: the configuration file, and the
+ * target of a source, template, or static file that is a symlink or hard link to a file elsewhere.
  *
  * The identities are sorted once after they are all claimed, and each lookup is a binary search. A
  * rebuild looks up every output that already exists, which is every output of a site built before.
@@ -50,8 +50,11 @@ struct InputIdentities {
   ptrdiff_t count;
 };
 
-/** Number of input directory trees no output may enter: `content_dir` and `templates_dir`. */
-enum { INPUT_ROOT_COUNT = 2 };
+/**
+ * Number of input directory trees no output may enter: `content_dir`, `templates_dir`, and
+ * `static_dir`.
+ */
+enum { INPUT_ROOT_COUNT = 3 };
 
 /** One input directory tree that no output may land inside. */
 struct InputRoot {
@@ -70,9 +73,10 @@ struct InputRoot {
  * registered.
  *
  * Protecting the files that already exist is not enough. A new output below `content_dir` is read
- * back as a content source by the next build. A new output below `templates_dir` can be read as a
- * partial by the render of the same build, because partials resolve lazily. Neither overwrites a
- * file, so the identity set cannot see either.
+ * back as a content source by the next build, and a new output below `static_dir` is copied as a
+ * static file by the next build. A new output below `templates_dir` can be read as a partial by the
+ * render of the same build, because partials resolve lazily. None of them overwrites a file, so the
+ * identity set cannot see any of them.
  *
  * Each root is compared by identity against the directories an output passes through, for the same
  * reasons the identity set is. `./content`, `content/`, a symlinked root, and a case-insensitive
@@ -84,7 +88,7 @@ struct InputRoot {
  * output tree can still lead into a root.
  */
 struct InputRoots {
-  /** The `content_dir` and `templates_dir` roots. */
+  /** The `content_dir`, `templates_dir`, and `static_dir` roots. */
   struct InputRoot items[INPUT_ROOT_COUNT];
 
   /** Output directory every registered output path is joined onto. */
@@ -97,9 +101,9 @@ struct InputRoots {
 /**
  * @brief Records the identity of every file this build reads.
  *
- * Claims the configuration file, each discovered content source, and every file below
- * `templates_dir`. It claims drafts too. A draft's source file is ordinary user content and just as
- * overwritable as a published one.
+ * Claims the configuration file, each discovered content source, each enumerated static file, and
+ * every file below `templates_dir`. It claims drafts too. A draft's source file is ordinary user
+ * content and just as overwritable as a published one.
  *
  * This claims the configuration file for the same reason as the rest. It is a file this build
  * reads, and `output_dir = "."` with a template named after it is enough to aim an output path at
@@ -114,11 +118,11 @@ struct InputRoots {
  * configured template, the content template, aggregate and feed templates, and entry overrides
  * alike, because each is a safe relative name joined below `templates_dir`.
  *
- * This skips a path with no identity rather than refusing it. A missing configuration file or
- * source cannot be overwritten, and neither can a missing `templates_dir`, which claims nothing.
- * `cmd_build` already rejects a missing `templates_dir` while loading the build inputs, and the
- * render reports a missing template with a template-specific diagnostic, so failing here would only
- * report an absence earlier and with less context.
+ * This skips a path with no identity rather than refusing it. A missing configuration file, source
+ * or static file cannot be overwritten, and neither can a missing `templates_dir`, which claims
+ * nothing. `cmd_build` already rejects a missing `templates_dir` while loading the build inputs,
+ * and the render reports a missing template with a template-specific diagnostic, so failing here
+ * would only report an absence earlier and with less context.
  *
  * The template tree is listed first, so the set is allocated once with a slot for every candidate.
  *
@@ -133,6 +137,7 @@ struct InputRoots {
  * @param site_config  Configuration supplying `templates_dir`. Must not be `NULL`.
  * @param config_path  Path the configuration was loaded from.
  * @param source_paths Every discovered content source path, drafts included. Must not be `NULL`.
+ * @param static_paths Every enumerated file below `static_dir`. Must not be `NULL`.
  * @param os           Host the inputs are on. Must not be `NULL`.
  * @param perm         Arena that owns the identity set. Must not be `NULL`.
  * @param scratch      Arena for the template paths, which must not overlap `perm`.
@@ -144,10 +149,11 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct SiteConfig* site_config,
                               struct Str config_path,
                               const struct PathList* source_paths,
+                              const struct PathList* static_paths,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
-                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 8)));
+                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 7, 9)));
 
 /**
  * @brief Lists every file below `templates_dir`, partials included.
@@ -183,7 +189,7 @@ static void claim_build_inputs_identity(struct InputIdentities* inputs,
                                         struct Os* os) __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Records the identity of `content_dir` and `templates_dir`.
+ * @brief Records the identity of `content_dir`, `templates_dir`, and `static_dir`.
  *
  * A root with no identity is recorded as absent rather than refused, for the same reason
  * `claim_build_inputs_identity` skips a missing file: it holds no input an output could land among.
@@ -324,6 +330,53 @@ static int register_template_output(struct Manifest* manifest,
                                     struct Log* log) __attribute__((nonnull(1, 4, 5, 6, 8)));
 
 /**
+ * @brief Registers the output path of every enumerated static file.
+ *
+ * @param manifest     Manifest that receives the output paths. Must not be `NULL`.
+ * @param static_paths Static file source paths, each below `static_dir`. Must not be `NULL`.
+ * @param static_dir   Configured static directory the paths are below.
+ * @param inputs       Identities of this build's input files, which no output may name. Must not be
+ *                     `NULL`.
+ * @param roots        Input directory trees no output may land in. Must not be `NULL`.
+ * @param perm         Arena that owns the manifest's entries. Must not be `NULL`.
+ * @param scratch      Arena for the joined output paths during registration.
+ * @param log          Log that receives every error. Must not be `NULL`.
+ * @return `0` on success, or `-1` when any path is oversize or collides.
+ */
+static int register_static_list(struct Manifest* manifest,
+                                const struct PathList* static_paths,
+                                struct Str static_dir,
+                                const struct InputIdentities* inputs,
+                                const struct InputRoots* roots,
+                                struct Arena* perm,
+                                struct Arena scratch,
+                                struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 8)));
+
+/**
+ * @brief Registers one enumerated static file's output path in the build manifest.
+ *
+ * @param manifest        Manifest that receives the output path. Must not be `NULL`.
+ * @param static_relative Static file path relative to `static_dir`. Its destination is rooted under
+ *                        `roots->output_dir`.
+ * @param static_path     Static file source path, the diagnostic label for the output.
+ * @param inputs          Identities of this build's input files, which the output must not name.
+ *                        Must not be `NULL`.
+ * @param roots           Input directory trees the output must not land in. Must not be `NULL`.
+ * @param perm            Arena that owns the manifest's entries. Must not be `NULL`.
+ * @param scratch         Arena for the joined output path during registration.
+ * @param log             Log that receives every error. Must not be `NULL`.
+ * @return `0` on success, or `-1` on an oversize path or a collision.
+ */
+static int register_static_output(struct Manifest* manifest,
+                                  struct Str static_relative,
+                                  struct Str static_path,
+                                  const struct InputIdentities* inputs,
+                                  const struct InputRoots* roots,
+                                  struct Arena* perm,
+                                  struct Arena scratch,
+                                  struct Log* log) __attribute__((nonnull(1, 4, 5, 6, 8)));
+
+/**
  * @brief Adds one output path to the manifest, reporting a duplicate, an output inside an input
  *        root, or an input overwrite.
  *
@@ -333,7 +386,8 @@ static int register_template_output(struct Manifest* manifest,
  * @param manifest     Manifest to append to. Must not be `NULL`.
  * @param output_path  Filesystem output path to record, joined onto `roots->output_dir`.
  * @param source_label Diagnostic label for the source producing `output_path`: a content entry's
- *                     source path or a configured template list entry.
+ *                     source path, a configured template list entry, or a static file's source
+ *                     path.
  * @param inputs       Identities of this build's input files, which `output_path` must not name.
  *                     Must not be `NULL`.
  * @param roots        Input directory trees `output_path` must not land in. Must not be `NULL`.
@@ -424,6 +478,7 @@ int manifest_builder_populate(struct Manifest* manifest,
                               const struct SiteConfig* site_config,
                               struct Str config_path,
                               const struct PathList* source_paths,
+                              const struct PathList* static_paths,
                               const struct ContentEntry* const* content_entries,
                               ptrdiff_t content_entry_count,
                               struct Os* os,
@@ -436,8 +491,8 @@ int manifest_builder_populate(struct Manifest* manifest,
   // An input failure makes every output path suspect, so it stops the check rather than reporting
   // the same cause once per output.
   claim_input_roots(&roots, site_config, os);
-  if (claim_build_inputs(&inputs, site_config, config_path, source_paths, os, &scratch, *perm,
-                         log) != 0) {
+  if (claim_build_inputs(&inputs, site_config, config_path, source_paths, static_paths, os,
+                         &scratch, *perm, log) != 0) {
     return -1;
   }
 
@@ -458,6 +513,10 @@ int manifest_builder_populate(struct Manifest* manifest,
                              log) != 0) {
     rc = -1;
   }
+  if (register_static_list(manifest, static_paths, site_config->static_dir, &inputs, &roots, perm,
+                           scratch, log) != 0) {
+    rc = -1;
+  }
   // Every path is now recorded, so the prefix scan sees all of them.
   if (report_nested_output_paths(manifest, log) != 0) {
     rc = -1;
@@ -469,6 +528,7 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               const struct SiteConfig* site_config,
                               struct Str config_path,
                               const struct PathList* source_paths,
+                              const struct PathList* static_paths,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
@@ -478,13 +538,17 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                                         site_config->output_dir, os, &scratch, *perm, log) != 0) {
     return -1;
   }
-  // One slot for the configuration file, then one per source and per template file. The counts
-  // index arrays already in memory, so their sum cannot overflow.
+  // One slot for the configuration file, then one per source, per static file and per template
+  // file. The counts index arrays already in memory, so their sum cannot overflow.
   inputs->items =
-      arena_new(perm, 1 + source_paths->count + template_paths.count, struct OsIdentity);
+      arena_new(perm, 1 + source_paths->count + static_paths->count + template_paths.count,
+                struct OsIdentity);
   claim_build_inputs_identity(inputs, config_path, os);
   for (ptrdiff_t i = 0; i < source_paths->count; i++) {
     claim_build_inputs_identity(inputs, source_paths->items[i], os);
+  }
+  for (ptrdiff_t i = 0; i < static_paths->count; i++) {
+    claim_build_inputs_identity(inputs, static_paths->items[i], os);
   }
   for (ptrdiff_t i = 0; i < template_paths.count; i++) {
     claim_build_inputs_identity(inputs, template_paths.items[i], os);
@@ -533,12 +597,14 @@ static void claim_input_roots(struct InputRoots* roots,
                               const struct SiteConfig* site_config,
                               struct Os* os) {
   *roots = (struct InputRoots){
-      .items = {{.config_key = S("content_dir")}, {.config_key = S("templates_dir")}},
+      .items = {{.config_key = S("content_dir")},
+                {.config_key = S("templates_dir")},
+                {.config_key = S("static_dir")}},
       .output_dir = site_config->output_dir,
       .os = os,
   };
-  const struct Str root_dirs[INPUT_ROOT_COUNT] = {site_config->content_dir,
-                                                  site_config->templates_dir};
+  const struct Str root_dirs[INPUT_ROOT_COUNT] = {
+      site_config->content_dir, site_config->templates_dir, site_config->static_dir};
   for (ptrdiff_t i = 0; i < INPUT_ROOT_COUNT; i++) {
     roots->items[i].is_present = identify(root_dirs[i], os, &roots->items[i].identity) == 0;
   }
@@ -662,6 +728,47 @@ static int register_template_output(struct Manifest* manifest,
   // `site_writer` writes to this same join, so the path checked here is the path written.
   const struct Str output_path = path_join(roots->output_dir, template_name, &scratch);
   return register_output_path(manifest, output_path, source_label, inputs, roots, perm, log);
+}
+
+static int register_static_list(struct Manifest* manifest,
+                                const struct PathList* static_paths,
+                                struct Str static_dir,
+                                const struct InputIdentities* inputs,
+                                const struct InputRoots* roots,
+                                struct Arena* perm,
+                                struct Arena scratch,
+                                struct Log* log) {
+  int rc = 0;
+  for (ptrdiff_t i = 0; i < static_paths->count; i++) {
+    // The walk lists only files below `static_dir`, so this always finds the relative part.
+    struct Str relative = {0};
+    (void)path_is_below(static_paths->items[i], static_dir, &relative);
+    if (register_static_output(manifest, relative, static_paths->items[i], inputs, roots, perm,
+                               scratch, log) != 0) {
+      rc = -1;
+    }
+  }
+  return rc;
+}
+
+static int register_static_output(struct Manifest* manifest,
+                                  struct Str static_relative,
+                                  struct Str static_path,
+                                  const struct InputIdentities* inputs,
+                                  const struct InputRoots* roots,
+                                  struct Arena* perm,
+                                  struct Arena scratch,
+                                  struct Log* log) {
+  // `site_writer` copies to this same join, so the path checked here is the path written.
+  const struct Str output_path = path_join(roots->output_dir, static_relative, &scratch);
+  // The limits bound the path below `output_dir`. That is the derived path past `output_dir` and
+  // the separator `path_join` adds, the same offset `find_input_root_holding_output_path` starts
+  // from.
+  if (output_path_check_limits(str_tail(output_path, roots->output_dir.len + 1), static_path,
+                               log) != 0) {
+    return -1;
+  }
+  return register_output_path(manifest, output_path, static_path, inputs, roots, perm, log);
 }
 
 static int register_output_path(struct Manifest* manifest,

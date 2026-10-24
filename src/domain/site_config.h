@@ -55,6 +55,9 @@ struct SiteConfig {
   /** Directory containing templates. Defaults to `templates`. */
   struct Str templates_dir;
 
+  /** Directory containing static files copied as-is into `output_dir`. Defaults to `static`. */
+  struct Str static_dir;
+
   /** Default safe relative template name for content entries. Defaults to `content.html`. */
   struct Str content_template;
 
@@ -88,6 +91,9 @@ struct SiteConfig {
 
   /** Whether the load rejected `templates_dir`, which then holds its default. */
   bool is_templates_dir_rejected;
+
+  /** Whether the load rejected `static_dir`, which then holds its default. */
+  bool is_static_dir_rejected;
 
   /**
    * Whether the load rejected `permalink`, `aggregate_templates` or `feed_templates`, which then
