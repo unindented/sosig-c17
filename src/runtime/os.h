@@ -160,36 +160,65 @@ int os_read(struct Os* os,
             struct Str operation,
             struct Log* log) __attribute__((nonnull(1, 4, 5, 7)));
 
+/** Where the bytes `os_write` writes come from. */
+enum OsSourceKind {
+  /**
+   * `OsSource.bytes`, whole. The zero kind, so `(struct OsSource){.bytes = data}` writes `data`.
+   */
+  OS_SOURCE_BYTES,
+
+  /**
+   * The regular file at `OsSource.file_path`, streamed in bounded chunks, so a file of any size is
+   * copied without being read whole into memory. A new destination does not take the source's mode,
+   * so a published copy's permissions do not depend on the source tree, and a `0600` stylesheet
+   * does not publish unreadable.
+   */
+  OS_SOURCE_FILE,
+};
+
+/** The bytes one `os_write` writes. Only the fields of its kind are read. */
+struct OsSource {
+  /** Which of the fields below holds the bytes. */
+  enum OsSourceKind kind;
+
+  /** Bytes to write, for `OS_SOURCE_BYTES`. */
+  struct Str bytes;
+
+  /** Regular file to copy, for `OS_SOURCE_FILE`. */
+  struct Str file_path;
+};
+
 /**
- * @brief Writes `data` to `file_path`, creating parent directories as needed.
+ * @brief Writes the bytes of `source` to `file_path`, creating parent directories as needed.
  *
- * Overwrites any existing file in place. The write is deliberately neither atomic nor `fsync`ed, so
- * a reader can observe a partial file while a write is running and an interrupted build can leave
- * one behind. That is acceptable because an `output_dir` is reproducible: deleting it and building
- * again recovers a truncated file in one command, and recovers stale outputs and a half-finished
- * phase at the same time, which a temp-write-plus-rename protocol would not. Do not add such a
- * protocol without a caller that cannot recover by rebuilding. A caller that trusts an existing
- * output instead of regenerating it, such as a freshness check, is that case, because it would take
- * a truncated file for a finished one.
- *
- * A newly created file gets mode `0666` reduced by the process umask. An existing destination keeps
- * its own mode, because the write goes through the file already there.
+ * It overwrites any existing file in place. That write is deliberately neither atomic nor
+ * `fsync`ed, so a reader can observe a partial file while a write is running and an interrupted
+ * build can leave one behind. That is acceptable because an `output_dir` is reproducible: deleting
+ * it and building again recovers a truncated file in one command, and recovers stale outputs and a
+ * half-finished phase at the same time, which a temp-write-plus-rename protocol would not. A newly
+ * created file gets mode `0666` reduced by the process umask. An existing destination keeps its own
+ * mode, because the write goes through the file already there, and so does every other name of it:
+ * a symlink is followed, and a hard link sees the new bytes. The destination's directory needs no
+ * write permission when the file already exists.
  *
  * This and `os_mkdirs` are the only operations that change the host, and should stay the only ones.
- * A second writer covering a subset of the outputs gives a caller a choice to get wrong. Parallel
- * page jobs call it at once, for distinct files that may share parent directories.
+ * A second writer covering a subset of the outputs gives a caller a choice to get wrong, which is
+ * why both sources share this one function, its open, its parents and its messages. Parallel jobs
+ * call it at once, for distinct files that may share parent directories.
  *
  * @param os        Host to write to. Must not be `NULL`.
  * @param file_path Destination path.
- * @param data      Bytes to write.
- * @param operation Operation leading the failure message. The message names `file_path`, or the
- *                  parent directory component that could not be created.
+ * @param source    Bytes to write.
+ * @param operation Operation leading the failure message. The message names `file_path`, the parent
+ *                  directory component that could not be created, or a source file that could not
+ *                  be read.
  * @param log       Log that receives the failure. Must not be `NULL`.
- * @return `0` on success, or `-1` on a directory, open, write, or close failure.
+ * @return `0` on success, or `-1` on a directory, open, read, write or close failure, or a source
+ *         file that is missing or not regular.
  */
 int os_write(struct Os* os,
              struct Str file_path,
-             struct Str data,
+             struct OsSource source,
              struct Str operation,
              struct Log* log) __attribute__((nonnull(1, 5)));
 

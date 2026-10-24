@@ -55,6 +55,9 @@ enum { TEST_LINK_EXPANSION_COUNT_MAX = 32 };
 enum { TEST_LINK_EXPANSION_COUNT_MAX = 40 };
 #endif
 
+/** Bytes a streamed write test sends, past three buffers of the POSIX host's 64 KiB. */
+enum { TEST_STREAM_LEN = 200 * 1024 };
+
 /** One test's host and the directory its tree lives in. */
 struct Contract {
   /** Host under test. */
@@ -123,8 +126,8 @@ static struct Str contract_path(struct Contract* contract, const char* relative_
  */
 static void contract_write(struct Contract* contract, const char* relative_path, struct Str data) {
   struct Log log = test_log();
-  TEST_CHECK(os_write(contract->os, contract_path(contract, relative_path), data,
-                      S("failed to write fixture"), &log) == 0);
+  TEST_CHECK(os_write(contract->os, contract_path(contract, relative_path),
+                      (struct OsSource){.bytes = data}, S("failed to write fixture"), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 }
 
@@ -230,6 +233,23 @@ static bool is_identity_equal(struct OsIdentity a, struct OsIdentity b) {
 }
 
 /**
+ * @brief Counts the entries the test's directory holds, recording why when it cannot be listed.
+ *
+ * @param contract  Contract of the test. Must not be `NULL`.
+ * @param count_out Receives the entry count. Written only on success. Must not be `NULL`.
+ * @return `0` on success, or `-1` when the directory cannot be listed.
+ */
+static int contract_entry_count(struct Contract* contract, ptrdiff_t* count_out) {
+  struct OsEntry* entries = NULL;
+  struct Log log = test_log();
+  const int rc = os_list(contract->os, str_from_cstr(contract->root_dir), &contract->arena,
+                         &entries, count_out, S("op"), &log);
+  const struct Str failure = buf_str(&log.buf);
+  TEST_MSG("%.*s", STR_FMT(failure));
+  return rc;
+}
+
+/**
  * @brief Returns the entry of a listing named `name`, or `NULL`.
  *
  * @param entries Entries of the listing. Must not be `NULL` when `count` is positive.
@@ -303,7 +323,7 @@ static void test_read_accepts_path_below_path_max(void) {
     goto cleanup;
   }
 #endif
-  TEST_CHECK(os_write(c.os, S("a.md"), S("a"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(c.os, S("a.md"), (struct OsSource){.bytes = S("a")}, S("op"), &log) == 0);
   rc = os_read(c.os, (struct Str){long_path, PATH_MAX - 1}, TEST_FILE_LEN_MAX, &c.arena, &data,
                S("op"), &log);
 #if !SOSIG_TEST_OS_MEMORY
@@ -570,7 +590,8 @@ static void test_trailing_slash_requires_directory(void) {
   // A write to `file/` needs `file` as a directory, so it fails where `os_mkdirs` would.
   const struct Str file = contract_path(&c, "file");
   struct Log log = test_log();
-  TEST_CHECK(os_write(c.os, contract_path(&c, "file/"), S("y"), S("op"), &log) == -1);
+  TEST_CHECK(os_write(c.os, contract_path(&c, "file/"), (struct OsSource){.bytes = S("y")}, S("op"),
+                      &log) == -1);
   TEST_CHECK(test_log_is(&log, "op: exists and is not a directory ('%.*s')\n", STR_FMT(file)));
   TEST_CHECK(contract_is_file(&c, "file", S("x")));
 
@@ -590,7 +611,7 @@ static void test_write_creates_parents_and_round_trips(void) {
   }
   const struct Str path = contract_path(&c, "a/b/c.html");
   struct Log log = test_log();
-  TEST_CHECK(os_write(c.os, path, S("deep"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(c.os, path, (struct OsSource){.bytes = S("deep")}, S("op"), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 
   struct OsStat st;
@@ -627,6 +648,60 @@ static void test_write_overwrites_in_place(void) {
   contract_end(&c);
 }
 
+// A file source is copied byte for byte across several of the POSIX host's buffers. The copy moves
+// bytes by length, but the `os_read` that checks it rejects a `NUL`, so the bytes leave it out.
+static void test_write_copies_file_source(void) {
+  char root[] = "/tmp/sosig-os-write-sources.XXXXXX";
+  struct Contract c;
+  if (contract_begin(root, &c) != 0) {
+    return;
+  }
+  char* bytes = arena_new(&c.arena, TEST_STREAM_LEN, char);
+  for (ptrdiff_t i = 0; i < TEST_STREAM_LEN; i++) {
+    bytes[i] = (char)(i * 7 % 251 + 1);
+  }
+  const struct Str data = {bytes, TEST_STREAM_LEN};
+  struct Log log = test_log();
+  contract_write(&c, "source.png", data);
+  const struct OsSource file = {.kind = OS_SOURCE_FILE,
+                                .file_path = contract_path(&c, "source.png")};
+  TEST_CHECK(os_write(c.os, contract_path(&c, "copy/source.png"), file, S("op"), &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  struct Str read = {0};
+  TEST_CHECK(os_read(c.os, contract_path(&c, "copy/source.png"), TEST_STREAM_LEN, &c.arena, &read,
+                     S("op"), &log) == 0);
+  TEST_CHECK(str_eq(read, data));
+  contract_end(&c);
+}
+
+// A write through a symlink writes the file it names, from every source, and leaves the symlink a
+// symlink.
+static void test_write_follows_symlink_for_every_source(void) {
+  char root[] = "/tmp/sosig-os-write-symlink.XXXXXX";
+  struct Contract c;
+  if (contract_begin(root, &c) != 0) {
+    return;
+  }
+  contract_write(&c, "out.png", S("old"));
+  contract_write(&c, "source.png", S("copied"));
+  contract_symlink(&c, "out.png", "link.png");
+  const struct Str link = contract_path(&c, "link.png");
+  struct Log log = test_log();
+  TEST_CHECK(os_write(c.os, link,
+                      (struct OsSource){.kind = OS_SOURCE_FILE,
+                                        .file_path = contract_path(&c, "source.png")},
+                      S("op"), &log) == 0);
+  TEST_CHECK(contract_is_file(&c, "out.png", S("copied")));
+  TEST_CHECK(os_write(c.os, link, (struct OsSource){.bytes = S("bytes")}, S("op"), &log) == 0);
+  TEST_CHECK(contract_is_file(&c, "out.png", S("bytes")));
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(
+      is_identity_equal(contract_identity(&c, "link.png"), contract_identity(&c, "out.png")));
+  ptrdiff_t entry_count = 0;
+  TEST_CHECK(contract_entry_count(&c, &entry_count) == 0 && entry_count == 3);
+  contract_end(&c);
+}
+
 // A write fails when a parent is a file, naming that parent, and when the target is a directory,
 // with the system's message.
 static void test_write_rejects_file_parent_and_dir_target(void) {
@@ -638,14 +713,14 @@ static void test_write_rejects_file_parent_and_dir_target(void) {
   contract_write(&c, "plain.txt", S("x"));
   const struct Str plain = contract_path(&c, "plain.txt");
   struct Log log = test_log();
-  TEST_CHECK(os_write(c.os, contract_path(&c, "plain.txt/sub/child.html"), S("x"), S("op"), &log) ==
-             -1);
+  TEST_CHECK(os_write(c.os, contract_path(&c, "plain.txt/sub/child.html"),
+                      (struct OsSource){.bytes = S("x")}, S("op"), &log) == -1);
   TEST_CHECK(test_log_is(&log, "op: exists and is not a directory ('%.*s')\n", STR_FMT(plain)));
 
   const struct Str dir = contract_path(&c, "sub");
   TEST_CHECK(os_mkdirs(c.os, dir, S("op"), &log) == 0);
   log = test_log();
-  TEST_CHECK(os_write(c.os, dir, S("x"), S("op"), &log) == -1);
+  TEST_CHECK(os_write(c.os, dir, (struct OsSource){.bytes = S("x")}, S("op"), &log) == -1);
   TEST_CHECK(test_log_is(&log, "op: %s ('%.*s')\n", strerror(EISDIR), STR_FMT(dir)));
   contract_end(&c);
 }
@@ -660,8 +735,8 @@ static void test_write_and_mkdirs_reject_path_with_nul(void) {
   }
   const struct Str file_path = contract_path(&c, "a.md");
   struct Log log = test_log();
-  TEST_CHECK(os_write(c.os, str_concat(file_path, S("\0b"), &c.arena), S("a"), S("op"), &log) ==
-             -1);
+  TEST_CHECK(os_write(c.os, str_concat(file_path, S("\0b"), &c.arena),
+                      (struct OsSource){.bytes = S("a")}, S("op"), &log) == -1);
   TEST_CHECK(test_log_is(&log, "op: %s ('%.*s')\n", strerror(EINVAL), STR_FMT(file_path)));
 
   const struct Str dir_path = contract_path(&c, "sub");
@@ -673,6 +748,60 @@ static void test_write_and_mkdirs_reject_path_with_nul(void) {
   struct OsStat st;
   TEST_CHECK(os_stat(c.os, file_path, &st) == -1);
   TEST_CHECK(os_stat(c.os, dir_path, &st) == -1);
+  contract_end(&c);
+}
+
+// A file source that is missing or not a regular file fails naming the source, and creates neither
+// the destination nor its parent.
+static void test_write_rejects_missing_and_directory_source(void) {
+  char root[] = "/tmp/sosig-os-write-source-fail.XXXXXX";
+  struct Contract c;
+  if (contract_begin(root, &c) != 0) {
+    return;
+  }
+  const struct Str missing = contract_path(&c, "missing.png");
+  struct Log log = test_log();
+  TEST_CHECK(os_write(c.os, contract_path(&c, "out/a.png"),
+                      (struct OsSource){.kind = OS_SOURCE_FILE, .file_path = missing}, S("op"),
+                      &log) == -1);
+  TEST_CHECK(test_log_is(&log, "op: %s ('%.*s')\n", strerror(ENOENT), STR_FMT(missing)));
+
+  log = test_log();
+  TEST_CHECK(
+      os_write(c.os, contract_path(&c, "out/b.png"),
+               (struct OsSource){.kind = OS_SOURCE_FILE, .file_path = str_from_cstr(c.root_dir)},
+               S("op"), &log) == -1);
+  TEST_CHECK(test_log_is(&log, "op: not a regular file ('%s')\n", c.root_dir));
+  struct OsStat st;
+  TEST_CHECK(os_stat(c.os, contract_path(&c, "out"), &st) == -1);
+  contract_end(&c);
+}
+
+// Every source fails on a directory target with the system's message, and leaves the directory and
+// the test's directory as they were.
+static void test_write_rejects_dir_target_for_every_source(void) {
+  char root[] = "/tmp/sosig-os-write-dir-target.XXXXXX";
+  struct Contract c;
+  if (contract_begin(root, &c) != 0) {
+    return;
+  }
+  contract_write(&c, "source.png", S("x"));
+  const struct Str dir = contract_path(&c, "dir");
+  struct Log log = test_log();
+  TEST_CHECK(os_mkdirs(c.os, dir, S("op"), &log) == 0);
+  const struct OsSource sources[] = {
+      {.bytes = S("x")},
+      {.kind = OS_SOURCE_FILE, .file_path = contract_path(&c, "source.png")},
+  };
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(sources) / sizeof(sources[0])); i++) {
+    log = test_log();
+    TEST_CHECK(os_write(c.os, dir, sources[i], S("op"), &log) == -1);
+    TEST_CHECK(test_log_is(&log, "op: %s ('%.*s')\n", strerror(EISDIR), STR_FMT(dir)));
+  }
+  struct OsStat st;
+  TEST_CHECK(os_stat(c.os, dir, &st) == 0 && st.is_dir);
+  ptrdiff_t entry_count = 0;
+  TEST_CHECK(contract_entry_count(&c, &entry_count) == 0 && entry_count == 2);
   contract_end(&c);
 }
 
@@ -943,8 +1072,12 @@ TEST_LIST = {
     {"trailing slash requires directory", test_trailing_slash_requires_directory},
     {"write creates parents and round trips", test_write_creates_parents_and_round_trips},
     {"write overwrites in place", test_write_overwrites_in_place},
+    {"write copies file source", test_write_copies_file_source},
+    {"write follows symlink for every source", test_write_follows_symlink_for_every_source},
     {"write rejects file parent and dir target", test_write_rejects_file_parent_and_dir_target},
     {"write and mkdirs reject path with nul", test_write_and_mkdirs_reject_path_with_nul},
+    {"write rejects missing and directory source", test_write_rejects_missing_and_directory_source},
+    {"write rejects dir target for every source", test_write_rejects_dir_target_for_every_source},
     {"mkdirs creates nested and is idempotent", test_mkdirs_creates_nested_and_is_idempotent},
     {"mkdirs rejects file and dangling components",
      test_mkdirs_rejects_file_and_dangling_components},

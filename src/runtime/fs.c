@@ -48,6 +48,21 @@ struct FsReport {
   struct Log* log;
 };
 
+/** Bytes `os_write` moves per `read` and `write` when it streams a source file. */
+enum { FS_WRITE_BUFFER_SIZE = 64 * 1024 };
+
+/** The file one `os_write` call writes, from its open to its close. */
+struct FsWriteTarget {
+  /** Destination path, named in a failure. */
+  struct Str file_path;
+
+  /** Descriptor open for writing, or `-1` before the open succeeds. */
+  int fd;
+
+  /** Terminated destination path. */
+  char path[PATH_MAX];
+};
+
 /** What `os_list_classify` found one directory entry to be. */
 enum ListClassify {
   /** A regular file or a directory, once symlinks are followed, so the listing keeps it. */
@@ -59,30 +74,6 @@ enum ListClassify {
   /** An entry that exists but could not be inspected, with `errno` set, so the listing fails. */
   LIST_CLASSIFY_FAILED,
 };
-
-/**
- * @brief Opens a regular file for reading and checks its size against the limit. A step of
- *        `os_read`.
- *
- * Opens without blocking and inspects the descriptor rather than the path, so the file checked is
- * the file read. A path swapped to a FIFO would otherwise block the open waiting for a writer. The
- * flag is cleared again once the file is known to be regular.
- *
- * @param file_path    Path of the file to open.
- * @param data_len_max Largest accepted file size in bytes.
- * @param fd_out       Receives the descriptor, open for blocking reads. Written only on success.
- *                     Must not be `NULL`.
- * @param data_len_out Receives the file's size from its `fstat`, at most `data_len_max`. Written
- *                     only on success. Must not be `NULL`.
- * @param report       Where a failure is reported. Must not be `NULL`.
- * @return `0` on success, or `-1` with the descriptor closed when the file cannot be opened or
- *         inspected, is not regular or is larger than `data_len_max`.
- */
-static int os_read_open(struct Str file_path,
-                        ptrdiff_t data_len_max,
-                        int* fd_out,
-                        ptrdiff_t* data_len_out,
-                        const struct FsReport* report) __attribute__((nonnull(3, 4, 5)));
 
 /**
  * @brief Reads the whole of an open file into `data` and closes it. A step of `os_read`.
@@ -128,6 +119,66 @@ static int os_read_bytes_exact(char* data,
                                FILE* fp,
                                struct Str file_path,
                                const struct FsReport* report) __attribute__((nonnull(1, 3, 5)));
+
+/**
+ * @brief Opens the destination of an `os_write` call, creating or truncating it. A step of
+ *        `os_write`.
+ *
+ * @param target Target whose `file_path` is set. Receives the open descriptor and the terminated
+ *               path. Must not be `NULL`.
+ * @param report Where a failure is reported. Must not be `NULL`.
+ * @return `0` on success, or `-1` when the file cannot be opened or created.
+ */
+static int os_write_open(struct FsWriteTarget* target, const struct FsReport* report)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Writes every byte of `source` to `fd`. A step of `os_write`.
+ *
+ * @param fd        Descriptor open for writing.
+ * @param source    Bytes to write.
+ * @param source_fd Descriptor of the open source file of an `OS_SOURCE_FILE` write, or `-1`.
+ * @param file_path Destination path, named in a write failure.
+ * @param report    Where a failure is reported. Must not be `NULL`.
+ * @return `0` once every byte is written, or `-1` on a read or write failure.
+ */
+static int os_write_source(int fd,
+                           struct OsSource source,
+                           int source_fd,
+                           struct Str file_path,
+                           const struct FsReport* report) __attribute__((nonnull(5)));
+
+/**
+ * @brief Copies the open source file of an `OS_SOURCE_FILE` write to `fd`.
+ *
+ * @param fd          Descriptor open for writing.
+ * @param source_fd   Descriptor of the source file, positioned at its start.
+ * @param source_path Source path, named in a read failure.
+ * @param file_path   Destination path, named in a write failure.
+ * @param report      Where a failure is reported. Must not be `NULL`.
+ * @return `0` once the whole source is copied, or `-1` on a read or write failure.
+ */
+static int os_write_source_stream(int fd,
+                                  int source_fd,
+                                  struct Str source_path,
+                                  struct Str file_path,
+                                  const struct FsReport* report) __attribute__((nonnull(5)));
+
+/**
+ * @brief Closes the descriptors an `os_write` call opened. A step of `os_write`.
+ *
+ * @param target      Target, open or not. Must not be `NULL`.
+ * @param source_fd   Descriptor of the open source file of an `OS_SOURCE_FILE` write, or `-1`.
+ * @param source_path Source path, named in a close failure.
+ * @param rc          Result of the write so far. A failure in it is the one reported.
+ * @param report      Where a failure is reported. Must not be `NULL`.
+ * @return `0` when `rc` is `0` and every close succeeds, or `-1`.
+ */
+static int os_write_close(const struct FsWriteTarget* target,
+                          int source_fd,
+                          struct Str source_path,
+                          int rc,
+                          const struct FsReport* report) __attribute__((nonnull(1, 5)));
 
 /**
  * @brief Creates `dir_path` and any missing parent directories. The body of `os_mkdirs`, which
@@ -180,6 +231,25 @@ static int os_list_names(struct PathList* names,
  */
 static enum ListClassify os_list_classify(struct Str file_path, enum OsEntryKind* kind_out)
     __attribute__((nonnull(2)));
+
+/**
+ * @brief Opens a file to read from and checks that it is a regular file, for `os_read` and the
+ *        source of an `OS_SOURCE_FILE` write.
+ *
+ * It opens without blocking and inspects the descriptor rather than the path, so the file checked
+ * is the file read, and a path swapped to a FIFO cannot block the open waiting for a writer. The
+ * flag is cleared again once the file is known to be regular.
+ *
+ * @param file_path File to open.
+ * @param fd_out    Receives the open descriptor. Written only on success. Must not be `NULL`.
+ * @param st_out    Receives the `fstat` of the descriptor. Must not be `NULL`.
+ * @param report    Where a failure is reported, naming `file_path`. Must not be `NULL`.
+ * @return `0` on success, or `-1` when the file cannot be opened or inspected, or is not regular.
+ */
+static int open_regular(struct Str file_path,
+                        int* fd_out,
+                        struct stat* st_out,
+                        const struct FsReport* report) __attribute__((nonnull(2, 3, 4)));
 
 /**
  * Most bytes `write_all` passes to one `write`, because macOS refuses a count above `INT_MAX` with
@@ -254,12 +324,25 @@ int os_read(struct Os* os,
   (void)os;
   const struct FsReport report = {operation, log};
   int fd = -1;
-  ptrdiff_t data_len = 0;
-  if (os_read_open(file_path, data_len_max, &fd, &data_len, &report) != 0) {
+  struct stat st;
+  if (open_regular(file_path, &fd, &st, &report) != 0) {
     return -1;
   }
-  // Allocating from a copy of `perm` and publishing it only on success leaves `perm` as it found it
-  // when the read fails.
+  if (st.st_size > data_len_max) {
+    // Check the limit against the `fstat` size, before anything is allocated or read, so an
+    // oversize file costs one `fstat` rather than its whole size in memory. A file that grows past
+    // the limit after this check is still caught, because `os_read_bytes_exact` rejects any byte
+    // beyond this size.
+    (void)log_error(log, "%.*s: exceeds max file size (%td bytes) at %jd bytes ('%.*s')",
+                    STR_FMT(operation), data_len_max, (intmax_t)st.st_size, STR_FMT(file_path));
+    // The failure above is the one reported, so a close error on this path adds nothing.
+    (void)close(fd);
+    return -1;
+  }
+  // The size is within `data_len_max`, so it converts to `ptrdiff_t` exactly. Allocating from a
+  // copy of `perm` and publishing it only on success leaves `perm` as it found it when the read
+  // fails.
+  const ptrdiff_t data_len = (ptrdiff_t)st.st_size;
   struct Arena arena = *perm;
   // The read overwrites every byte, so the bytes are not zeroed first: an empty `arena_alloc`
   // places them and `arena_extend` takes them as they are, which saves a pass over every byte read.
@@ -276,36 +359,30 @@ int os_read(struct Os* os,
 
 int os_write(struct Os* os,
              struct Str file_path,
-             struct Str data,
+             struct OsSource source,
              struct Str operation,
              struct Log* log) {
   (void)os;
   const struct FsReport report = {operation, log};
-  // A path with no `/` has no parent to create, and one whose only `/` is the leading one has the
-  // root, which always exists. Both yield an empty parent, which `mkdirs_report` treats as a no-op.
-  if (mkdirs_report(path_parent(file_path), &report) != 0) {
+  // A file source is opened first, so a source that is missing or not regular creates no parent
+  // directory and no destination.
+  int source_fd = -1;
+  struct stat source_st;
+  if (source.kind == OS_SOURCE_FILE &&
+      open_regular(source.file_path, &source_fd, &source_st, &report) != 0) {
     return -1;
   }
-  // Mode `0666` is a ceiling the process umask trims, which is how every file this module creates
-  // gets its permissions. An existing destination keeps its own mode, because `O_TRUNC` writes
-  // through the file that is already there.
-  char path[PATH_MAX];
-  const int fd =
-      copy_cstr(file_path, path) == 0 ? open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666) : -1;
-  if (fd < 0) {
-    return report_errno(&report, file_path, errno);
+  struct FsWriteTarget target = {.file_path = file_path, .fd = -1};
+  // A path with no `/` has no parent to create, and one whose only `/` is the leading one has the
+  // root, which always exists. Both yield an empty parent, which `mkdirs_report` treats as a no-op.
+  int rc = mkdirs_report(path_parent(file_path), &report);
+  if (rc == 0) {
+    rc = os_write_open(&target, &report);
   }
-  int rc = 0;
-  if (write_all(fd, data) != 0) {
-    rc = report_errno(&report, file_path, errno);
+  if (rc == 0) {
+    rc = os_write_source(target.fd, source, source_fd, file_path, &report);
   }
-  if (close(fd) != 0) {
-    if (rc == 0) {
-      (void)report_errno(&report, file_path, errno);
-    }
-    rc = -1;
-  }
-  return rc;
+  return os_write_close(&target, source_fd, source.file_path, rc, &report);
 }
 
 int os_mkdirs(struct Os* os, struct Str dir_path, struct Str operation, struct Log* log) {
@@ -373,46 +450,6 @@ int os_print(struct Os* os, int fd, struct Str text) {
   return write_all(fd, text);
 }
 
-static int os_read_open(struct Str file_path,
-                        ptrdiff_t data_len_max,
-                        int* fd_out,
-                        ptrdiff_t* data_len_out,
-                        const struct FsReport* report) {
-  char path[PATH_MAX];
-  const int fd = copy_cstr(file_path, path) == 0 ? open(path, O_RDONLY | O_NONBLOCK) : -1;
-  if (fd < 0) {
-    return report_errno(report, file_path, errno);
-  }
-  struct stat st;
-  int rc = 0;
-  if (fstat(fd, &st) != 0) {
-    rc = report_errno(report, file_path, errno);
-  } else if (!S_ISREG(st.st_mode)) {
-    rc = log_error(report->log, "%.*s: not a regular file ('%.*s')", STR_FMT(report->operation),
-                   STR_FMT(file_path));
-  } else if (st.st_size > data_len_max) {
-    // Check the limit against the `fstat` size, before anything is allocated or read, so an
-    // oversize file costs one `fstat` rather than its whole size in memory. A file that grows past
-    // the limit after this check is still caught, because `os_read_bytes_exact` rejects any byte
-    // beyond this size.
-    rc = log_error(report->log, "%.*s: exceeds max file size (%td bytes) at %jd bytes ('%.*s')",
-                   STR_FMT(report->operation), data_len_max, (intmax_t)st.st_size,
-                   STR_FMT(file_path));
-  }
-  if (rc == 0 && fcntl(fd, F_SETFL, 0) != 0) {
-    rc = report_errno(report, file_path, errno);
-  }
-  if (rc != 0) {
-    // The failure above is the one reported, so a close error on this path adds nothing.
-    (void)close(fd);
-    return -1;
-  }
-  *fd_out = fd;
-  // The size is within `data_len_max`, so it converts to `ptrdiff_t` exactly.
-  *data_len_out = (ptrdiff_t)st.st_size;
-  return 0;
-}
-
 static int os_read_bytes(char* data,
                          ptrdiff_t data_len,
                          int fd,
@@ -475,10 +512,76 @@ static int os_read_bytes_exact(char* data,
                       STR_FMT(report->operation), STR_FMT(file_path));
     }
   }
-  // Text is the only thing this program reads, and no format it reads gives a `NUL` a meaning.
+  // Every file `os_read` reads is text, and no format it reads gives a `NUL` a meaning.
   if (rc == 0 && !text_is_nul_free((struct Str){data, data_len})) {
     (void)log_error(report->log, "%.*s: contains an embedded NUL byte ('%.*s')",
                     STR_FMT(report->operation), STR_FMT(file_path));
+    rc = -1;
+  }
+  return rc;
+}
+
+static int os_write_open(struct FsWriteTarget* target, const struct FsReport* report) {
+  if (copy_cstr(target->file_path, target->path) != 0) {
+    return report_errno(report, target->file_path, errno);
+  }
+  // Mode `0666` is a ceiling the process umask trims, which is how every file this module creates
+  // gets its permissions. An existing destination keeps its own mode, because `O_TRUNC` writes
+  // through the file that is already there.
+  target->fd = open(target->path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  return target->fd >= 0 ? 0 : report_errno(report, target->file_path, errno);
+}
+
+static int os_write_source(int fd,
+                           struct OsSource source,
+                           int source_fd,
+                           struct Str file_path,
+                           const struct FsReport* report) {
+  switch (source.kind) {
+    case OS_SOURCE_BYTES:
+      return write_all(fd, source.bytes) == 0 ? 0 : report_errno(report, file_path, errno);
+    case OS_SOURCE_FILE:
+      return os_write_source_stream(fd, source_fd, source.file_path, file_path, report);
+  }
+  return -1;
+}
+
+static int os_write_source_stream(int fd,
+                                  int source_fd,
+                                  struct Str source_path,
+                                  struct Str file_path,
+                                  const struct FsReport* report) {
+  char buffer[FS_WRITE_BUFFER_SIZE];
+  for (;;) {
+    const ssize_t read_len = read(source_fd, buffer, sizeof(buffer));
+    if (read_len > 0) {
+      if (write_all(fd, (struct Str){buffer, read_len}) != 0) {
+        return report_errno(report, file_path, errno);
+      }
+    } else if (read_len == 0) {
+      return 0;
+    } else if (errno != EINTR) {
+      return report_errno(report, source_path, errno);
+    }
+  }
+}
+
+static int os_write_close(const struct FsWriteTarget* target,
+                          int source_fd,
+                          struct Str source_path,
+                          int rc,
+                          const struct FsReport* report) {
+  // Only the first failure is reported, because a later one is a consequence of it.
+  if (target->fd >= 0 && close(target->fd) != 0) {
+    if (rc == 0) {
+      (void)report_errno(report, target->file_path, errno);
+    }
+    rc = -1;
+  }
+  if (source_fd >= 0 && close(source_fd) != 0) {
+    if (rc == 0) {
+      (void)report_errno(report, source_path, errno);
+    }
     rc = -1;
   }
   return rc;
@@ -593,6 +696,34 @@ static enum ListClassify os_list_classify(struct Str file_path, enum OsEntryKind
     return LIST_CLASSIFY_LISTED;
   }
   return LIST_CLASSIFY_SKIPPED;
+}
+
+static int open_regular(struct Str file_path,
+                        int* fd_out,
+                        struct stat* st_out,
+                        const struct FsReport* report) {
+  char path[PATH_MAX];
+  const int fd = copy_cstr(file_path, path) == 0 ? open(path, O_RDONLY | O_NONBLOCK) : -1;
+  if (fd < 0) {
+    return report_errno(report, file_path, errno);
+  }
+  int rc = 0;
+  if (fstat(fd, st_out) != 0) {
+    rc = report_errno(report, file_path, errno);
+  } else if (!S_ISREG(st_out->st_mode)) {
+    rc = log_error(report->log, "%.*s: not a regular file ('%.*s')", STR_FMT(report->operation),
+                   STR_FMT(file_path));
+  }
+  if (rc == 0 && fcntl(fd, F_SETFL, 0) != 0) {
+    rc = report_errno(report, file_path, errno);
+  }
+  if (rc != 0) {
+    // The failure above is the one reported, so a close error on this path adds nothing.
+    (void)close(fd);
+    return -1;
+  }
+  *fd_out = fd;
+  return 0;
 }
 
 static int write_all(int fd, struct Str data) {

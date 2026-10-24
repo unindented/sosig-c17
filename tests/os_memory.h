@@ -34,7 +34,7 @@ struct Os;
 
 /** Which operation an injected failure applies to. */
 enum OsMemoryOp {
-  /** `os_read` of the path. */
+  /** `os_read` of the path, and its open as the source of an `os_write`. */
   OS_MEMORY_OP_READ,
 
   /** `os_write` of the path, as the open of the file itself fails. */

@@ -86,5 +86,6 @@ static int write_rendered_template(struct Str templates_dir,
   }
   // The render has returned, so its temporaries in `scratch` are dead and the path can reuse them.
   const struct Str output_path = path_join(output_dir, template_name, &scratch);
-  return os_write(os, output_path, rendered_html, S("failed to write template output"), log);
+  return os_write(os, output_path, (struct OsSource){.bytes = rendered_html},
+                  S("failed to write template output"), log);
 }

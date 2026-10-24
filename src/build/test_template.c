@@ -100,8 +100,8 @@ static int write_fixture_bytes(const char* root_dir, const char* relative_path, 
     return -1;
   }
   struct Log log = test_log();
-  const int rc =
-      os_write(os_posix(), str_from_cstr(fixture_path), data, S("failed to write fixture"), &log);
+  const int rc = os_write(os_posix(), str_from_cstr(fixture_path), (struct OsSource){.bytes = data},
+                          S("failed to write fixture"), &log);
   TEST_CHECK(rc == 0);
   return rc;
 }

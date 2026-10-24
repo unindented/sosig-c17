@@ -278,6 +278,20 @@ static void node_add(struct Os* os,
                      struct Str data) __attribute__((nonnull(1)));
 
 /**
+ * @brief Adds a node that no entry names yet.
+ *
+ * @param os     Host to extend. Must not be `NULL`.
+ * @param kind   What the new node is.
+ * @param data   Contents or target, which the host's arena already owns.
+ * @param parent Directory that holds, or will hold, the node.
+ * @return The new node's index.
+ */
+static ptrdiff_t node_new(struct Os* os,
+                          enum OsMemoryNodeKind kind,
+                          struct Str data,
+                          ptrdiff_t parent) __attribute__((nonnull(1)));
+
+/**
  * @brief Adds an entry naming an existing node.
  *
  * @param os   Host to extend. Must not be `NULL`.
@@ -300,18 +314,93 @@ static int fault_find(const struct Os* os, enum OsMemoryOp op, struct Str path)
     __attribute__((nonnull(1)));
 
 /**
+ * @brief Finds the regular file `os_read` reads, or an `OS_SOURCE_FILE` write copies, as the POSIX
+ *        implementation opens it. The caller holds the lock.
+ *
+ * @param os        Host to search. Must not be `NULL`.
+ * @param file_path Path of the file, which an injected `OS_MEMORY_OP_READ` failure matches.
+ * @param node_out  Receives the file's node. Written only on success. Must not be `NULL`.
+ * @param report    Where a failure is reported, naming `file_path`. Must not be `NULL`.
+ * @return `0` on success, or `-1` when the file is missing or not regular.
+ */
+static int open_regular(struct Os* os,
+                        struct Str file_path,
+                        ptrdiff_t* node_out,
+                        const struct OsMemoryReport* report) __attribute__((nonnull(1, 3, 4)));
+
+/**
  * @brief Writes a file and its parents. The body of `os_write`. The caller holds the lock.
  *
  * @param os        Host to write to. Must not be `NULL`.
  * @param file_path Destination path.
- * @param data      Bytes to write, copied into the host.
+ * @param source    Bytes to write, copied into the host.
  * @param report    Where a failure is reported. Must not be `NULL`.
  * @return `0` on success, or `-1` on failure.
  */
 static int os_write_locked(struct Os* os,
                            struct Str file_path,
-                           struct Str data,
+                           struct OsSource source,
                            const struct OsMemoryReport* report) __attribute__((nonnull(1, 4)));
+
+/**
+ * @brief Looks up the file an `os_write_locked` call writes, as the POSIX `os_write_open` opens it.
+ *        A step of `os_write_locked`.
+ *
+ * The write goes through a symlink at the path, as `open` does.
+ *
+ * @param os           Host to search. Must not be `NULL`.
+ * @param file_path    Destination path, which an injected `OS_MEMORY_OP_WRITE` failure matches.
+ * @param arena        Arena for expanded link paths, which `lookup_out->name` may point into. Must
+ *                     not be `NULL`.
+ * @param lookup_out   Receives where the destination's lookup ended. Written only on success. Must
+ *                     not be `NULL`.
+ * @param is_found_out Receives whether the lookup found an entry. Written only on success. Must not
+ *                     be `NULL`.
+ * @param report       Where a failure is reported. Must not be `NULL`.
+ * @return `0` when the destination exists and is not a directory, or is missing from a directory
+ *         that exists, or `-1` otherwise.
+ */
+static int os_write_locked_open(struct Os* os,
+                                struct Str file_path,
+                                struct Arena* arena,
+                                struct OsMemoryLookup* lookup_out,
+                                bool* is_found_out,
+                                const struct OsMemoryReport* report)
+    __attribute__((nonnull(1, 3, 4, 5, 6)));
+
+/**
+ * @brief Collects the new contents of a file from its source. A step of `os_write_locked`.
+ *
+ * @param os           Host the contents go in. Must not be `NULL`.
+ * @param source       Bytes to write.
+ * @param source_node  Node of the file an `OS_SOURCE_FILE` write copies, or `-1`.
+ * @param data_out     Receives the contents, which the host's arena owns. Must not be `NULL`.
+ * @param zero_len_out Receives the count of `NUL` bytes past `data_out`. Must not be `NULL`.
+ */
+static void os_write_locked_data(struct Os* os,
+                                 struct OsSource source,
+                                 ptrdiff_t source_node,
+                                 struct Str* data_out,
+                                 ptrdiff_t* zero_len_out) __attribute__((nonnull(1, 4, 5)));
+
+/**
+ * @brief Stores a file's new contents at the destination a lookup ended at. A step of
+ *        `os_write_locked`.
+ *
+ * A write to an existing file changes that file's node. Otherwise a new file node takes a new entry
+ * where the lookup ended.
+ *
+ * @param os       Host to change. Must not be `NULL`.
+ * @param lookup   Where the destination's lookup ended. Must not be `NULL`.
+ * @param is_found Whether the lookup found an entry.
+ * @param data     Contents of the file, which the host's arena owns.
+ * @param zero_len Count of `NUL` bytes past `data`.
+ */
+static void os_write_locked_store(struct Os* os,
+                                  const struct OsMemoryLookup* lookup,
+                                  bool is_found,
+                                  struct Str data,
+                                  ptrdiff_t zero_len) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Creates `dir_path` and any missing parents. The body of `os_mkdirs`, which `os_write`
@@ -406,7 +495,8 @@ void os_memory_write(struct Os* os, const char* file_path, const char* contents)
   const struct Str data = str_from_cstr(contents);
   struct Arena log_arena = os->fixture_log;
   struct Log log = {.buf = {.arena = &log_arena}};
-  TEST_CHECK(os_write(os, path, data, S("failed to write fixture"), &log) == 0);
+  TEST_CHECK(os_write(os, path, (struct OsSource){.bytes = data}, S("failed to write fixture"),
+                      &log) == 0);
   const struct Str failure = buf_str(&log.buf);
   TEST_MSG("%.*s", STR_FMT(failure));
 }
@@ -547,19 +637,10 @@ int os_read(struct Os* os,
             struct Log* log) {
   const struct OsMemoryReport report = {operation, log};
   host_lock(os);
-  struct Arena scratch = os->scratch;
-  struct OsMemoryLookup lookup;
-  int rc = 0;
-  const int fault = fault_find(os, OS_MEMORY_OP_READ, file_path);
-  if (fault != 0) {
-    rc = report_errno(&report, file_path, fault);
-  } else if (tree_lookup(os, file_path, true, &scratch, &lookup) != 0) {
-    rc = report_errno(&report, file_path, errno);
-  } else if (os->nodes[lookup.node].kind != OS_MEMORY_NODE_FILE) {
-    rc =
-        log_error(log, "%.*s: not a regular file ('%.*s')", STR_FMT(operation), STR_FMT(file_path));
-  } else {
-    const struct OsMemoryNode* node = &os->nodes[lookup.node];
+  ptrdiff_t file_node = -1;
+  int rc = open_regular(os, file_path, &file_node, &report);
+  if (rc == 0) {
+    const struct OsMemoryNode* node = &os->nodes[file_node];
     const struct Str data = node->data;
     if (data.len + node->zero_len > data_len_max) {
       rc = log_error(log, "%.*s: exceeds max file size (%td bytes) at %td bytes ('%.*s')",
@@ -584,12 +665,12 @@ int os_read(struct Os* os,
 
 int os_write(struct Os* os,
              struct Str file_path,
-             struct Str data,
+             struct OsSource source,
              struct Str operation,
              struct Log* log) {
   const struct OsMemoryReport report = {operation, log};
   host_lock(os);
-  const int rc = os_write_locked(os, file_path, data, &report);
+  const int rc = os_write_locked(os, file_path, source, &report);
   host_unlock(os);
   return rc;
 }
@@ -839,14 +920,21 @@ static void node_add(struct Os* os,
                      struct Str name,
                      enum OsMemoryNodeKind kind,
                      struct Str data) {
+  const ptrdiff_t node = node_new(os, kind, str_clone(data, &os->arena), dir);
+  entry_add(os, dir, name, node);
+}
+
+static ptrdiff_t node_new(struct Os* os,
+                          enum OsMemoryNodeKind kind,
+                          struct Str data,
+                          ptrdiff_t parent) {
   if (os->node_count == os->node_capacity) {
     os->nodes = arena_grow(&os->arena, os->nodes, &os->node_capacity, sizeof(*os->nodes),
                            _Alignof(struct OsMemoryNode));
   }
   const ptrdiff_t node = os->node_count++;
-  os->nodes[node] =
-      (struct OsMemoryNode){.kind = kind, .data = str_clone(data, &os->arena), .parent = dir};
-  entry_add(os, dir, name, node);
+  os->nodes[node] = (struct OsMemoryNode){.kind = kind, .data = data, .parent = parent};
+  return node;
 }
 
 static void entry_add(struct Os* os, ptrdiff_t dir, struct Str name, ptrdiff_t node) {
@@ -868,38 +956,111 @@ static int fault_find(const struct Os* os, enum OsMemoryOp op, struct Str path) 
   return 0;
 }
 
-static int os_write_locked(struct Os* os,
-                           struct Str file_path,
-                           struct Str data,
-                           const struct OsMemoryReport* report) {
-  // As in the POSIX implementation, a path with no parent, or with the root as its parent, creates
-  // nothing.
-  if (mkdirs_report(os, path_parent(file_path), report) != 0) {
-    return -1;
-  }
-  const int fault = fault_find(os, OS_MEMORY_OP_WRITE, file_path);
+static int open_regular(struct Os* os,
+                        struct Str file_path,
+                        ptrdiff_t* node_out,
+                        const struct OsMemoryReport* report) {
+  const int fault = fault_find(os, OS_MEMORY_OP_READ, file_path);
   if (fault != 0) {
     return report_errno(report, file_path, fault);
   }
   struct Arena scratch = os->scratch;
   struct OsMemoryLookup lookup;
   if (tree_lookup(os, file_path, true, &scratch, &lookup) != 0) {
-    // A missing file is created where the lookup ended, which for a dangling symlink is its target,
-    // as `open` with `O_CREAT` does.
-    if (errno != ENOENT || lookup.dir < 0) {
-      return report_errno(report, file_path, errno);
-    }
-    node_add(os, lookup.dir, lookup.name, OS_MEMORY_NODE_FILE, data);
-    return 0;
+    return report_errno(report, file_path, errno);
   }
-  struct OsMemoryNode* node = &os->nodes[lookup.node];
-  if (node->kind == OS_MEMORY_NODE_DIR) {
+  if (os->nodes[lookup.node].kind != OS_MEMORY_NODE_FILE) {
+    return log_error(report->log, "%.*s: not a regular file ('%.*s')", STR_FMT(report->operation),
+                     STR_FMT(file_path));
+  }
+  *node_out = lookup.node;
+  return 0;
+}
+
+static int os_write_locked(struct Os* os,
+                           struct Str file_path,
+                           struct OsSource source,
+                           const struct OsMemoryReport* report) {
+  // As in the POSIX implementation, a file source is opened first, and a path with no parent, or
+  // with the root as its parent, creates nothing.
+  ptrdiff_t source_node = -1;
+  if (source.kind == OS_SOURCE_FILE &&
+      open_regular(os, source.file_path, &source_node, report) != 0) {
+    return -1;
+  }
+  if (mkdirs_report(os, path_parent(file_path), report) != 0) {
+    return -1;
+  }
+  struct Arena scratch = os->scratch;
+  struct OsMemoryLookup lookup = {.node = -1, .dir = -1};
+  bool is_found = false;
+  if (os_write_locked_open(os, file_path, &scratch, &lookup, &is_found, report) != 0) {
+    return -1;
+  }
+  struct Str data = {0};
+  ptrdiff_t zero_len = 0;
+  os_write_locked_data(os, source, source_node, &data, &zero_len);
+  os_write_locked_store(os, &lookup, is_found, data, zero_len);
+  return 0;
+}
+
+static int os_write_locked_open(struct Os* os,
+                                struct Str file_path,
+                                struct Arena* arena,
+                                struct OsMemoryLookup* lookup_out,
+                                bool* is_found_out,
+                                const struct OsMemoryReport* report) {
+  const int fault = fault_find(os, OS_MEMORY_OP_WRITE, file_path);
+  if (fault != 0) {
+    return report_errno(report, file_path, fault);
+  }
+  struct OsMemoryLookup lookup;
+  const bool is_found = tree_lookup(os, file_path, true, arena, &lookup) == 0;
+  if (!is_found && (errno != ENOENT || lookup.dir < 0)) {
+    return report_errno(report, file_path, errno);
+  }
+  if (is_found && os->nodes[lookup.node].kind == OS_MEMORY_NODE_DIR) {
     return report_errno(report, file_path, EISDIR);
   }
-  // The write goes through the existing node, so every hard link to it sees the new contents.
-  node->data = str_clone(data, &os->arena);
-  node->zero_len = 0;
+  *lookup_out = lookup;
+  *is_found_out = is_found;
   return 0;
+}
+
+static void os_write_locked_data(struct Os* os,
+                                 struct OsSource source,
+                                 ptrdiff_t source_node,
+                                 struct Str* data_out,
+                                 ptrdiff_t* zero_len_out) {
+  switch (source.kind) {
+    case OS_SOURCE_BYTES:
+      *data_out = str_clone(source.bytes, &os->arena);
+      *zero_len_out = 0;
+      return;
+    case OS_SOURCE_FILE:
+      *data_out = os->nodes[source_node].data;
+      *zero_len_out = os->nodes[source_node].zero_len;
+      return;
+  }
+}
+
+static void os_write_locked_store(struct Os* os,
+                                  const struct OsMemoryLookup* lookup,
+                                  bool is_found,
+                                  struct Str data,
+                                  ptrdiff_t zero_len) {
+  if (is_found) {
+    // The write goes through the existing node, so every hard link to it sees the new contents.
+    struct OsMemoryNode* file = &os->nodes[lookup->node];
+    file->data = data;
+    file->zero_len = zero_len;
+    return;
+  }
+  // A missing file is created where the lookup ended, which for a dangling symlink is its target,
+  // as `open` with `O_CREAT` does.
+  const ptrdiff_t node = node_new(os, OS_MEMORY_NODE_FILE, data, lookup->dir);
+  os->nodes[node].zero_len = zero_len;
+  entry_add(os, lookup->dir, lookup->name, node);
 }
 
 static int mkdirs_report(struct Os* os, struct Str dir_path, const struct OsMemoryReport* report) {

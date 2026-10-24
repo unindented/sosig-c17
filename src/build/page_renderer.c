@@ -185,5 +185,6 @@ static int render_content_page_write(const struct ContentEntry* entry,
   // not create, so a failure reads `failed to write output for '<source>': <cause> ('<path>')`.
   struct Buf operation = {.arena = &scratch};
   buf_printf(&operation, "failed to write output for '%.*s'", STR_FMT(entry->source_path));
-  return os_write(os, entry->output_path, rendered_html, buf_str(&operation), log);
+  return os_write(os, entry->output_path, (struct OsSource){.bytes = rendered_html},
+                  buf_str(&operation), log);
 }

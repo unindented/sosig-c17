@@ -196,8 +196,9 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
-// `os_write` creates a new file with `0666` reduced by the process umask, so a restrictive umask is
-// not discarded, and overwriting an existing file keeps that file's mode.
+// `os_write` creates a new file with `0666` reduced by the process umask, from every source, so a
+// restrictive umask is not discarded and a copy does not take its source's mode. Overwriting an
+// existing file keeps that file's mode, because the write goes through the file.
 static void test_write_applies_umask_and_keeps_existing_mode(void) {
   struct Log log = test_log();
   char root_dir[] = "/tmp/sosig-fs-mode.XXXXXX";
@@ -208,19 +209,32 @@ static void test_write_applies_umask_and_keeps_existing_mode(void) {
   struct Arena arena = test_arena();
   struct Str created = fixture_path(root_dir, "created.html", &arena);
   struct Str existing = fixture_path(root_dir, "existing.html", &arena);
+  struct Str source = fixture_path(root_dir, "source.css", &arena);
+  struct Str copied = fixture_path(root_dir, "copied.css", &arena);
+  const struct OsSource copy = {.kind = OS_SOURCE_FILE, .file_path = source};
 
   // A restrictive umask is the case a hardcoded mode would discard. Restore it before asserting, so
   // a failure cannot leak the tightened value into later tests.
   const mode_t umask_before = umask(077);
-  TEST_CHECK(os_write(os_posix(), created, S("x"), S("op"), &log) == 0);
-  TEST_CHECK(os_write(os_posix(), existing, S("x"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(os_posix(), created, (struct OsSource){.bytes = S("x")}, S("op"), &log) == 0);
+  TEST_CHECK(os_write(os_posix(), existing, (struct OsSource){.bytes = S("x")}, S("op"), &log) ==
+             0);
   TEST_CHECK(chmod(existing.data, 0640) == 0);
-  TEST_CHECK(os_write(os_posix(), existing, S("y"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(os_posix(), existing, (struct OsSource){.bytes = S("y")}, S("op"), &log) ==
+             0);
+  // The source is given wide permissions the copy must not inherit.
+  TEST_CHECK(os_write(os_posix(), source, (struct OsSource){.bytes = S("body{}")}, S("op"), &log) ==
+             0);
+  TEST_CHECK(chmod(source.data, 0777) == 0);
+  TEST_CHECK(os_write(os_posix(), copied, copy, S("op"), &log) == 0);
   (void)umask(umask_before);
 
+  TEST_CHECK(test_log_is_empty(&log));
+  const mode_t expected = (mode_t)(0666 & ~077);
   struct stat st;
-  TEST_CHECK(stat(created.data, &st) == 0 && (st.st_mode & 07777) == (mode_t)(0666 & ~077));
+  TEST_CHECK(stat(created.data, &st) == 0 && (st.st_mode & 07777) == expected);
   TEST_CHECK(stat(existing.data, &st) == 0 && (st.st_mode & 07777) == 0640);
+  TEST_CHECK(stat(copied.data, &st) == 0 && (st.st_mode & 07777) == expected);
   remove_fixture_tree(root_dir);
 }
 
@@ -291,7 +305,8 @@ static void test_write_retries_interrupted_write(void) {
     (void)sigaction(SIGPIPE, &pipe_action_before, NULL);
     goto cleanup;
   }
-  rc = os_write(os_posix(), fifo, (struct Str){data, sizeof(data)}, S("op"), &log);
+  rc = os_write(os_posix(), fifo, (struct OsSource){.bytes = (struct Str){data, sizeof(data)}},
+                S("op"), &log);
   // Stop the timer before restoring the previous action, so no signal reaches the default one.
   (void)setitimer(ITIMER_REAL, &stopped, NULL);
   (void)sigaction(SIGALRM, &alarm_action_before, NULL);
@@ -322,6 +337,74 @@ cleanup:
   if (hold_fd >= 0) {
     (void)close(hold_fd);
   }
+  remove_fixture_tree(root_dir);
+}
+
+// A FIFO file source is rejected as not a regular file instead of blocking the write until a writer
+// opens it, and the destination is never created.
+static void test_write_rejects_fifo_source(void) {
+  struct Log log = test_log();
+  char root_dir[] = "/tmp/sosig-fs-copy-fifo.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
+    return;
+  }
+
+  struct Arena arena = test_arena();
+  struct Str fifo = fixture_path(root_dir, "source.png", &arena);
+  struct Str dest = fixture_path(root_dir, "copy.png", &arena);
+  if (!TEST_CHECK(mkfifo(fifo.data, 0600) == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(os_write(os_posix(), dest,
+                      (struct OsSource){.kind = OS_SOURCE_FILE, .file_path = fifo}, S("op"),
+                      &log) == -1);
+  TEST_CHECK(test_log_is(&log, "op: not a regular file ('%.*s')\n", STR_FMT(fifo)));
+  struct OsStat st;
+  TEST_CHECK(os_stat(os_posix(), dest, &st) == -1);
+
+cleanup:
+  remove_fixture_tree(root_dir);
+}
+
+// A write to an existing file in a directory that may not be written succeeds, because it goes
+// through the file, as a rebuild of a page in a read-only directory does. A new file there
+// fails, naming the destination.
+static void test_write_goes_through_existing_file_in_read_only_dir(void) {
+  struct Log log = test_log();
+  // Root bypasses the permission bits, so the new file would be created.
+  if (geteuid() == 0) {
+    return;
+  }
+
+  char root_dir[] = "/tmp/sosig-fs-write-read-only.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
+    return;
+  }
+
+  struct Arena arena = test_arena();
+  struct Str sealed_dir = fixture_path(root_dir, "sealed", &arena);
+  struct Str existing = fixture_path(root_dir, "sealed/a.html", &arena);
+  struct Str created = fixture_path(root_dir, "sealed/b.html", &arena);
+  TEST_CHECK(os_write(os_posix(), existing, (struct OsSource){.bytes = S("old")}, S("op"), &log) ==
+             0);
+  TEST_CHECK(chmod(sealed_dir.data, 0500) == 0);
+  const int existing_rc =
+      os_write(os_posix(), existing, (struct OsSource){.bytes = S("new")}, S("op"), &log);
+  struct Log created_log = test_log();
+  const int created_rc =
+      os_write(os_posix(), created, (struct OsSource){.bytes = S("new")}, S("op"), &created_log);
+  // Restore the mode before checking anything. The cleanup below cannot remove a directory it may
+  // not write.
+  (void)chmod(sealed_dir.data, 0700);
+
+  TEST_CHECK(existing_rc == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  struct Str data = {0};
+  TEST_CHECK(os_read(os_posix(), existing, TEST_FILE_LEN_MAX, &arena, &data, S("op"), &log) == 0);
+  TEST_CHECK(str_eq(data, S("new")));
+  TEST_CHECK(created_rc == -1);
+  TEST_CHECK(test_log_is(&created_log, "op: %s ('%.*s')\n", strerror(EACCES), STR_FMT(created)));
   remove_fixture_tree(root_dir);
 }
 
@@ -368,8 +451,8 @@ static void test_list_skips_fifo(void) {
   }
 
   struct Arena arena = test_arena();
-  TEST_CHECK(
-      os_write(os_posix(), fixture_path(root_dir, "file.md", &arena), S("b"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(os_posix(), fixture_path(root_dir, "file.md", &arena),
+                      (struct OsSource){.bytes = S("b")}, S("op"), &log) == 0);
   TEST_CHECK(mkfifo(fixture_path(root_dir, "fifo", &arena).data, 0600) == 0);
 
   struct OsEntry* entries = NULL;
@@ -402,7 +485,8 @@ static void test_list_rejects_unstatable_entry(void) {
   struct Arena arena = test_arena();
   struct Str sealed_dir = fixture_path(root_dir, "sealed", &arena);
   struct Str sealed_md = fixture_path(root_dir, "sealed/a.md", &arena);
-  TEST_CHECK(os_write(os_posix(), sealed_md, S("hidden"), S("op"), &log) == 0);
+  TEST_CHECK(
+      os_write(os_posix(), sealed_md, (struct OsSource){.bytes = S("hidden")}, S("op"), &log) == 0);
   TEST_CHECK(chmod(sealed_dir.data, 0400) == 0);
 
   struct PathList paths = {0};
@@ -472,7 +556,7 @@ static void test_walk_descends_deeper_than_open_file_limit(void) {
     leaf_dir = fixture_path(leaf_dir.data, "d", &arena);
   }
   const struct Str page = fixture_path(leaf_dir.data, "page.md", &arena);
-  TEST_CHECK(os_write(os_posix(), page, S("x"), S("op"), &log) == 0);
+  TEST_CHECK(os_write(os_posix(), page, (struct OsSource){.bytes = S("x")}, S("op"), &log) == 0);
 
   struct rlimit limit;
   struct rlimit lowered;
@@ -502,6 +586,9 @@ TEST_LIST = {
     {"write applies umask and keeps existing mode",
      test_write_applies_umask_and_keeps_existing_mode},
     {"write retries interrupted write", test_write_retries_interrupted_write},
+    {"write rejects fifo source", test_write_rejects_fifo_source},
+    {"write goes through existing file in read only dir",
+     test_write_goes_through_existing_file_in_read_only_dir},
     {"mkdirs rejects uncreatable component", test_mkdirs_rejects_uncreatable_component},
     {"list skips fifo", test_list_skips_fifo},
     {"list rejects unstatable entry", test_list_rejects_unstatable_entry},

@@ -448,7 +448,7 @@ static void test_load_rejects_nul_in_file(void) {
     goto cleanup;
   }
   if (!TEST_CHECK(os_write(os_posix(), str_from_cstr(temp_config.path),
-                           (struct Str){config_data, sizeof(config_data) - 1},
+                           (struct OsSource){.bytes = {config_data, sizeof(config_data) - 1}},
                            S("failed to write fixture"), &log) == 0)) {
     goto cleanup;
   }
