@@ -21,7 +21,7 @@ if(PROJECT_IS_TOP_LEVEL)
   sosig_enable_test_analysis(sosig_os_memory)
 endif()
 
-set(sosig_fixture_sites site_file_permalink site_index_permalink)
+set(sosig_fixture_sites site_file_permalink site_index_permalink site_nested_sections)
 
 function(sosig_add_golden_test name)
   cmake_parse_arguments(PARSE_ARGV 1 arg "" "SITE;EXPECTED" "")

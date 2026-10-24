@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>{{site.title}}</title>
+  {{> head}}
+</head>
+<body>
+  {{> nav}}
+  <ul>
+  {{#content_entries}}
+    <li><a href="{{url}}">{{title}}</a> <time>{{date}}</time></li>
+  {{/content_entries}}
+  </ul>
+  {{> footer}}
+</body>
+</html>

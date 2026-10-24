@@ -1,0 +1,6 @@
+base_url = "https://www.example.com/notes"
+title = "Field Notes & Static"
+author = "Sosig Tests"
+aggregate_templates = ["index.html", "field-notes/index.html"]
+feed_templates = ["feeds/atom.xml"]
+feed_count = 4

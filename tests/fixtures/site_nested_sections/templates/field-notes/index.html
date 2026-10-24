@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>Field notes - {{site.title}}</title>
+  {{> head}}
+</head>
+<body>
+  {{> nav}}
+  {{#content_entries}}
+  <section>
+    <h2><a href="{{url}}">{{title}}</a></h2>
+    <p>{{description}}</p>
+  </section>
+  {{/content_entries}}
+  {{> footer}}
+</body>
+</html>
