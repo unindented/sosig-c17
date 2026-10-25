@@ -218,7 +218,7 @@ The repository and release archives do not include starter templates or static f
 
 - POSIX-like system with CMake 3.25 or later, a C17 compiler such as Clang or GCC, and pthreads.
 - Optional build tools: `ninja` for the multi-config portability check.
-- Optional quality tools: `clang-format`, `clang-tidy`, `cppcheck`.
+- Optional quality tools: `clang-format`, `cwrap`, `clang-tidy`, `cppcheck`.
 
 Vendored dependencies are included under `vendor/`:
 
