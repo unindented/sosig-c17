@@ -368,8 +368,8 @@ cleanup:
 }
 
 // A write to an existing file in a directory that may not be written succeeds, because it goes
-// through the file, as a rebuild of a page in a read-only directory does. A new file there
-// fails, naming the destination.
+// through the file, as a rebuild of a page in a read-only directory does. A new file there fails,
+// naming the destination.
 static void test_write_goes_through_existing_file_in_read_only_dir(void) {
   struct Log log = test_log();
   // Root bypasses the permission bits, so the new file would be created.

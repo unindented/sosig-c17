@@ -52,11 +52,11 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * The first case catches an output that would be read back as an input without overwriting one: a
  * new Markdown file below `content_dir` is parsed as a source by the next build and one below
  * `static_dir` is copied as a static file by the next build, and a new file below `templates_dir`
- * can be read as a partial by the render of this same build. The caller has
- * already run `manifest_builder_check_output_dir`, so this compares each root by `(device, inode)`
- * against each existing directory between `output_dir` and the output. That catches a symlink
- * inside `output_dir` that leads into a root. A root that does not exist holds nothing to protect
- * and is skipped.
+ * can be read as a partial by the render of this same build. The caller has already run
+ * `manifest_builder_check_output_dir`, so this compares each root by `(device, inode)` against each
+ * existing directory between `output_dir` and the output. That catches a symlink inside
+ * `output_dir` that leads into a root. A root that does not exist holds nothing to protect and is
+ * skipped.
  *
  * The last case requires one path to be both a file and a directory.
  * `manifest_find_prefix_collision` checks for it after all paths are recorded. Both path checks
