@@ -310,25 +310,6 @@ static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
   TEST_CHECK(is_file_list(os, "public", expected, 1));
 }
 
-// A `content_dir` inside `output_dir` builds, because no output lands inside it: `output_dir = "."`
-// with `content_dir = "content"` puts the site beside its sources. A rebuild succeeds and repeats
-// the same outputs, so the walk does not read the first build's pages back as sources.
-static void test_builds_and_rebuilds_with_output_dir_holding_content_dir(void) {
-  struct Os* os = site_fixture("output_dir = \".\"\n");
-  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
-
-  // The config, the template, and the source, then the content page.
-  static const char* const expected[] = {"./content/hello.md", "./hello.html", "./sosig.toml",
-                                         "./templates/content.html"};
-  for (int i = 0; i < 2; i++) {
-    struct Log log = test_log();
-    TEST_CHECK(execute_build(os, &log) == 0);
-    TEST_CHECK(test_log_is_empty(&log));
-    TEST_MSG("build %d", i + 1);
-    TEST_CHECK(is_file_list(os, ".", expected, 4));
-  }
-}
-
 // An `output_dir` that a symlink inside `content_dir` reaches is left out of the content walk, so a
 // rebuild does not read the first build's outputs back as sources. The aggregate here publishes a
 // `.md` file, which the walk would otherwise parse as a content entry and claim as an input.
@@ -651,6 +632,25 @@ static void test_rejects_output_dir_inside_content_dir(void) {
   TEST_CHECK(!os_memory_has_path(os, "content/generated"));
 }
 
+// An `output_dir` that holds `content_dir`, such as `output_dir = "."`, is refused before content
+// is discovered, so the project's own files never share a tree with its outputs, and the refused
+// build writes nothing beside them.
+static void test_rejects_output_dir_holding_content_dir(void) {
+  struct Os* os = site_fixture("output_dir = \".\"\n");
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  const struct BuildOptions options = {.is_verbose = true};
+
+  TEST_CHECK(cmd_build_run(&options, os) == EXIT_CODE_FAILURE);
+  TEST_CHECK(os_memory_is_printed(os, 1, ""));
+  TEST_CHECK(os_memory_is_printed(os, 2,
+                                  "loading config\n"
+                                  "output directory would hold 'content_dir': '.'\n"));
+  // The config, the template, and the source.
+  static const char* const expected[] = {"./content/hello.md", "./sosig.toml",
+                                         "./templates/content.html"};
+  TEST_CHECK(is_file_list(os, ".", expected, 3));
+}
+
 // Slugging is lossy, so two different source names can claim one output path. The manifest reports
 // the collision and names both sources instead of letting the second write win. A non-ASCII byte
 // folds to hex, so `caf\xC3\xA9` produces the slug a literal `cafc3a9` also produces. The refused
@@ -946,8 +946,6 @@ TEST_LIST = {
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
-    {"builds and rebuilds with output dir holding content dir",
-     test_builds_and_rebuilds_with_output_dir_holding_content_dir},
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
     {"honors requested worker count", test_honors_requested_worker_count},
@@ -966,6 +964,7 @@ TEST_LIST = {
     {"reports unusable output dir", test_reports_unusable_output_dir},
     {"reports dangling output dir symlink", test_reports_dangling_output_dir_symlink},
     {"rejects output dir inside content dir", test_rejects_output_dir_inside_content_dir},
+    {"rejects output dir holding content dir", test_rejects_output_dir_holding_content_dir},
     {"rejects colliding source names", test_rejects_colliding_source_names},
     {"rejects static file colliding with content page",
      test_rejects_static_file_colliding_with_content_page},

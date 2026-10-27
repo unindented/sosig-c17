@@ -121,11 +121,33 @@ static void check_rejects_output_dir_in_root(const struct SiteConfig* site_confi
   const char* output_dir = str_cstr(site_config->output_dir, &arena);
   const bool had_output_dir = os_memory_has_path(os, output_dir);
   struct Log log = test_log();
-  TEST_CHECK(manifest_builder_check_output_dir(site_config, os, test_arena(), &log) == -1);
+  TEST_CHECK(manifest_builder_check_output_dir(site_config, CONFIG_PATH, os, test_arena(), &log) ==
+             -1);
   TEST_CHECK(test_log_is(&log, "output directory would write inside '%s': '%.*s'\n", root_key,
                          STR_FMT(site_config->output_dir)));
   TEST_CHECK(os_memory_has_path(os, output_dir) == had_output_dir);
   TEST_MSG("output_dir: '%s'", output_dir);
+}
+
+/**
+ * @brief Checks that `manifest_builder_check_output_dir` rejects an `output_dir` that holds an
+ *        input.
+ *
+ * @param site_config Configuration whose `output_dir` holds an input root or the configuration
+ *                    file. Must not be `NULL`.
+ * @param held        Held input as the diagnostic names it, such as `'content_dir'` or
+ *                    `the config`. Must not be `NULL`.
+ * @param os          Host the fixture is on. Must not be `NULL`.
+ */
+static void check_rejects_output_dir_holding(const struct SiteConfig* site_config,
+                                             const char* held,
+                                             struct Os* os) {
+  struct Log log = test_log();
+  TEST_CHECK(manifest_builder_check_output_dir(site_config, CONFIG_PATH, os, test_arena(), &log) ==
+             -1);
+  TEST_CHECK(test_log_is(&log, "output directory would hold %s: '%.*s'\n", held,
+                         STR_FMT(site_config->output_dir)));
+  TEST_MSG("output_dir: '%.*s'", STR_FMT(site_config->output_dir));
 }
 
 /**
@@ -211,16 +233,16 @@ static void test_accepts_output_beside_input_roots(void) {
   TEST_CHECK(test_log_is_empty(&log));
 }
 
-// An `output_dir` outside every input root passes the early check whether or not it exists yet.
-// That includes a directory whose name only starts with a root's name, and one that holds the roots
-// rather than lying inside them, which is the `output_dir = "."` layout.
+// An `output_dir` apart from every input root and the configuration file passes the early check
+// whether or not it exists yet. That includes a directory whose name only starts with a root's
+// name.
 static void test_check_output_dir_accepts_dir_outside_input_roots(void) {
   struct SiteConfig site_config;
   struct Os* os = init_manifest_fixture(&site_config);
   os_memory_write(os, "site/content/a.md", "source");
   os_memory_write(os, "site/static/a.css", "static");
+  os_memory_mkdir(os, "site/public");
   static const struct Str output_dirs[] = {
-      STR_INIT("site"),
       STR_INIT("site/public"),
       STR_INIT("site/contentx/new"),
       STR_INIT("site/content/../public/new"),
@@ -228,7 +250,8 @@ static void test_check_output_dir_accepts_dir_outside_input_roots(void) {
   for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(output_dirs) / sizeof(output_dirs[0])); i++) {
     site_config.output_dir = output_dirs[i];
     struct Log log = test_log();
-    TEST_CHECK(manifest_builder_check_output_dir(&site_config, os, test_arena(), &log) == 0);
+    TEST_CHECK(
+        manifest_builder_check_output_dir(&site_config, CONFIG_PATH, os, test_arena(), &log) == 0);
     TEST_CHECK(test_log_is_empty(&log));
     TEST_MSG("output_dir: '%.*s'", STR_FMT(output_dirs[i]));
   }
@@ -563,6 +586,39 @@ static void test_check_output_dir_rejects_dir_in_input_root(void) {
   check_rejects_output_dir_in_root(&site_config, "static_dir", os);
 }
 
+// An `output_dir` that holds an input root or the configuration file is rejected, because deleting
+// it to rebuild would delete the project's own files. The directories are compared by identity, so
+// a `..` spelling and a symlink to the holding directory are rejected the same way. Each root is
+// reported while it is held, and the configuration file once no root is.
+static void test_check_output_dir_rejects_dir_holding_input(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.md", "source");
+  os_memory_write(os, "site/static/a.css", "static");
+  os_memory_write(os, "elsewhere/content/a.md", "source");
+  os_memory_write(os, "elsewhere/templates/content.html", "content");
+  os_memory_write(os, "elsewhere/static/a.css", "static");
+  os_memory_symlink(os, "site", "site-link");
+  static const struct Str holding_dirs[] = {
+      STR_INIT("."),
+      STR_INIT("site"),
+      STR_INIT("site/content/.."),
+      STR_INIT("site-link"),
+  };
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(holding_dirs) / sizeof(holding_dirs[0])); i++) {
+    site_config.output_dir = holding_dirs[i];
+    check_rejects_output_dir_holding(&site_config, "'content_dir'", os);
+  }
+
+  site_config.output_dir = S("site");
+  site_config.content_dir = S("elsewhere/content");
+  check_rejects_output_dir_holding(&site_config, "'templates_dir'", os);
+  site_config.templates_dir = S("elsewhere/templates");
+  check_rejects_output_dir_holding(&site_config, "'static_dir'", os);
+  site_config.static_dir = S("elsewhere/static");
+  check_rejects_output_dir_holding(&site_config, "the config", os);
+}
+
 // An output that would land below `content_dir` is rejected even though no file sits at its path
 // yet, because the next build could parse it as a content source. The root is compared by identity,
 // so an alternate spelling of it, a symlink to it, and a symlink inside `output_dir` that leads
@@ -734,6 +790,7 @@ TEST_LIST = {
     {"rejects config overwrite", test_rejects_config_overwrite},
     {"rejects template overwrite", test_rejects_template_overwrite},
     {"check output dir rejects dir in input root", test_check_output_dir_rejects_dir_in_input_root},
+    {"check output dir rejects dir holding input", test_check_output_dir_rejects_dir_holding_input},
     {"rejects output in content dir", test_rejects_output_in_content_dir},
     {"rejects output in templates dir", test_rejects_output_in_templates_dir},
     {"rejects output in static dir", test_rejects_output_in_static_dir},

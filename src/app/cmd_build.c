@@ -474,7 +474,8 @@ static int load_build_inputs(struct BuildState* state, struct Log* log) {
       site_config->is_output_key_rejected) {
     return -1;
   }
-  if (manifest_builder_check_output_dir(&state->site_config, state->os, state->scratch, log) != 0) {
+  if (manifest_builder_check_output_dir(&state->site_config, SITE_CONFIG_PATH_DEFAULT, state->os,
+                                        state->scratch, log) != 0) {
     return -1;
   }
 
