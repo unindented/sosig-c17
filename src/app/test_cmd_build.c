@@ -13,6 +13,7 @@
 #include "core/path_list.h"
 #include "formats/toml.h"
 #include "os_memory.h"
+#include "runtime/os.h"
 #include "runtime/pool.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
@@ -310,6 +311,31 @@ static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
   TEST_CHECK(is_file_list(os, "public", expected, 1));
 }
 
+// A rebuild removes what the current inputs no longer produce: the page of a deleted entry, an old
+// section tree, and a file added to `output_dir` by hand. Every current output stays, and a third
+// build finds nothing more to remove.
+static void test_rebuild_removes_stale_outputs(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "content/goodbye.md", HELLO_ENTRY);
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(os_memory_has_path(os, "public/goodbye.html"));
+
+  TEST_CHECK(os_remove(os, S("content/goodbye.md"), S("failed to remove fixture"), &log) == 0);
+  os_memory_write(os, "public/notes.txt", "hand");
+  os_memory_write(os, "public/old-section/deeper/page.html", "old");
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  static const char* const expected[] = {"public/hello.html"};
+  TEST_CHECK(is_file_list(os, "public", expected, 1));
+  TEST_CHECK(!os_memory_has_path(os, "public/old-section"));
+
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(is_file_list(os, "public", expected, 1));
+}
+
 // An `output_dir` that a symlink inside `content_dir` reaches is left out of the content walk, so a
 // rebuild does not read the first build's outputs back as sources. The aggregate here publishes a
 // `.md` file, which the walk would otherwise parse as a content entry and claim as an input.
@@ -436,6 +462,8 @@ static void test_skips_empty_phases_in_verbose_output(void) {
                                   "rendering aggregate templates\n"
                                   "rendering feed templates\n"
                                   "copying static files\n"
+                                  "removing stale outputs\n"
+                                  "removed stale outputs: 0\n"
                                   "build complete\n"));
 }
 
@@ -704,6 +732,36 @@ static void test_reports_bad_template(void) {
                          "(while rendering 'content/hello.md')\n"));
 }
 
+// A build that fails removes nothing, so a stale file from an earlier build is still there after a
+// render failure.
+static void test_failed_build_removes_no_stale_output(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "templates/content.html", "{{#title}}{{title}}\n");
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "public/notes.txt", "hand");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(log.errors == 1);
+  TEST_CHECK(os_memory_is_file(os, "public/notes.txt", "hand"));
+}
+
+// A stale entry that cannot be removed fails the build after every output is written, and the
+// failure names the entry.
+static void test_reports_stale_output_that_cannot_be_removed(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "public/notes.txt", "hand");
+  os_memory_fail(os, OS_MEMORY_OP_REMOVE, "public/notes.txt", EACCES);
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "failed to remove stale output: %s ('public/notes.txt')\n",
+                         strerror(EACCES)));
+  TEST_CHECK(os_memory_has_path(os, "public/hello.html"));
+  TEST_CHECK(os_memory_has_path(os, "public/notes.txt"));
+}
+
 // Two content entries that fail to render through one missing template fail for one cause. The
 // report prints the first entry's line whole and counts the second, and both count as errors.
 // `test_reports_unwritable_output` covers two entries that fail for different causes.
@@ -946,6 +1004,7 @@ TEST_LIST = {
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
+    {"rebuild removes stale outputs", test_rebuild_removes_stale_outputs},
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
     {"honors requested worker count", test_honors_requested_worker_count},
@@ -969,6 +1028,9 @@ TEST_LIST = {
     {"rejects static file colliding with content page",
      test_rejects_static_file_colliding_with_content_page},
     {"reports bad template", test_reports_bad_template},
+    {"failed build removes no stale output", test_failed_build_removes_no_stale_output},
+    {"reports stale output that cannot be removed",
+     test_reports_stale_output_that_cannot_be_removed},
     {"reports a shared render failure once", test_reports_a_shared_render_failure_once},
     {"reports unwritable output", test_reports_unwritable_output},
     {"rejects unsafe permalink", test_rejects_unsafe_permalink},

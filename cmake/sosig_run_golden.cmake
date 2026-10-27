@@ -16,6 +16,12 @@ file(COPY "${SOSIG_SITE_DIR}/" DESTINATION "${SOSIG_SCRATCH_DIR}")
 set(actual_dir "${SOSIG_SCRATCH_DIR}/public")
 set(first_dir "${SOSIG_SCRATCH_DIR}/first/public")
 
+# A stale page and a stale directory tree sit in the output before the first build, as an earlier
+# build of other sources would leave them. The build removes them, so the comparison below fails on
+# either as an output not expected.
+file(WRITE "${actual_dir}/stale.html" "stale")
+file(WRITE "${actual_dir}/stale-dir/nested/stale.txt" "stale")
+
 execute_process(
   COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2
   WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"

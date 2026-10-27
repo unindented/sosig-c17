@@ -196,6 +196,8 @@ static void test_build_command_receives_parsed_options(void) {
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
                     "copying static files\n"
+                    "removing stale outputs\n"
+                    "removed stale outputs: 0\n"
                     "build complete\n") == 0);
   TEST_CHECK(access("public/hello.html", F_OK) == 0);
   TEST_CHECK(access("public/world.html", F_OK) == 0);
