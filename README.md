@@ -19,7 +19,7 @@ Download a prebuilt binary from the [Releases](https://github.com/unindented/sos
 
 `sosig` is command-based:
 
-- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the most worker threads the build runs. The value must be a positive integer. By default, the tool uses the detected CPU count. A build never runs more workers than it has content files, or more than four for each online CPU. Use `-v, --verbose` to print build progress to `stderr`.
+- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the most worker threads the build runs. The value must be a positive integer. By default, the tool uses the detected CPU count. A build never runs more workers than it has content files, or more than four for each online CPU. Use `-n, --dry-run` to report what the build would change without changing it, as [Dry run](#dry-run) describes. Use `-v, --verbose` to print build progress to `stderr`.
 - `sosig config`: Print the resolved project configuration as TOML.
 
 Run these commands for help:
@@ -27,6 +27,30 @@ Run these commands for help:
 - `sosig --version` (or `-V`): Print the version.
 - `sosig --help` (or `-h`): Print the list of available commands.
 - `sosig <command> --help`: Print the help for one command.
+
+### Dry run
+
+`sosig build --dry-run` runs every phase of a build, rendering every template, but changes nothing in `output_dir` and does not create it. It then prints one line to `stdout` for each path the build would change, as a mark, a tab, and the path:
+
+```
+write	public/about/index.html
+write	public/index.html
+write	public/feed.xml
+remove	public/old-post
+remove	public/old-post/index.html
+```
+
+- `write`: an output the build would write.
+- `remove`: a path that the build would remove because the current inputs no longer produce it, directories included.
+
+The `write` lines come first, in the order the build plans them: content pages newest first, then aggregates, feeds, and static files. The `remove` lines follow, sorted. `cut -f2-` gives the bare paths for `sort`, `diff`, or `comm`. A dry run reports a failure exactly as a build does, on `stderr` and with the same exit code, and then prints no listing. With `-v`, progress still goes to `stderr`, so the listing stays clean to pipe.
+
+A dry run that passes does not promise that the build will. It writes nothing, so it cannot find these failures:
+
+- No permission to write, or a full disk.
+- A static file that cannot be read. A dry run opens no file that it would copy.
+- An old file where a new output needs a directory, or an old directory where a new output needs a file, such as `public/blog` becoming `public/blog/index.html`.
+- An `output_dir` that exists but is not a usable directory.
 
 ### Site layout
 

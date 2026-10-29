@@ -12,6 +12,7 @@
 #include "build/job.h"
 #include "build/manifest_builder.h"
 #include "build/output_pruner.h"
+#include "build/output_writer.h"
 #include "build/page_renderer.h"
 #include "build/site_writer.h"
 #include "build/template.h"
@@ -133,6 +134,9 @@ struct BuildState {
   /** Intended output paths for this build, populated before any file is written. */
   struct Manifest manifest;
 
+  /** Writer every change under `output_dir` goes through, which marks `manifest`. */
+  struct OutputWriter writer;
+
   /**
    * One slot per source path, holding the entry parsed from it, so its length is
    * `source_paths.count`. A slot stays `NULL` for a draft and for a source that failed to parse.
@@ -251,7 +255,7 @@ static int load_build_inputs_require_read_roots(const struct BuildState* state, 
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Runs the phases from parsing to the last write.
+ * @brief Runs the phases from parsing to the prune, and in a dry run the report.
  *
  * Parses every source and checks every output path even after an error, then stops before the first
  * write when `log` holds any error, an earlier phase's included.
@@ -313,7 +317,7 @@ static int populate_output_manifest(struct BuildState* state, struct Log* log)
  * @brief Creates the output directory once the manifest has accepted every output path.
  *
  * Nothing before this phase writes, so a build the manifest or an earlier phase refuses leaves the
- * filesystem as it found it, without even an empty `output_dir`.
+ * filesystem as it found it, without even an empty `output_dir`. A dry run creates nothing.
  *
  * @param state Build state supplying `output_dir`. Must not be `NULL`.
  * @param log   Log that receives the failure. Must not be `NULL`.
@@ -361,6 +365,18 @@ static int prune_stale_outputs(struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
 
 /**
+ * @brief Prints to `stdout` what a dry run would have written, kept, and removed, as
+ *        `output_writer_report` lists it.
+ *
+ * @param state Build state whose writer has run the dry run. Must not be `NULL`.
+ * @param log   Log that receives every output path no site marked, or the failed print. Must not be
+ *              `NULL`.
+ * @return `0` once the listing is printed, or `-1` when an output path was neither written nor kept
+ *         or the print fails.
+ */
+static int report_dry_run(struct BuildState* state, struct Log* log) __attribute__((nonnull(1, 2)));
+
+/**
  * @brief Prints a formatted status line to `stderr` when the build is verbose.
  *
  * The line is formatted in a copy of the main thread's scratch arena and printed in one `os_print`
@@ -376,10 +392,9 @@ static void build_verbose(const struct BuildState* state, const char* format, ..
 enum ExitCode cmd_build_run(const struct BuildOptions* options, struct Os* os) {
   struct BuildMemory memory =
       cmd_build_run_reserve(cmd_build_run_worker_count(options->worker_count));
-  const struct BuildOptions resolved = {
-      .worker_count = memory.worker_count,
-      .is_verbose = options->is_verbose,
-  };
+  // Every option is carried as it was asked for, except the worker count the memory allows.
+  struct BuildOptions resolved = *options;
+  resolved.worker_count = memory.worker_count;
   struct Log log = {.buf = {.arena = &memory.log_arena}};
   memory_oom_set_log(&log);
   enum ExitCode rc = EXIT_CODE_OK;
@@ -465,6 +480,13 @@ static void build_state_init(struct BuildState* state,
       .perm = perm,
       .scratch = scratch,
       .worker_arenas = worker_arenas,
+      .writer =
+          {
+              .manifest = &state->manifest,
+              .os = os,
+              .is_dry_run = options->is_dry_run,
+              .perm = &state->perm,
+          },
       .worker_count = options->worker_count,
       .is_verbose = options->is_verbose,
   };
@@ -590,6 +612,9 @@ static int run_build_phases(struct BuildState* state, struct Log* log) {
   if (write_generated_site(state, log) != 0 || prune_stale_outputs(state, log) != 0) {
     return -1;
   }
+  if (state->writer.is_dry_run && report_dry_run(state, log) != 0) {
+    return -1;
+  }
 
   build_verbose(state, "build complete");
   return 0;
@@ -654,8 +679,8 @@ static int populate_output_manifest(struct BuildState* state, struct Log* log) {
 static int prepare_output_dir(const struct BuildState* state, struct Log* log) {
   // A failure names the component that failed, which is more precise than the configured root, so
   // the root is not repeated.
-  return os_mkdirs(state->os, state->site_config.output_dir,
-                   S("failed to prepare output directory"), log);
+  return output_writer_mkdirs(&state->writer, state->site_config.output_dir,
+                              S("failed to prepare output directory"), log);
 }
 
 static int render_content_pages(struct BuildState* state, struct Log* log) {
@@ -664,7 +689,7 @@ static int render_content_pages(struct BuildState* state, struct Log* log) {
   }
   build_verbose(state, "rendering content, workers: %td", state->worker_count);
   return page_renderer_render_pages(
-      &state->site_config, (const struct ContentEntry* const*)state->source_entries,
+      &state->writer, &state->site_config, (const struct ContentEntry* const*)state->source_entries,
       state->source_paths.count, (const struct ContentEntry* const*)state->content_entries,
       state->content_entry_count, state->site_updated, state->worker_count, state->worker_arenas,
       state->is_verbose, state->os, state->scratch, log);
@@ -675,7 +700,7 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
   const struct SiteConfig* site_config = &state->site_config;
   const struct ContentEntry* const* entries =
       (const struct ContentEntry* const*)state->content_entries;
-  if (site_writer_write_templates(site_config, site_config->aggregate_templates,
+  if (site_writer_write_templates(&state->writer, site_config, site_config->aggregate_templates,
                                   site_config->aggregate_template_count, entries,
                                   state->content_entry_count, state->site_updated, state->os,
                                   state->perm, state->scratch, log) != 0) {
@@ -685,24 +710,28 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
   const ptrdiff_t feed_entry_count = state->content_entry_count < site_config->feed_count
                                          ? state->content_entry_count
                                          : site_config->feed_count;
-  if (site_writer_write_templates(site_config, site_config->feed_templates,
+  if (site_writer_write_templates(&state->writer, site_config, site_config->feed_templates,
                                   site_config->feed_template_count, entries, feed_entry_count,
                                   state->site_updated, state->os, state->perm, state->scratch,
                                   log) != 0) {
     return -1;
   }
   build_verbose(state, "copying static files");
-  return site_writer_copy_static_files(site_config, &state->static_paths, state->os, state->scratch,
-                                       log);
+  return site_writer_copy_static_files(&state->writer, site_config, &state->static_paths,
+                                       state->scratch, log);
 }
 
 static int prune_stale_outputs(struct BuildState* state, struct Log* log) {
   build_verbose(state, "removing stale outputs");
   ptrdiff_t removed_count = 0;
-  const int rc = output_pruner_prune(&state->manifest, &state->site_config, state->os,
-                                     state->scratch, &removed_count, log);
+  const int rc = output_pruner_prune(&state->writer, &state->site_config, state->os, state->scratch,
+                                     &removed_count, log);
   build_verbose(state, "removed stale outputs: %td", removed_count);
   return rc;
+}
+
+static int report_dry_run(struct BuildState* state, struct Log* log) {
+  return output_writer_report(&state->writer, state->scratch, log);
 }
 
 // A status line runs on the main thread between phases, so it does not need the lock that

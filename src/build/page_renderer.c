@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "build/job.h"
+#include "build/output_writer.h"
 #include "build/template.h"
 #include "domain/content_entry.h"
 #include "domain/site_config.h"
@@ -14,7 +15,8 @@
 #include "shared/str.h"
 
 /**
- * Worker context shared by all content entry page render jobs. Every field is read-only to a job.
+ * Worker context shared by all content entry page render jobs. Every field is read-only to a job,
+ * apart from the mark each job's write leaves on its own path in the writer's manifest.
  */
 struct PageRenderContext {
   /**
@@ -29,8 +31,11 @@ struct PageRenderContext {
   /** Template directory root shared by every render job. */
   struct Str templates_dir;
 
-  /** Host every job reads its templates from and writes its page to. */
+  /** Host every job reads its templates from. */
   struct Os* os;
+
+  /** Writer every job writes its page through. */
+  const struct OutputWriter* writer;
 
   /** One entry slot per source path, or `NULL` where no entry was parsed. No entry is written. */
   const struct ContentEntry* const* source_entries;
@@ -82,20 +87,21 @@ static int render_content_page_template(struct Str templates_dir,
  * Runs on a worker thread. `os_write` creates missing parent directories, and a sibling job
  * creating the same parent at the same moment is not a failure.
  *
+ * @param writer        Writer the page is written through. Must not be `NULL`.
  * @param entry         Entry whose `output_path` receives the page. Must not be `NULL`.
  * @param rendered_html Page HTML to write.
- * @param os            Host the page is written to. Must not be `NULL`.
  * @param scratch       Arena for the failure message's operation.
  * @param log           Log of the job, which receives the failure. Must not be `NULL`.
  * @return `0` on success, or `-1` on a write failure.
  */
-static int render_content_page_write(const struct ContentEntry* entry,
+static int render_content_page_write(const struct OutputWriter* writer,
+                                     const struct ContentEntry* entry,
                                      struct Str rendered_html,
-                                     struct Os* os,
                                      struct Arena scratch,
-                                     struct Log* log) __attribute__((nonnull(1, 3, 5)));
+                                     struct Log* log) __attribute__((nonnull(1, 2, 5)));
 
-int page_renderer_render_pages(const struct SiteConfig* site_config,
+int page_renderer_render_pages(const struct OutputWriter* writer,
+                               const struct SiteConfig* site_config,
                                const struct ContentEntry* const* source_entries,
                                ptrdiff_t source_entry_count,
                                const struct ContentEntry* const* content_entries,
@@ -118,6 +124,7 @@ int page_renderer_render_pages(const struct SiteConfig* site_config,
           },
       .templates_dir = site_config->templates_dir,
       .os = os,
+      .writer = writer,
       .source_entries = source_entries,
   };
   return job_run(source_entry_count, worker_count, worker_arenas, render_content_page_job, &context,
@@ -152,7 +159,7 @@ static int render_content_page_job(ptrdiff_t index,
                                       arenas->scratch, &rendered_html, log);
     if (rc == 0) {
       // The render has returned, so its temporaries are dead and the write can reuse the region.
-      rc = render_content_page_write(entry, rendered_html, context->os, arenas->scratch, log);
+      rc = render_content_page_write(context->writer, entry, rendered_html, arenas->scratch, log);
       // The page is written, so its pages are given back rather than kept resident in the worker's
       // region. A large page costs far more to render than to fault in again.
       arena_discard(&perm, rendered_html.data, rendered_html.len);
@@ -176,15 +183,15 @@ static int render_content_page_template(struct Str templates_dir,
                               log);
 }
 
-static int render_content_page_write(const struct ContentEntry* entry,
+static int render_content_page_write(const struct OutputWriter* writer,
+                                     const struct ContentEntry* entry,
                                      struct Str rendered_html,
-                                     struct Os* os,
                                      struct Arena scratch,
                                      struct Log* log) {
   // The operation names the source, and the write names the output path or the directory it could
   // not create, so a failure reads `failed to write output for '<source>': <cause> ('<path>')`.
   struct Buf operation = {.arena = &scratch};
   buf_printf(&operation, "failed to write output for '%.*s'", STR_FMT(entry->source_path));
-  return os_write(os, entry->output_path, (struct OsSource){.bytes = rendered_html},
-                  buf_str(&operation), log);
+  return output_writer_write(writer, entry->output_path, (struct OsSource){.bytes = rendered_html},
+                             buf_str(&operation), log);
 }

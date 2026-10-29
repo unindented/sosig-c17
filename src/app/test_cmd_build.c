@@ -59,6 +59,18 @@ static const char* const HELLO_ENTRY =
 /** Page `HELLO_ENTRY` renders to through `CONTENT_TEMPLATE`. */
 static const char* const HELLO_PAGE = "<p>Body</p>\n\n";
 
+/** Files `every_output_kind_fixture` builds to, in byte order. */
+static const char* const EVERY_OUTPUT_KIND_FILES[] = {
+    "public/alpha.html", "public/beta.html", "public/feed.xml",
+    "public/index.html", "public/sosig.css",
+};
+
+/** Number of paths in `EVERY_OUTPUT_KIND_FILES`. */
+enum {
+  EVERY_OUTPUT_KIND_FILE_COUNT = sizeof(EVERY_OUTPUT_KIND_FILES) /
+  sizeof(EVERY_OUTPUT_KIND_FILES[0])
+};
+
 /**
  * @brief Returns a host holding `sosig.toml` and the content template.
  *
@@ -76,6 +88,35 @@ static struct Os* site_fixture(const char* config_extra) {
   }
   buf_append(&config, str_from_cstr(SITE_CONFIG));
   os_memory_write(os, "sosig.toml", buf_cstr(&config));
+  return os;
+}
+
+/**
+ * @brief Returns a host holding a site with one output of every kind: two content pages beside a
+ *        draft, an aggregate, a feed, and a static file, which build to `EVERY_OUTPUT_KIND_FILES`.
+ *
+ * @return The host.
+ */
+static struct Os* every_output_kind_fixture(void) {
+  // The shared config turns off aggregates and feeds, so this fixture writes its own.
+  struct Os* os = os_memory();
+  os_memory_write(os, "sosig.toml",
+                  "base_url = \"https://example.com\"\n"
+                  "title = \"Site\"\n"
+                  "author = \"Author\"\n"
+                  "aggregate_templates = [\"index.html\"]\n"
+                  "feed_templates = [\"feed.xml\"]\n");
+  os_memory_write(os, "content/alpha.md",
+                  "+++\ntitle = \"Alpha\"\ndate = 2026-07-02T00:00:00Z\n+++\nAlpha body\n");
+  os_memory_write(os, "content/beta.md",
+                  "+++\ntitle = \"Beta\"\ndate = 2026-07-01T00:00:00Z\n+++\nBeta body\n");
+  os_memory_write(os, "content/draft.md",
+                  "+++\ntitle = \"Draft\"\ndate = 2026-07-03T00:00:00Z\ndraft = true\n+++\n"
+                  "Draft body\n");
+  os_memory_write(os, "templates/content.html", CONTENT_TEMPLATE);
+  os_memory_write(os, "templates/index.html", "index\n");
+  os_memory_write(os, "templates/feed.xml", "feed\n");
+  os_memory_write(os, "static/sosig.css", "body{}\n");
   return os;
 }
 
@@ -111,6 +152,18 @@ static int execute_build_with(const struct BuildOptions* options, struct Os* os,
  */
 static int execute_build(struct Os* os, struct Log* log) {
   const struct BuildOptions options = {0};
+  return execute_build_with(&options, os, log);
+}
+
+/**
+ * @brief Executes a dry run with otherwise default options and collects its errors.
+ *
+ * @param os  Host the dry run runs against. Must not be `NULL`.
+ * @param log Log that receives every build error. Must not be `NULL`.
+ * @return `0` on success, or `-1` on build failure.
+ */
+static int execute_dry_run(struct Os* os, struct Log* log) {
+  const struct BuildOptions options = {.is_dry_run = true};
   return execute_build_with(&options, os, log);
 }
 
@@ -166,6 +219,37 @@ static bool has_printed_line(struct Os* os, int fd, const char* line) {
 }
 
 /**
+ * @brief Reports whether the `write` lines a dry run printed name exactly the files below `public`
+ *        on another host, printing the listing when they do not.
+ *
+ * Every line must be a `write` line, and the manifest makes the listed paths distinct, so a count
+ * that matches and a path for each line that exists there make the two sets equal.
+ *
+ * @param dry_run_os Host the dry run printed its listing on. Must not be `NULL`.
+ * @param real_os    Host a real build of the same site wrote. Must not be `NULL`.
+ * @return `true` when the sets are equal.
+ */
+static bool is_write_set_of(struct Os* dry_run_os, struct Os* real_os) {
+  const struct Str printed = os_memory_printed(dry_run_os, 1);
+  const struct PathList files = os_memory_files(real_os, "public");
+  struct Arena arena = test_arena();
+  ptrdiff_t line_count = 0;
+  bool is_equal = true;
+  for (struct StrCut cut = str_cut(printed, '\n'); cut.is_found; cut = str_cut(cut.tail, '\n')) {
+    const struct StrCut fields = str_cut(cut.head, '\t');
+    is_equal = is_equal && str_eq(fields.head, S("write")) &&
+               os_memory_has_path(real_os, str_cstr(fields.tail, &arena));
+    line_count++;
+  }
+  is_equal = is_equal && line_count == files.count;
+  TEST_CHECK_(is_equal, "the dry run lists exactly the files a real build writes");
+  if (!is_equal) {
+    TEST_MSG("printed: '%.*s'", STR_FMT(printed));
+  }
+  return is_equal;
+}
+
+/**
  * @brief Runs a one-worker build in `TINY_ARENA_SIZE` bytes of arenas. Run through `test_is_oom`,
  *        which calls it in a child process.
  *
@@ -198,34 +282,12 @@ static void test_honors_configured_content_template(void) {
 // A build writes exactly the manifest's intended outputs: content pages, aggregate and feed
 // outputs, static files, and nothing for drafts.
 static void test_writes_exactly_manifest_outputs(void) {
-  // The shared config turns off aggregates and feeds, so this fixture writes its own.
-  struct Os* os = os_memory();
-  os_memory_write(os, "sosig.toml",
-                  "base_url = \"https://example.com\"\n"
-                  "title = \"Site\"\n"
-                  "author = \"Author\"\n"
-                  "aggregate_templates = [\"index.html\"]\n"
-                  "feed_templates = [\"feed.xml\"]\n");
-  os_memory_write(os, "content/alpha.md",
-                  "+++\ntitle = \"Alpha\"\ndate = 2026-07-02T00:00:00Z\n+++\nAlpha body\n");
-  os_memory_write(os, "content/beta.md",
-                  "+++\ntitle = \"Beta\"\ndate = 2026-07-01T00:00:00Z\n+++\nBeta body\n");
-  os_memory_write(os, "content/draft.md",
-                  "+++\ntitle = \"Draft\"\ndate = 2026-07-03T00:00:00Z\ndraft = true\n+++\n"
-                  "Draft body\n");
-  os_memory_write(os, "templates/content.html", CONTENT_TEMPLATE);
-  os_memory_write(os, "templates/index.html", "index\n");
-  os_memory_write(os, "templates/feed.xml", "feed\n");
-  os_memory_write(os, "static/sosig.css", "body{}\n");
+  struct Os* os = every_output_kind_fixture();
 
   struct Log log = test_log();
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  static const char* const expected[] = {
-      "public/alpha.html", "public/beta.html", "public/feed.xml",
-      "public/index.html", "public/sosig.css",
-  };
-  TEST_CHECK(is_file_list(os, "public", expected, sizeof(expected) / sizeof(expected[0])));
+  TEST_CHECK(is_file_list(os, "public", EVERY_OUTPUT_KIND_FILES, EVERY_OUTPUT_KIND_FILE_COUNT));
 }
 
 // A trailing slash on `content_dir` does not leak the directory name into the output tree. The
@@ -360,6 +422,84 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
   // The page and the aggregate, and no page rendered from the aggregate's own output.
   static const char* const expected[] = {"public/hello.html", "public/notes.md"};
   TEST_CHECK(is_file_list(os, "public", expected, 2));
+}
+
+// A dry run of a site with every kind of output succeeds and creates nothing, not even
+// `output_dir`, which shows `prepare_output_dir` was withheld. Its `write` lines name exactly the
+// files a real build of the same site writes, so no site left a path pending, and they come in
+// manifest order: content pages newest first, then the aggregate, the feed and the static file.
+static void test_dry_run_lists_every_output_and_writes_nothing(void) {
+  struct Os* real_os = every_output_kind_fixture();
+  struct Os* dry_run_os = every_output_kind_fixture();
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(real_os, &log) == 0);
+  TEST_CHECK(execute_dry_run(dry_run_os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(!os_memory_has_path(dry_run_os, "public"));
+  TEST_CHECK(is_write_set_of(dry_run_os, real_os));
+  TEST_CHECK(os_memory_is_printed(dry_run_os, 1,
+                                  "write\tpublic/alpha.html\n"
+                                  "write\tpublic/beta.html\n"
+                                  "write\tpublic/index.html\n"
+                                  "write\tpublic/feed.xml\n"
+                                  "write\tpublic/sosig.css\n"));
+}
+
+// After a real build, a dry run lists the one output, then what the prune would remove, sorted: a
+// deleted entry's page, a hand-added file, and a stale directory with its page. It leaves each of
+// them in place. Its verbose status counts the `remove` lines, on `stderr`, and adds nothing to the
+// listing.
+static void test_dry_run_lists_stale_outputs_and_keeps_them(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "content/goodbye.md", HELLO_ENTRY);
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(os_remove(os, S("content/goodbye.md"), S("failed to remove fixture"), &log) == 0);
+  os_memory_write(os, "public/notes.txt", "hand");
+  os_memory_write(os, "public/old/page.html", "old");
+
+  const struct BuildOptions options = {.is_verbose = true, .is_dry_run = true};
+  TEST_CHECK(execute_build_with(&options, os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_printed(os, 1,
+                                  "write\tpublic/hello.html\n"
+                                  "remove\tpublic/goodbye.html\n"
+                                  "remove\tpublic/notes.txt\n"
+                                  "remove\tpublic/old\n"
+                                  "remove\tpublic/old/page.html\n"));
+  TEST_CHECK(has_printed_line(os, 2, "removed stale outputs: 4"));
+  TEST_CHECK(os_memory_is_file(os, "public/goodbye.html", HELLO_PAGE));
+  TEST_CHECK(os_memory_is_file(os, "public/notes.txt", "hand"));
+  TEST_CHECK(os_memory_is_file(os, "public/old/page.html", "old"));
+}
+
+// A dry run over an existing tree, where every write and every removal below `output_dir` would
+// fail, still succeeds, so it attempts neither.
+static void test_dry_run_attempts_no_change(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  os_memory_write(os, "public/notes.txt", "hand");
+  os_memory_fail(os, OS_MEMORY_OP_WRITE, "public", EACCES);
+  os_memory_fail(os, OS_MEMORY_OP_REMOVE, "public", EACCES);
+
+  TEST_CHECK(execute_dry_run(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/notes.txt", "hand"));
+}
+
+// A dry run leaves nothing behind that a later build sees: a real build after it writes the same
+// files as a real build alone.
+static void test_dry_run_leaves_no_state(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Log log = test_log();
+  TEST_CHECK(execute_dry_run(os, &log) == 0);
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(is_file_list(os, "public", EVERY_OUTPUT_KIND_FILES, EVERY_OUTPUT_KIND_FILE_COUNT));
+  TEST_CHECK(os_memory_is_file(os, "public/index.html", "index\n"));
 }
 
 // A caller-supplied `worker_count` reaches every pool instead of being replaced by the detected
@@ -732,6 +872,36 @@ static void test_reports_bad_template(void) {
                          "(while rendering 'content/hello.md')\n"));
 }
 
+// A dry run renders every template, so a content template that does not compile fails it with the
+// diagnostic a real build gives, and no listing is printed.
+static void test_dry_run_reports_bad_template(void) {
+  struct Os* os = site_fixture("content_template = \"broken.html\"\n");
+  os_memory_write(os, "templates/broken.html", "{{#title}}{{title}}\n");
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_dry_run(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "section-opening tag has no closer at line 1, column 1 (in 'broken.html') "
+                         "(while rendering 'content/hello.md')\n"));
+  TEST_CHECK(os_memory_is_printed(os, 1, ""));
+}
+
+// A dry run of two entries on one output path fails with the duplicate-path diagnostic a real build
+// gives, and no listing is printed.
+static void test_dry_run_rejects_duplicate_output(void) {
+  struct Os* os = site_fixture("permalink = \"/{slug}.html\"\n");
+  os_memory_write(os, "content/a/post.md", HELLO_ENTRY);
+  os_memory_write(os, "content/b/post.md", HELLO_ENTRY);
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_dry_run(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'content/a/post.md' and "
+                         "'content/b/post.md': 'public/post.html'\n"));
+  TEST_CHECK(os_memory_is_printed(os, 1, ""));
+}
+
 // A build that fails removes nothing, so a stale file from an earlier build is still there after a
 // render failure.
 static void test_failed_build_removes_no_stale_output(void) {
@@ -1007,6 +1177,11 @@ TEST_LIST = {
     {"rebuild removes stale outputs", test_rebuild_removes_stale_outputs},
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
+    {"dry run lists every output and writes nothing",
+     test_dry_run_lists_every_output_and_writes_nothing},
+    {"dry run lists stale outputs and keeps them", test_dry_run_lists_stale_outputs_and_keeps_them},
+    {"dry run attempts no change", test_dry_run_attempts_no_change},
+    {"dry run leaves no state", test_dry_run_leaves_no_state},
     {"honors requested worker count", test_honors_requested_worker_count},
     {"caps the worker count at four per CPU", test_caps_the_worker_count_at_four_per_cpu},
     {"cuts workers before arenas under limit", test_cuts_workers_before_arenas_under_limit},
@@ -1028,6 +1203,8 @@ TEST_LIST = {
     {"rejects static file colliding with content page",
      test_rejects_static_file_colliding_with_content_page},
     {"reports bad template", test_reports_bad_template},
+    {"dry run reports bad template", test_dry_run_reports_bad_template},
+    {"dry run rejects duplicate output", test_dry_run_rejects_duplicate_output},
     {"failed build removes no stale output", test_failed_build_removes_no_stale_output},
     {"reports stale output that cannot be removed",
      test_reports_stale_output_that_cannot_be_removed},

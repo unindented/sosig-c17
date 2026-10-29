@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "build/output_writer.h"
 #include "build/template.h"
 #include "core/path.h"
 #include "core/path_list.h"
@@ -20,6 +21,7 @@
 /**
  * @brief Renders one configured template and writes it to its matching output path.
  *
+ * @param writer        Writer the output is written through. Must not be `NULL`.
  * @param templates_dir Template directory root.
  * @param output_dir    Output directory the template name is rooted under.
  * @param template_name Safe relative template name to render. `manifest_builder_populate` already
@@ -28,24 +30,25 @@
  *                      re-check, so an overlong name reaching here fails as an opaque write error
  *                      from the OS rather than with a diagnostic naming the limit.
  * @param context       Template context for this render. Must not be `NULL`.
- * @param os            Host the template is read from and the output written to. Must not be
- *                      `NULL`.
+ * @param os            Host the template is read from. Must not be `NULL`.
  * @param output        Arena that holds the rendered output until it is written.
  * @param scratch       Arena for the render's temporaries and the output path.
  * @param log           Log that receives the first failure. Its arena must be none of the others.
  *                      Must not be `NULL`.
  * @return `0` on success, or `-1` on a render or write failure.
  */
-static int write_rendered_template(struct Str templates_dir,
+static int write_rendered_template(const struct OutputWriter* writer,
+                                   struct Str templates_dir,
                                    struct Str output_dir,
                                    struct Str template_name,
                                    const struct TemplateContext* context,
                                    struct Os* os,
                                    struct Arena output,
                                    struct Arena scratch,
-                                   struct Log* log) __attribute__((nonnull(4, 5, 8)));
+                                   struct Log* log) __attribute__((nonnull(1, 5, 6, 9)));
 
-int site_writer_write_templates(const struct SiteConfig* site_config,
+int site_writer_write_templates(const struct OutputWriter* writer,
+                                const struct SiteConfig* site_config,
                                 const struct Str* template_names,
                                 ptrdiff_t template_count,
                                 const struct ContentEntry* const* content_entries,
@@ -63,7 +66,7 @@ int site_writer_write_templates(const struct SiteConfig* site_config,
       .site_updated = site_updated,
   };
   for (ptrdiff_t i = 0; i < template_count; i++) {
-    if (write_rendered_template(site_config->templates_dir, site_config->output_dir,
+    if (write_rendered_template(writer, site_config->templates_dir, site_config->output_dir,
                                 template_names[i], &context, os, output, scratch, log) != 0) {
       return -1;
     }
@@ -71,7 +74,8 @@ int site_writer_write_templates(const struct SiteConfig* site_config,
   return 0;
 }
 
-static int write_rendered_template(struct Str templates_dir,
+static int write_rendered_template(const struct OutputWriter* writer,
+                                   struct Str templates_dir,
                                    struct Str output_dir,
                                    struct Str template_name,
                                    const struct TemplateContext* context,
@@ -87,13 +91,13 @@ static int write_rendered_template(struct Str templates_dir,
   }
   // The render has returned, so its temporaries in `scratch` are dead and the path can reuse them.
   const struct Str output_path = path_join(output_dir, template_name, &scratch);
-  return os_write(os, output_path, (struct OsSource){.bytes = rendered_html},
-                  S("failed to write template output"), log);
+  return output_writer_write(writer, output_path, (struct OsSource){.bytes = rendered_html},
+                             S("failed to write template output"), log);
 }
 
-int site_writer_copy_static_files(const struct SiteConfig* site_config,
+int site_writer_copy_static_files(const struct OutputWriter* writer,
+                                  const struct SiteConfig* site_config,
                                   const struct PathList* static_paths,
-                                  struct Os* os,
                                   struct Arena scratch,
                                   struct Log* log) {
   for (ptrdiff_t i = 0; i < static_paths->count; i++) {
@@ -105,7 +109,8 @@ int site_writer_copy_static_files(const struct SiteConfig* site_config,
     const struct Str output_path = path_join(site_config->output_dir, relative, &copy_scratch);
     // The copy names the path that failed, the static file or its destination, which mirrors it.
     const struct OsSource source = {.kind = OS_SOURCE_FILE, .file_path = static_paths->items[i]};
-    if (os_write(os, output_path, source, S("failed to copy static file"), log) != 0) {
+    if (output_writer_write(writer, output_path, source, S("failed to copy static file"), log) !=
+        0) {
       return -1;
     }
   }

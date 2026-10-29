@@ -7,8 +7,10 @@
 #include <string.h>
 
 #include "build/job.h"
+#include "build/output_writer.h"
 #include "build/page_renderer.h"
 #include "domain/content_entry.h"
+#include "domain/manifest.h"
 #include "domain/site_config.h"
 #include "os_memory.h"
 #include "shared/arena.h"
@@ -72,7 +74,8 @@ static void init_older_and_newer(struct ContentEntry* older,
 /**
  * @brief Runs the page phase over entry slots with the default site configuration.
  *
- * Collects, sorts and dates the published entries the way the build does before its page phase.
+ * Collects, sorts and dates the published entries the way the build does before its page phase, and
+ * records each one's output path in the manifest of the writer the pages are written through.
  *
  * @param source_entries     Entry slots, each a parsed entry or `NULL` for a draft. Must not be
  *                           `NULL`.
@@ -98,10 +101,13 @@ static int render_entry_slots(struct ContentEntry* const* source_entries,
   }
   struct ContentEntry** entries =
       arena_new(&perm, source_entry_count > 0 ? source_entry_count : 1, struct ContentEntry*);
+  struct Manifest manifest = {0};
   ptrdiff_t entry_count = 0;
   for (ptrdiff_t i = 0; i < source_entry_count; i++) {
     if (source_entries[i] != NULL) {
       entries[entry_count++] = source_entries[i];
+      (void)manifest_add(&manifest, source_entries[i]->output_path, source_entries[i]->source_path,
+                         &perm, NULL);
     }
   }
   content_entry_sort(entries, entry_count);
@@ -110,10 +116,11 @@ static int render_entry_slots(struct ContentEntry* const* source_entries,
 
   struct SiteConfig site_config;
   site_config_init(&site_config);
-  return page_renderer_render_pages(&site_config, (const struct ContentEntry* const*)source_entries,
-                                    source_entry_count, (const struct ContentEntry* const*)entries,
-                                    entry_count, site_updated, worker_count, worker_arenas, false,
-                                    os, test_arena(), log);
+  const struct OutputWriter writer = {.manifest = &manifest, .os = os};
+  return page_renderer_render_pages(
+      &writer, &site_config, (const struct ContentEntry* const*)source_entries, source_entry_count,
+      (const struct ContentEntry* const*)entries, entry_count, site_updated, worker_count,
+      worker_arenas, false, os, test_arena(), log);
 }
 
 // A content template resolves `site.updated` to the newest entry's date, not to nothing. The page
@@ -200,10 +207,13 @@ static void test_accepts_empty_entry_set(void) {
   struct Arena arena = test_arena();
   struct Log log = {.buf = {.arena = &arena}};
   struct JobArenas worker_arenas = {.perm = test_arena(), .scratch = test_arena()};
+  struct Manifest manifest = {0};
+  struct Os* os = os_memory();
+  const struct OutputWriter writer = {.manifest = &manifest, .os = os};
 
-  TEST_CHECK(page_renderer_render_pages(&site_config, NULL, 0, NULL, 0, S("1970-01-01T00:00:00Z"),
-                                        1, &worker_arenas, false, os_memory(), test_arena(),
-                                        &log) == 0);
+  TEST_CHECK(page_renderer_render_pages(&writer, &site_config, NULL, 0, NULL, 0,
+                                        S("1970-01-01T00:00:00Z"), 1, &worker_arenas, false, os,
+                                        test_arena(), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 }
 

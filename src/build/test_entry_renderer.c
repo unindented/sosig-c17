@@ -13,11 +13,13 @@
 
 #include "build/entry_renderer.h"
 #include "build/job.h"
+#include "build/output_writer.h"
 #include "build/page_renderer.h"
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
 #include "domain/content_entry.h"
+#include "domain/manifest.h"
 #include "domain/site_config.h"
 #include "runtime/fs.h"
 #include "runtime/os.h"
@@ -66,19 +68,25 @@ static int render_pages(const struct SiteConfig* site_config,
                         struct Log* log) {
   struct ContentEntry** entries =
       arena_new(log->buf.arena, source_entry_count, struct ContentEntry*);
+  // The manifest names every page, as the build's would.
+  struct Arena manifest_arena = test_arena();
+  struct Manifest manifest = {0};
   ptrdiff_t entry_count = 0;
   for (ptrdiff_t i = 0; i < source_entry_count; i++) {
     if (source_entries[i] != NULL) {
       entries[entry_count++] = source_entries[i];
+      (void)manifest_add(&manifest, source_entries[i]->output_path, source_entries[i]->source_path,
+                         &manifest_arena, NULL);
     }
   }
   content_entry_sort(entries, entry_count);
   const struct Str site_updated =
       content_entry_date_latest((const struct ContentEntry* const*)entries, entry_count);
-  return page_renderer_render_pages(site_config, (const struct ContentEntry* const*)source_entries,
-                                    source_entry_count, (const struct ContentEntry* const*)entries,
-                                    entry_count, site_updated, worker_count, worker_arenas, false,
-                                    os_posix(), test_arena(), log);
+  const struct OutputWriter writer = {.manifest = &manifest, .os = os_posix()};
+  return page_renderer_render_pages(
+      &writer, site_config, (const struct ContentEntry* const*)source_entries, source_entry_count,
+      (const struct ContentEntry* const*)entries, entry_count, site_updated, worker_count,
+      worker_arenas, false, os_posix(), test_arena(), log);
 }
 
 /**
