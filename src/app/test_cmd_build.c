@@ -11,6 +11,7 @@
 #include "build/entry_renderer.h"
 #include "build/job.h"
 #include "core/path_list.h"
+#include "domain/build_cache.h"
 #include "formats/toml.h"
 #include "os_memory.h"
 #include "runtime/os.h"
@@ -61,8 +62,12 @@ static const char* const HELLO_PAGE = "<p>Body</p>\n\n";
 
 /** Files `every_output_kind_fixture` builds to, in byte order. */
 static const char* const EVERY_OUTPUT_KIND_FILES[] = {
-    "public/alpha.html", "public/beta.html", "public/feed.xml",
-    "public/index.html", "public/sosig.css",
+    "public/_sosig/v1-build-cache.tsv",
+    "public/alpha.html",
+    "public/beta.html",
+    "public/feed.xml",
+    "public/index.html",
+    "public/sosig.css",
 };
 
 /** Number of paths in `EVERY_OUTPUT_KIND_FILES`. */
@@ -250,6 +255,49 @@ static bool is_write_set_of(struct Os* dry_run_os, struct Os* real_os) {
 }
 
 /**
+ * @brief Runs a dry run and returns the listing it printed, which says what a build would keep and
+ *        what it would make again.
+ *
+ * @param os        Host the dry run runs against. Must not be `NULL`.
+ * @param is_forced Whether the dry run ignores the build cache.
+ * @param arena     Arena that owns the returned listing. Must not be `NULL`.
+ * @return The listing, owned by `arena`.
+ */
+static struct Str dry_run_listing(struct Os* os, bool is_forced, struct Arena* arena) {
+  const ptrdiff_t printed_len = os_memory_printed(os, 1).len;
+  const struct BuildOptions options = {.is_dry_run = true, .is_forced = is_forced};
+  struct Log log = test_log();
+  TEST_CHECK(execute_build_with(&options, os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  return str_clone(str_tail(os_memory_printed(os, 1), printed_len), arena);
+}
+
+/**
+ * @brief Reports whether `listing` is exactly `expected`, printing it when it is not.
+ *
+ * @param listing  Listing a dry run printed.
+ * @param expected Terminated listing it must be. Must not be `NULL`.
+ * @return `true` when the two are equal.
+ */
+static bool is_listing(struct Str listing, const char* expected) {
+  const bool is_equal = str_eq(listing, str_from_cstr(expected));
+  TEST_CHECK_(is_equal, "the dry run lists what is expected");
+  if (!is_equal) {
+    TEST_MSG("listed: '%.*s'", STR_FMT(listing));
+  }
+  return is_equal;
+}
+
+/** Listing a dry run of `every_output_kind_fixture` prints when nothing is fresh. */
+static const char* const EVERY_OUTPUT_KIND_WRITES =
+    "write\tpublic/alpha.html\n"
+    "write\tpublic/beta.html\n"
+    "write\tpublic/index.html\n"
+    "write\tpublic/feed.xml\n"
+    "write\tpublic/sosig.css\n"
+    "write\tpublic/_sosig/v1-build-cache.tsv\n";
+
+/**
  * @brief Runs a one-worker build in `TINY_ARENA_SIZE` bytes of arenas. Run through `test_is_oom`,
  *        which calls it in a child process.
  *
@@ -300,8 +348,8 @@ static void test_tolerates_trailing_slash_on_content_dir(void) {
   struct Log log = test_log();
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  static const char* const expected[] = {"public/post.html"};
-  TEST_CHECK(is_file_list(os, "public", expected, 1));
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/post.html"};
+  TEST_CHECK(is_file_list(os, "public", expected, 2));
 }
 
 // A site that ships no `static` directory builds. `static_dir` is optional with a default, so an
@@ -355,8 +403,9 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   struct Log log = test_log();
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  static const char* const expected[] = {"public/a/post.html", "public/b/post.html"};
-  TEST_CHECK(is_file_list(os, "public", expected, 2));
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/a/post.html",
+                                         "public/b/post.html"};
+  TEST_CHECK(is_file_list(os, "public", expected, 3));
 }
 
 // A second build over a finished output tree succeeds and produces the same set of outputs.
@@ -368,9 +417,9 @@ static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  // The one content page: the second build adds nothing and removes nothing.
-  static const char* const expected[] = {"public/hello.html"};
-  TEST_CHECK(is_file_list(os, "public", expected, 1));
+  // The one content page and the build cache: the second build adds nothing and removes nothing.
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/hello.html"};
+  TEST_CHECK(is_file_list(os, "public", expected, 2));
 }
 
 // A rebuild removes what the current inputs no longer produce: the page of a deleted entry, an old
@@ -389,13 +438,13 @@ static void test_rebuild_removes_stale_outputs(void) {
   os_memory_write(os, "public/old-section/deeper/page.html", "old");
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  static const char* const expected[] = {"public/hello.html"};
-  TEST_CHECK(is_file_list(os, "public", expected, 1));
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/hello.html"};
+  TEST_CHECK(is_file_list(os, "public", expected, 2));
   TEST_CHECK(!os_memory_has_path(os, "public/old-section"));
 
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  TEST_CHECK(is_file_list(os, "public", expected, 1));
+  TEST_CHECK(is_file_list(os, "public", expected, 2));
 }
 
 // An `output_dir` that a symlink inside `content_dir` reaches is left out of the content walk, so a
@@ -419,9 +468,11 @@ static void test_rebuild_skips_output_dir_linked_from_content_dir(void) {
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  // The page and the aggregate, and no page rendered from the aggregate's own output.
-  static const char* const expected[] = {"public/hello.html", "public/notes.md"};
-  TEST_CHECK(is_file_list(os, "public", expected, 2));
+  // The page, the aggregate and the build cache, and no page rendered from the aggregate's own
+  // output.
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/hello.html",
+                                         "public/notes.md"};
+  TEST_CHECK(is_file_list(os, "public", expected, 3));
 }
 
 // A dry run of a site with every kind of output succeeds and creates nothing, not even
@@ -438,18 +489,13 @@ static void test_dry_run_lists_every_output_and_writes_nothing(void) {
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(!os_memory_has_path(dry_run_os, "public"));
   TEST_CHECK(is_write_set_of(dry_run_os, real_os));
-  TEST_CHECK(os_memory_is_printed(dry_run_os, 1,
-                                  "write\tpublic/alpha.html\n"
-                                  "write\tpublic/beta.html\n"
-                                  "write\tpublic/index.html\n"
-                                  "write\tpublic/feed.xml\n"
-                                  "write\tpublic/sosig.css\n"));
+  TEST_CHECK(os_memory_is_printed(dry_run_os, 1, EVERY_OUTPUT_KIND_WRITES));
 }
 
-// After a real build, a dry run lists the one output, then what the prune would remove, sorted: a
-// deleted entry's page, a hand-added file, and a stale directory with its page. It leaves each of
-// them in place. Its verbose status counts the `remove` lines, on `stderr`, and adds nothing to the
-// listing.
+// After a real build, a dry run keeps the one page, which is fresh, and lists the build cache, then
+// what the prune would remove, sorted: a deleted entry's page, a hand-added file, and a stale
+// directory with its page. It leaves each of them in place. Its verbose status counts the `remove`
+// lines, on `stderr`, and adds nothing to the listing.
 static void test_dry_run_lists_stale_outputs_and_keeps_them(void) {
   struct Os* os = site_fixture(NULL);
   os_memory_write(os, "content/hello.md", HELLO_ENTRY);
@@ -464,7 +510,8 @@ static void test_dry_run_lists_stale_outputs_and_keeps_them(void) {
   TEST_CHECK(execute_build_with(&options, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(os_memory_is_printed(os, 1,
-                                  "write\tpublic/hello.html\n"
+                                  "keep\tpublic/hello.html\n"
+                                  "write\tpublic/_sosig/v1-build-cache.tsv\n"
                                   "remove\tpublic/goodbye.html\n"
                                   "remove\tpublic/notes.txt\n"
                                   "remove\tpublic/old\n"
@@ -500,6 +547,241 @@ static void test_dry_run_leaves_no_state(void) {
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(is_file_list(os, "public", EVERY_OUTPUT_KIND_FILES, EVERY_OUTPUT_KIND_FILE_COUNT));
   TEST_CHECK(os_memory_is_file(os, "public/index.html", "index\n"));
+}
+
+// A build after an unchanged build renders no template, here where every template read would fail,
+// and leaves every output, the build cache included, byte for byte as the first build wrote it.
+static void test_unchanged_rebuild_renders_nothing(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  const struct PathList files = os_memory_files(os, "public");
+  struct Str* contents = arena_new(&arena, files.count, struct Str);
+  for (ptrdiff_t i = 0; i < files.count; i++) {
+    TEST_CHECK(os_memory_file(os, str_cstr(files.items[i], &arena), &contents[i]) == 0);
+    contents[i] = str_clone(contents[i], &arena);
+  }
+  os_memory_fail(os, OS_MEMORY_OP_READ, "templates", EACCES);
+
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(is_file_list(os, "public", EVERY_OUTPUT_KIND_FILES, EVERY_OUTPUT_KIND_FILE_COUNT));
+  for (ptrdiff_t i = 0; i < files.count; i++) {
+    struct Str now = {0};
+    TEST_CHECK_(
+        os_memory_file(os, str_cstr(files.items[i], &arena), &now) == 0 && str_eq(now, contents[i]),
+        "'%.*s' is unchanged", STR_FMT(files.items[i]));
+  }
+}
+
+// After an unchanged build, a dry run lists every content page and every aggregate and feed as
+// `keep`, and leaves the build cache as it was. The static file is copied on every build.
+static void test_dry_run_keeps_every_page_after_an_unchanged_build(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  struct Str cache = {0};
+  TEST_CHECK(os_memory_file(os, "public/_sosig/v1-build-cache.tsv", &cache) == 0);
+  cache = str_clone(cache, &arena);
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "keep\tpublic/alpha.html\n"
+                        "keep\tpublic/beta.html\n"
+                        "keep\tpublic/index.html\n"
+                        "keep\tpublic/feed.xml\n"
+                        "write\tpublic/sosig.css\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/_sosig/v1-build-cache.tsv", str_cstr(cache, &arena)));
+}
+
+// A changed source makes its own page again, and every aggregate and feed, which read every entry.
+// A page whose template does not read the entry list is kept.
+static void test_changed_source_makes_its_page_and_the_aggregates(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  os_memory_touch(os, "content/alpha.md");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "write\tpublic/alpha.html\n"
+                        "keep\tpublic/beta.html\n"
+                        "write\tpublic/index.html\n"
+                        "write\tpublic/feed.xml\n"
+                        "write\tpublic/sosig.css\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+}
+
+// A page whose template lists `content_entries` is made again when another entry changes, even
+// after a build that kept it and so carried its row's flag forward, while a page whose template
+// reads only its own entry is kept.
+static void test_page_reading_the_entry_list_follows_every_entry(void) {
+  struct Os* os = site_fixture("content_template = \"listing.html\"\n");
+  struct Arena arena = test_arena();
+  os_memory_write(os, "templates/listing.html",
+                  "{{{body}}}{{#content_entries}}{{title}};{{/content_entries}}\n");
+  os_memory_write(os, "content/a.md", HELLO_ENTRY);
+  os_memory_write(os, "content/b.md", HELLO_ENTRY);
+  os_memory_write(os, "content/c.md",
+                  "+++\ntitle = \"C\"\ndate = 2026-07-01T00:00:00Z\ntemplate = \"content.html\"\n"
+                  "+++\nBody\n");
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "keep\tpublic/a.html\n"
+                        "keep\tpublic/b.html\n"
+                        "keep\tpublic/c.html\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+  os_memory_write(os, "content/b.md",
+                  "+++\ntitle = \"Renamed\"\ndate = 2026-07-01T00:00:00Z\n+++\nBody\n");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "write\tpublic/a.html\n"
+                        "write\tpublic/b.html\n"
+                        "keep\tpublic/c.html\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+}
+
+// Any change below `templates_dir`, such as to a partial, makes every page again, because a page's
+// templates are tracked as a whole.
+static void test_changed_partial_makes_every_page(void) {
+  struct Os* os = site_fixture(NULL);
+  struct Arena arena = test_arena();
+  os_memory_write(os, "templates/content.html", "{{{body}}}{{>footer}}\n");
+  os_memory_write(os, "templates/partials/footer.html", "footer");
+  os_memory_write(os, "content/a.md", HELLO_ENTRY);
+  os_memory_write(os, "content/b.md", HELLO_ENTRY);
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  os_memory_write(os, "templates/partials/footer.html", "new footer");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "write\tpublic/a.html\n"
+                        "write\tpublic/b.html\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+}
+
+// `--force` ignores the build cache, so it makes every output again.
+static void test_force_makes_every_output(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+
+  TEST_CHECK(is_listing(dry_run_listing(os, true, &arena), EVERY_OUTPUT_KIND_WRITES));
+}
+
+// A change to a config field a render reads, here `title`, changes the page recipe, so every output
+// is made again although no source or template changed.
+static void test_changed_recipe_field_makes_every_output(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  os_memory_write(os, "sosig.toml",
+                  "base_url = \"https://example.com\"\n"
+                  "title = \"Renamed\"\n"
+                  "author = \"Author\"\n"
+                  "aggregate_templates = [\"index.html\"]\n"
+                  "feed_templates = [\"feed.xml\"]\n");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena), EVERY_OUTPUT_KIND_WRITES));
+}
+
+// A build that fails after its first write leaves an empty build cache, so a later build trusts no
+// page it wrote. Here a build under another title writes its pages and then fails to write its
+// aggregate. With the title put back and nothing else changed, the next build makes every page
+// again rather than keeping pages written under the other title, and the verbose log says why.
+static void test_failed_build_leaves_no_trusted_cache(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  struct Str config = {0};
+  TEST_CHECK(os_memory_file(os, "sosig.toml", &config) == 0);
+  const char* config_text = str_cstr(config, &arena);
+  os_memory_write(os, "sosig.toml",
+                  "base_url = \"https://example.com\"\n"
+                  "title = \"Renamed\"\n"
+                  "author = \"Author\"\n"
+                  "aggregate_templates = [\"index.html\"]\n"
+                  "feed_templates = [\"feed.xml\"]\n");
+  os_memory_fail(os, OS_MEMORY_OP_WRITE, "public/index.html", EACCES);
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "failed to write template output: %s ('public/index.html')\n",
+                         strerror(EACCES)));
+  TEST_CHECK(os_memory_is_file(os, "public/_sosig/v1-build-cache.tsv", ""));
+  os_memory_fail(os, OS_MEMORY_OP_WRITE, "public/index.html", 0);
+  os_memory_write(os, "sosig.toml", config_text);
+
+  const struct BuildOptions options = {.is_verbose = true, .is_dry_run = true};
+  const ptrdiff_t printed_len = os_memory_printed(os, 1).len;
+  log = test_log();
+  TEST_CHECK(execute_build_with(&options, os, &log) == 0);
+  TEST_CHECK(is_listing(str_tail(os_memory_printed(os, 1), printed_len), EVERY_OUTPUT_KIND_WRITES));
+  TEST_CHECK(
+      has_printed_line(os, 2,
+                       "build cache not used, rendering every page: build cache is empty, as "
+                       "a build that did not finish leaves it"));
+}
+
+// A build cache written under another `PAGE_RECIPE_VERSION` is not used, and the verbose log says
+// why. The constant cannot change in a test, so the build cache is rewritten with another one.
+static void test_ignores_build_cache_of_another_recipe_version(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  struct Str cache = {0};
+  TEST_CHECK(os_memory_file(os, "public/_sosig/v1-build-cache.tsv", &cache) == 0);
+  struct Buf version = {.arena = &arena};
+  buf_printf(&version, "\tpage_recipe_version=%d\n", PAGE_RECIPE_VERSION);
+  struct Buf other = {.arena = &arena};
+  const struct StrCut recipe = str_cut(cache, '\n');
+  buf_append(&other, str_head(recipe.head, recipe.head.len - (buf_str(&version).len - 1)));
+  buf_printf(&other, "\tpage_recipe_version=%d\n", PAGE_RECIPE_VERSION + 1);
+  buf_append(&other, recipe.tail);
+  os_memory_write(os, "public/_sosig/v1-build-cache.tsv", buf_cstr(&other));
+
+  const struct BuildOptions options = {.is_verbose = true, .is_dry_run = true};
+  const ptrdiff_t printed_len = os_memory_printed(os, 1).len;
+  TEST_CHECK(execute_build_with(&options, os, &log) == 0);
+  TEST_CHECK(is_listing(str_tail(os_memory_printed(os, 1), printed_len), EVERY_OUTPUT_KIND_WRITES));
+  TEST_CHECK(has_printed_line(os, 2,
+                              "build cache not used, rendering every page: build cache was written "
+                              "for another page recipe"));
+}
+
+// A build cache that does not parse is an empty build cache, never an error, so the build makes
+// every output and succeeds.
+static void test_ignores_build_cache_that_does_not_parse(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  os_memory_write(os, "public/_sosig/v1-build-cache.tsv", "not a build cache\n");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena), EVERY_OUTPUT_KIND_WRITES));
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+}
+
+// A build cache of another format version has another name, so a build never reads it, and the
+// stale-output prune removes it, keeping the current one.
+static void test_prunes_build_cache_of_another_version(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/hello.md", HELLO_ENTRY);
+  os_memory_write(os, "public/_sosig/v0-build-cache.tsv", "an older format\n");
+  struct Log log = test_log();
+
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(!os_memory_has_path(os, "public/_sosig/v0-build-cache.tsv"));
+  TEST_CHECK(os_memory_has_path(os, "public/_sosig/v1-build-cache.tsv"));
 }
 
 // A caller-supplied `worker_count` reaches every pool instead of being replaced by the detected
@@ -599,9 +881,12 @@ static void test_skips_empty_phases_in_verbose_output(void) {
                                   "discovering static files\n"
                                   "collecting content entries\n"
                                   "building output manifest\n"
+                                  "loading build cache\n"
+                                  "no build cache, rendering every page\n"
                                   "rendering aggregate templates\n"
                                   "rendering feed templates\n"
                                   "copying static files\n"
+                                  "writing build cache\n"
                                   "removing stale outputs\n"
                                   "removed stale outputs: 0\n"
                                   "build complete\n"));
@@ -1182,6 +1467,21 @@ TEST_LIST = {
     {"dry run lists stale outputs and keeps them", test_dry_run_lists_stale_outputs_and_keeps_them},
     {"dry run attempts no change", test_dry_run_attempts_no_change},
     {"dry run leaves no state", test_dry_run_leaves_no_state},
+    {"unchanged rebuild renders nothing", test_unchanged_rebuild_renders_nothing},
+    {"dry run keeps every page after an unchanged build",
+     test_dry_run_keeps_every_page_after_an_unchanged_build},
+    {"changed source makes its page and the aggregates",
+     test_changed_source_makes_its_page_and_the_aggregates},
+    {"page reading the entry list follows every entry",
+     test_page_reading_the_entry_list_follows_every_entry},
+    {"changed partial makes every page", test_changed_partial_makes_every_page},
+    {"force makes every output", test_force_makes_every_output},
+    {"changed recipe field makes every output", test_changed_recipe_field_makes_every_output},
+    {"failed build leaves no trusted cache", test_failed_build_leaves_no_trusted_cache},
+    {"ignores build cache of another recipe version",
+     test_ignores_build_cache_of_another_recipe_version},
+    {"ignores build cache that does not parse", test_ignores_build_cache_that_does_not_parse},
+    {"prunes build cache of another version", test_prunes_build_cache_of_another_version},
     {"honors requested worker count", test_honors_requested_worker_count},
     {"caps the worker count at four per CPU", test_caps_the_worker_count_at_four_per_cpu},
     {"cuts workers before arenas under limit", test_cuts_workers_before_arenas_under_limit},

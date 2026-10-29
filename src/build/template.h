@@ -1,6 +1,7 @@
 #ifndef SOSIG_TEMPLATE_H
 #define SOSIG_TEMPLATE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "shared/arena.h"
@@ -72,24 +73,28 @@ struct TemplateContext {
  * the output buffer, and bound the compiled-partial cache. They do not bound the render's total
  * memory: a template's own nested sections allocate in proportion to the iterations they ask for.
  *
- * @param templates_dir Template directory root.
- * @param template_name Safe relative template name within `templates_dir`.
- * @param context       Borrowed data visible to the template during this render. Must not be
- *                      `NULL`.
- * @param os            Host the template and its partials are read from. Must not be `NULL`.
- * @param perm          Arena that owns the returned HTML. Nothing else in the render allocates
- *                      there, so the output grows in place. A failed render may leave its partial
- *                      output there, so a caller that must not keep it passes a copy. Must not be
- *                      `NULL`.
- * @param scratch       Arena for the render's temporaries, released when it returns. Must not
- *                      overlap `perm`.
- * @param html_out      Receives the HTML, owned by `perm`, on success. Must not be `NULL`.
- * @param log           Log that receives the render's first failure: an unreadable template or
- *                      partial, a syntax error, or an exceeded limit. A page render, one with
- *                      `content_entry_current` set, ends the message with
- *                      `(while rendering '<source>')`, because the template is shared by every
- *                      page. The log's arena must not overlap `perm` or `scratch`. Must not be
- *                      `NULL`.
+ * @param templates_dir          Template directory root.
+ * @param template_name          Safe relative template name within `templates_dir`.
+ * @param context                Borrowed data visible to the template during this render. Must not
+ *                               be `NULL`.
+ * @param os                     Host the template and its partials are read from. Must not be
+ *                               `NULL`.
+ * @param perm                   Arena that owns the returned HTML. Nothing else in the render
+ *                               allocates there, so the output grows in place. A failed render may
+ *                               leave its partial output there, so a caller that must not keep it
+ *                               passes a copy. Must not be `NULL`.
+ * @param scratch                Arena for the render's temporaries, released when it returns. Must
+ *                               not overlap `perm`.
+ * @param html_out               Receives the HTML, owned by `perm`, on success. Must not be `NULL`.
+ * @param is_entry_list_read_out Receives, on success, whether the render resolved `content_entries`
+ *                               or `site.updated`, the two names whose values depend on every entry
+ *                               and not just the current one. Ignored when `NULL`.
+ * @param log                    Log that receives the render's first failure: an unreadable
+ *                               template or partial, a syntax error, or an exceeded limit. A page
+ *                               render, one with `content_entry_current` set, ends the message with
+ *                               `(while rendering '<source>')`, because the template is shared by
+ *                               every page. The log's arena must not overlap `perm` or `scratch`.
+ *                               Must not be `NULL`.
  * @return `0` on success, or `-1` on failure.
  */
 int template_render_file(struct Str templates_dir,
@@ -99,7 +104,8 @@ int template_render_file(struct Str templates_dir,
                          struct Arena* perm,
                          struct Arena scratch,
                          struct Str* html_out,
-                         struct Log* log) __attribute__((nonnull(3, 4, 5, 7, 8)));
+                         bool* is_entry_list_read_out,
+                         struct Log* log) __attribute__((nonnull(3, 4, 5, 7, 9)));
 
 /**
  * @brief Renders a template file into HTML under a caller-chosen output bound.
@@ -107,20 +113,24 @@ int template_render_file(struct Str templates_dir,
  * Behaves as `template_render_file`, which calls it with the production bound. Reaching a byte
  * bound costs that many bytes, so this lets a test assert the output-limit diagnostic cheaply.
  *
- * @param templates_dir  Template directory root.
- * @param template_name  Safe relative template name within `templates_dir`.
- * @param context        Borrowed data visible to the template during this render. Must not be
- *                       `NULL`.
- * @param output_len_max Largest rendered output accepted, in bytes. A render whose accumulated
- *                       output passes it fails with a diagnostic naming it.
- * @param os             Host the template is read from, as for `template_render_file`. Must not be
- *                       `NULL`.
- * @param perm           Arena that owns the returned HTML, as for `template_render_file`, which may
- *                       hold partial output after a failed render. Must not be `NULL`.
- * @param scratch        Arena for the render's temporaries, as for `template_render_file`.
- * @param html_out       Receives the HTML, as for `template_render_file`. Must not be `NULL`.
- * @param log            Log that receives the render's first failure, as for
- *                       `template_render_file`. Must not be `NULL`.
+ * @param templates_dir          Template directory root.
+ * @param template_name          Safe relative template name within `templates_dir`.
+ * @param context                Borrowed data visible to the template during this render. Must not
+ *                               be `NULL`.
+ * @param output_len_max         Largest rendered output accepted, in bytes. A render whose
+ *                               accumulated output passes it fails with a diagnostic naming it.
+ * @param os                     Host the template is read from, as for `template_render_file`. Must
+ *                               not be `NULL`.
+ * @param perm                   Arena that owns the returned HTML, as for `template_render_file`,
+ *                               which may hold partial output after a failed render. Must not be
+ *                               `NULL`.
+ * @param scratch                Arena for the render's temporaries, as for `template_render_file`.
+ * @param html_out               Receives the HTML, as for `template_render_file`. Must not be
+ *                               `NULL`.
+ * @param is_entry_list_read_out Receives whether the render read the entry list, as for
+ *                               `template_render_file`. Ignored when `NULL`.
+ * @param log                    Log that receives the render's first failure, as for
+ *                               `template_render_file`. Must not be `NULL`.
  * @return `0` on success, or `-1` on failure.
  */
 int template_render_file_limited(struct Str templates_dir,
@@ -131,6 +141,7 @@ int template_render_file_limited(struct Str templates_dir,
                                  struct Arena* perm,
                                  struct Arena scratch,
                                  struct Str* html_out,
-                                 struct Log* log) __attribute__((nonnull(3, 5, 6, 8, 9)));
+                                 bool* is_entry_list_read_out,
+                                 struct Log* log) __attribute__((nonnull(3, 5, 6, 8, 10)));
 
 #endif

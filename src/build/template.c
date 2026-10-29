@@ -175,6 +175,12 @@ struct ProviderData {
   struct Log* log;
 
   /**
+   * Whether the render resolved `content_entries` or `site.updated`, whose values depend on every
+   * entry. A partial's lookups count too, because they share this state.
+   */
+  bool is_entry_list_read;
+
+  /**
    * `render_fail` sets this on the first failure in any callback, and
    * `template_render_file_limited` checks it once processing returns. That failure is an exceeded
    * limit, an unsafe partial name, or an unreadable or uncompilable partial.
@@ -502,9 +508,10 @@ int template_render_file(struct Str templates_dir,
                          struct Arena* perm,
                          struct Arena scratch,
                          struct Str* html_out,
+                         bool* is_entry_list_read_out,
                          struct Log* log) {
   return template_render_file_limited(templates_dir, template_name, context, RENDER_OUTPUT_LEN_MAX,
-                                      os, perm, scratch, html_out, log);
+                                      os, perm, scratch, html_out, is_entry_list_read_out, log);
 }
 
 int template_render_file_limited(struct Str templates_dir,
@@ -515,6 +522,7 @@ int template_render_file_limited(struct Str templates_dir,
                                  struct Arena* perm,
                                  struct Arena scratch,
                                  struct Str* html_out,
+                                 bool* is_entry_list_read_out,
                                  struct Log* log) {
   // The render logs into a log of its own, which grows in the caller's log's arena, so it shares no
   // arena with anything the render copies by value. That lets the relay below attribute the failure
@@ -530,10 +538,10 @@ int template_render_file_limited(struct Str templates_dir,
   struct Buf buffer = {.arena = perm};
   struct Node node_root = {.kind = NODE_ROOT};
   // Because this literal names only the non-zero values, initialization cannot accidentally omit a
-  // new `ProviderData` field. `partial_count`, `expansion_count`, and `has_failed` start at zero.
-  // The code assigns `partials` and `partial_names` when a partial compiles, and `templ` once the
-  // template compiles. It assigns `template_name_compiling` before both `mustache_compile` calls.
-  // Only those calls can reach `record_parse_error`.
+  // new `ProviderData` field. `partial_count`, `expansion_count`, `is_entry_list_read`, and
+  // `has_failed` start at zero. The code assigns `partials` and `partial_names` when a partial
+  // compiles, and `templ` once the template compiles. It assigns `template_name_compiling` before
+  // both `mustache_compile` calls. Only those calls can reach `record_parse_error`.
   struct ProviderData provider_data = {.os = os,
                                        .templates_dir = templates_dir,
                                        .template_name = template_name,
@@ -586,6 +594,9 @@ int template_render_file_limited(struct Str templates_dir,
     goto cleanup;
   }
   *html_out = buf_str(&buffer);
+  if (is_entry_list_read_out != NULL) {
+    *is_entry_list_read_out = provider_data.is_entry_list_read;
+  }
   rc = 0;
 
 cleanup:
@@ -654,6 +665,7 @@ static void* node_get_child_by_name(void* node_ptr,
         return node_alloc(provider_data, NODE_SITE);
       }
       if (str_eq(name_text, S("content_entries"))) {
+        provider_data->is_entry_list_read = true;
         return node_alloc(provider_data, NODE_ENTRY_LIST);
       }
       if (str_eq(name_text, S("generator"))) {
@@ -892,6 +904,7 @@ static struct Node* resolve_site(struct ProviderData* provider_data, struct Str 
   }
   if (str_eq(name, S("updated"))) {
     // This is derived from the whole entry set rather than read off the configuration.
+    provider_data->is_entry_list_read = true;
     return node_scalar(provider_data, provider_data->context->site_updated);
   }
   return NULL;

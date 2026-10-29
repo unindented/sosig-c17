@@ -71,6 +71,9 @@ struct OsMemoryNode {
 
   /** A directory's parent directory, which `..` names. The root is its own parent. */
   ptrdiff_t parent;
+
+  /** Value of `Os.clock` when the node was last created, written or touched. */
+  int64_t mtime;
 };
 
 /** One name in one directory. Two entries naming one file node are hard links. */
@@ -141,6 +144,9 @@ struct Os {
 
   /** Allocated slots in `faults`. */
   ptrdiff_t fault_capacity;
+
+  /** Modification time of the most recent change, which every change advances by one. */
+  int64_t clock;
 
   /** Text `os_print` wrote to standard output and standard error. */
   struct Buf printed[2];
@@ -534,6 +540,17 @@ void os_memory_truncate(struct Os* os, const char* file_path, ptrdiff_t len) {
   host_unlock(os);
 }
 
+void os_memory_touch(struct Os* os, const char* file_path) {
+  host_lock(os);
+  struct Arena scratch = os->scratch;
+  struct OsMemoryLookup lookup;
+  const bool is_found = tree_lookup(os, str_from_cstr(file_path), true, &scratch, &lookup) == 0;
+  if (TEST_CHECK_(is_found, "'%s' exists", file_path)) {
+    os->nodes[lookup.node].mtime = ++os->clock;
+  }
+  host_unlock(os);
+}
+
 void os_memory_mkdir(struct Os* os, const char* dir_path) {
   fixture_mkdirs(os, str_from_cstr(dir_path));
 }
@@ -572,6 +589,18 @@ void os_memory_fail(struct Os* os, enum OsMemoryOp op, const char* path, int err
   // A fault on `x/` would match the paths below `x` but never `x` itself, which no caller means.
   TEST_ASSERT_(!str_endswith(str_from_cstr(path), S("/")), "fault path '%s' ends in '/'", path);
   host_lock(os);
+  if (error_number == 0) {
+    ptrdiff_t kept = 0;
+    for (ptrdiff_t i = 0; i < os->fault_count; i++) {
+      const struct OsMemoryFault* fault = &os->faults[i];
+      if (fault->op != op || !str_eq(fault->path, str_from_cstr(path))) {
+        os->faults[kept++] = *fault;
+      }
+    }
+    os->fault_count = kept;
+    host_unlock(os);
+    return;
+  }
   if (os->fault_count == os->fault_capacity) {
     os->faults = arena_grow(&os->arena, os->faults, &os->fault_capacity, sizeof(*os->faults),
                             _Alignof(struct OsMemoryFault));
@@ -611,6 +640,21 @@ bool os_memory_has_path(struct Os* os, const char* path) {
   const bool exists = tree_lookup(os, str_from_cstr(path), false, &scratch, &lookup) == 0;
   host_unlock(os);
   return exists;
+}
+
+int os_memory_file(struct Os* os, const char* file_path, struct Str* data_out) {
+  host_lock(os);
+  struct Arena scratch = os->scratch;
+  struct OsMemoryLookup lookup;
+  // A file extended by `os_memory_truncate` holds bytes no test spells out, so it never matches.
+  const bool is_file = tree_lookup(os, str_from_cstr(file_path), true, &scratch, &lookup) == 0 &&
+                       os->nodes[lookup.node].kind == OS_MEMORY_NODE_FILE &&
+                       os->nodes[lookup.node].zero_len == 0;
+  if (is_file) {
+    *data_out = os->nodes[lookup.node].data;
+  }
+  host_unlock(os);
+  return is_file ? 0 : -1;
 }
 
 struct PathList os_memory_files(struct Os* os, const char* dir_path) {
@@ -837,8 +881,12 @@ int os_stat(struct Os* os, struct Str file_path, struct OsStat* stat_out) {
   } else if (tree_lookup(os, file_path, true, &scratch, &lookup) != 0) {
     rc = -1;
   } else {
+    const struct OsMemoryNode* node = &os->nodes[lookup.node];
     stat_out->identity = (struct OsIdentity){1, (uint64_t)lookup.node + 1};
-    stat_out->is_dir = os->nodes[lookup.node].kind == OS_MEMORY_NODE_DIR;
+    stat_out->is_dir = node->kind == OS_MEMORY_NODE_DIR;
+    stat_out->len = node->kind == OS_MEMORY_NODE_DIR ? 0 : node->data.len + node->zero_len;
+    stat_out->mtime_s = node->mtime;
+    stat_out->mtime_ns = 0;
   }
   host_unlock(os);
   return rc;
@@ -1017,7 +1065,8 @@ static ptrdiff_t node_new(struct Os* os,
                            _Alignof(struct OsMemoryNode));
   }
   const ptrdiff_t node = os->node_count++;
-  os->nodes[node] = (struct OsMemoryNode){.kind = kind, .data = data, .parent = parent};
+  os->nodes[node] =
+      (struct OsMemoryNode){.kind = kind, .data = data, .parent = parent, .mtime = ++os->clock};
   return node;
 }
 
@@ -1154,6 +1203,7 @@ static void os_write_locked_store(struct Os* os,
     struct OsMemoryNode* file = &os->nodes[lookup->node];
     file->data = data;
     file->zero_len = zero_len;
+    file->mtime = ++os->clock;
     return;
   }
   // A missing file is created where the lookup ended, which for a dangling symlink is its target,

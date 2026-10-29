@@ -31,6 +31,9 @@ struct Os;
 // implementation gives for that `errno` value, and it matches every path below the one it names,
 // which permission bits on a real tree do not always reproduce. Every operation holds the host's
 // lock, so the parallel phases can share one host.
+//
+// Modification times come from a counter that every change advances, so a later write is newer, and
+// `os_memory_touch` makes a file newer without writing it.
 
 /** Which operation an injected failure applies to. */
 enum OsMemoryOp {
@@ -87,6 +90,15 @@ void os_memory_truncate(struct Os* os, const char* file_path, ptrdiff_t len)
     __attribute__((nonnull(1, 2)));
 
 /**
+ * @brief Makes the file at `file_path` newer than every file written before, as `touch` does.
+ *
+ * @param os        Host holding the file. Must not be `NULL`.
+ * @param file_path Terminated path of an existing file, followed through symlinks. Must not be
+ *                  `NULL`.
+ */
+void os_memory_touch(struct Os* os, const char* file_path) __attribute__((nonnull(1, 2)));
+
+/**
  * @brief Creates a directory and any missing parents, as a fixture.
  *
  * @param os       Host to create the directory on. Must not be `NULL`.
@@ -121,7 +133,8 @@ void os_memory_link(struct Os* os, const char* file_path, const char* link_path)
  * @brief Makes every later `op` on `path`, or on a path below it, fail with `error_number`.
  *
  * The match is on the path text the code under test passes, not on what it resolves to, so a test
- * names the spelling the code uses.
+ * names the spelling the code uses. An `error_number` of `0` lifts the failures injected for `op`
+ * on that same `path` text, so a test can run the code again once the cause is gone.
  *
  * @param os           Host to inject into. Must not be `NULL`.
  * @param op           Operation that fails.
@@ -153,6 +166,19 @@ bool os_memory_is_file(struct Os* os, const char* file_path, const char* content
  * @return `true` when a file, directory or symlink exists at `path`.
  */
 bool os_memory_has_path(struct Os* os, const char* path) __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Reads the contents of the regular file at `file_path`, such as a file a build wrote.
+ *
+ * @param os        Host to inspect. Must not be `NULL`.
+ * @param file_path Terminated path of the file, followed through symlinks. Must not be `NULL`.
+ * @param data_out  Receives the contents, which the host owns. Written only on success. Must not be
+ *                  `NULL`.
+ * @return `0` on success, or `-1` when there is no regular file at `file_path`, or only one that
+ *         `os_memory_truncate` extended.
+ */
+int os_memory_file(struct Os* os, const char* file_path, struct Str* data_out)
+    __attribute__((nonnull(1, 2, 3)));
 
 /**
  * @brief Lists every regular file below `dir_path`, sorted, without following symlinks.

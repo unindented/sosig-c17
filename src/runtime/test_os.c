@@ -1065,6 +1065,34 @@ static void test_list_marks_link_through_file_failed(void) {
   contract_end(&c);
 }
 
+// `os_stat` reports a file's size, and a file written after another is at least as new, whether the
+// write created it or overwrote it, which is what a freshness check relies on.
+static void test_stat_reports_size_and_write_order(void) {
+  char root[] = "/tmp/sosig-os-stat-time.XXXXXX";
+  struct Contract c;
+  if (contract_begin(root, &c) != 0) {
+    return;
+  }
+  contract_write(&c, "overwritten.md", S("old"));
+  contract_write(&c, "source.md", S("source"));
+  contract_write(&c, "created.md", S("output"));
+  contract_write(&c, "overwritten.md", S("out"));
+  struct OsStat source;
+  struct OsStat created;
+  struct OsStat overwritten;
+  TEST_CHECK(os_stat(c.os, contract_path(&c, "source.md"), &source) == 0);
+  TEST_CHECK(os_stat(c.os, contract_path(&c, "created.md"), &created) == 0);
+  TEST_CHECK(os_stat(c.os, contract_path(&c, "overwritten.md"), &overwritten) == 0);
+  TEST_CHECK(source.len == 6 && created.len == 6 && overwritten.len == 3);
+  TEST_CHECK(!source.is_dir && source.mtime_ns >= 0 && source.mtime_ns < 1000000000);
+  const struct OsStat* const later[] = {&created, &overwritten};
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(later) / sizeof(later[0])); i++) {
+    TEST_CHECK(later[i]->mtime_s > source.mtime_s ||
+               (later[i]->mtime_s == source.mtime_s && later[i]->mtime_ns >= source.mtime_ns));
+  }
+  contract_end(&c);
+}
+
 // `os_stat` answers which file a path names: a `./` spelling, a `..` spelling, a symlink, a symlink
 // in a subdirectory whose `../` target resolves from that subdirectory, and a hard link share the
 // file's identity, and another file does not. It reports the type after following a symlink.
@@ -1212,6 +1240,7 @@ TEST_LIST = {
      test_list_classifies_entries_and_skips_links_to_nothing},
     {"list rejects missing and file", test_list_rejects_missing_and_file},
     {"list marks link through file failed", test_list_marks_link_through_file_failed},
+    {"stat reports size and write order", test_stat_reports_size_and_write_order},
     {"stat identifies files", test_stat_identifies_files},
     {"stat rejects what names nothing", test_stat_rejects_what_names_nothing},
     {"print writes each stream in order", test_print_writes_each_stream_in_order},

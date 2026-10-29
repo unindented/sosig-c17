@@ -94,6 +94,22 @@ struct OsStat {
 
   /** Whether the path names a directory, after following symlinks. */
   bool is_dir;
+
+  /**
+   * Size in bytes of the file the path names, saturating at `PTRDIFF_MAX`. The build cache records
+   * it for each input a page depends on.
+   */
+  ptrdiff_t len;
+
+  /** Modification time in whole seconds since the Unix epoch. */
+  int64_t mtime_s;
+
+  /**
+   * Nanoseconds within `mtime_s`. The build cache compares an input's modification time at this
+   * resolution, because an edit made in the same second as the build that read the file must still
+   * count as a change.
+   */
+  int64_t mtime_ns;
 };
 
 /** What a directory entry names, as `os_list` classifies it. */
@@ -310,7 +326,8 @@ int os_list(struct Os* os,
             struct Log* log) __attribute__((nonnull(1, 3, 4, 5, 7)));
 
 /**
- * @brief Reports the identity and type of the file at `file_path`, following symlinks.
+ * @brief Reports the identity, type, size and modification time of the file at `file_path`,
+ *        following symlinks.
  *
  * This takes no `log`, because its callers want a fact rather than a diagnostic. A path that does
  * not exist has no identity and is not a failure worth reporting: it is the ordinary case for an
@@ -318,7 +335,7 @@ int os_list(struct Os* os,
  *
  * @param os        Host to inspect. Must not be `NULL`.
  * @param file_path Path to inspect.
- * @param stat_out  Receives the identity and type. Written only on success. Must not be `NULL`.
+ * @param stat_out  Receives what the path names. Written only on success. Must not be `NULL`.
  * @return `0` when `stat_out` was filled, or `-1` with `errno` set when `file_path` could not be
  *         inspected.
  */

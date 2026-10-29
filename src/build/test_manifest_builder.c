@@ -191,7 +191,8 @@ static void test_registers_complete_output_set(void) {
 
   TEST_CHECK(populate(&manifest, &site_config, &sources, &static_paths, entries, 2, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  TEST_CHECK(manifest.count == 5);
+  // The five outputs of the site, and the build cache.
+  TEST_CHECK(manifest.count == 5 + 1);
 }
 
 // A `templates_dir` that does not exist holds no file an output could overwrite, so it claims
@@ -209,7 +210,8 @@ static void test_accepts_missing_templates_dir(void) {
 
   TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 1, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  TEST_CHECK(manifest.count == 1);
+  // The one output and the build cache.
+  TEST_CHECK(manifest.count == 2);
 }
 
 // An output beside an input root, in a directory whose name only starts with the root's name, is
@@ -293,7 +295,8 @@ static void test_reports_every_collision(void) {
                          "duplicate output path for 'site/content/c.md' and 'site/content/d.md': "
                          "'site/public/two/index.html'\n"));
   TEST_CHECK(log.errors == 2);
-  TEST_CHECK(manifest.count == 2);
+  // The two outputs that were accepted, and the build cache.
+  TEST_CHECK(manifest.count == 3);
 }
 
 // Two entries whose output paths differ only in ASCII case claim one file on a case-insensitive

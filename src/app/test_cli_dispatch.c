@@ -170,12 +170,13 @@ static void test_config_command_is_dispatched(void) {
 }
 
 // The `build` command is dispatched to `cmd_build_run` with the parsed options attached, so the
-// worker count, the verbose flag and the dry-run flag reach the build rather than being dropped on
-// the way. A dry run prints its listing and leaves no `public/`, which only a carried flag
-// explains. The verbose phase lines naming the requested count are the only externally visible
-// evidence that the other two fields were carried across. The test asks for one worker, so a
-// dropped count would show the detected count, on a host with more than one core. One worker also
-// finishes the jobs in order, so the progress lines can be compared.
+// worker count, the verbose flag, the dry-run flag and the force flag reach the build rather than
+// being dropped on the way. A dry run prints its listing and leaves no `public/`, which only a
+// carried flag explains. The verbose phase lines naming the requested count, and the one saying the
+// build cache is ignored, are the only externally visible evidence that the other three fields were
+// carried across. The test asks for one worker, so a dropped count would show the detected count,
+// on a host with more than one core. One worker also finishes the jobs in order, so the progress
+// lines can be compared.
 static void test_build_command_receives_parsed_options(void) {
   char root_dir[] = "/tmp/sosig-dispatch-site.XXXXXX";
   int saved_dir_fd = -1;
@@ -188,13 +189,14 @@ static void test_build_command_receives_parsed_options(void) {
   TEST_CHECK(dispatch_capturing(3, dry_run_argv, &dry_run_out) == EXIT_CODE_OK);
   TEST_CHECK(strcmp(dry_run_out.stdout_out,
                     "write\tpublic/hello.html\n"
-                    "write\tpublic/world.html\n") == 0);
+                    "write\tpublic/world.html\n"
+                    "write\tpublic/_sosig/v1-build-cache.tsv\n") == 0);
   TEST_CHECK(dry_run_out.stderr_out[0] == '\0');
   TEST_CHECK(access("public", F_OK) != 0);
 
-  char* argv[] = {"sosig", "build", "--verbose", "--workers=1", NULL};
+  char* argv[] = {"sosig", "build", "--verbose", "--workers=1", "--force", NULL};
   struct DispatchOutput dispatch_out;
-  TEST_CHECK(dispatch_capturing(4, argv, &dispatch_out) == EXIT_CODE_OK);
+  TEST_CHECK(dispatch_capturing(5, argv, &dispatch_out) == EXIT_CODE_OK);
   TEST_CHECK(dispatch_out.stdout_out[0] == '\0');
   TEST_CHECK(strcmp(dispatch_out.stderr_out,
                     "loading config\n"
@@ -204,11 +206,13 @@ static void test_build_command_receives_parsed_options(void) {
                     "\rparsing content 1/2\rparsing content 2/2\n"
                     "collecting content entries\n"
                     "building output manifest\n"
+                    "ignoring build cache, rendering every page\n"
                     "rendering content, workers: 1\n"
                     "\rrendering content 1/2\rrendering content 2/2\n"
                     "rendering aggregate templates\n"
                     "rendering feed templates\n"
                     "copying static files\n"
+                    "writing build cache\n"
                     "removing stale outputs\n"
                     "removed stale outputs: 0\n"
                     "build complete\n") == 0);

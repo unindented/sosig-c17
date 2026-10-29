@@ -490,6 +490,16 @@ int os_stat(struct Os* os, struct Str file_path, struct OsStat* stat_out) {
   }
   stat_out->identity = (struct OsIdentity){(uint64_t)st.st_dev, (uint64_t)st.st_ino};
   stat_out->is_dir = S_ISDIR(st.st_mode);
+  // A size beyond `PTRDIFF_MAX` cannot occur on a 64-bit system, and on a 32-bit one it is clamped,
+  // which no size limit accepts anyway.
+  stat_out->len = st.st_size < PTRDIFF_MAX ? (ptrdiff_t)st.st_size : PTRDIFF_MAX;
+#if defined(__APPLE__)
+  stat_out->mtime_s = (int64_t)st.st_mtimespec.tv_sec;
+  stat_out->mtime_ns = (int64_t)st.st_mtimespec.tv_nsec;
+#else
+  stat_out->mtime_s = (int64_t)st.st_mtim.tv_sec;
+  stat_out->mtime_ns = (int64_t)st.st_mtim.tv_nsec;
+#endif
   return 0;
 }
 

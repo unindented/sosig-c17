@@ -19,7 +19,7 @@ Download a prebuilt binary from the [Releases](https://github.com/unindented/sos
 
 `sosig` is command-based:
 
-- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the most worker threads the build runs. The value must be a positive integer. By default, the tool uses the detected CPU count. A build never runs more workers than it has content files, or more than four for each online CPU. Use `-n, --dry-run` to report what the build would change without changing it, as [Dry run](#dry-run) describes. Use `-v, --verbose` to print build progress to `stderr`.
+- `sosig build`: Generate the site in the configured output directory. Use `-w, --workers N` to set the most worker threads the build runs. The value must be a positive integer. By default, the tool uses the detected CPU count. A build never runs more workers than it has content files, or more than four for each online CPU. Use `-n, --dry-run` to report what the build would change without changing it, as [Dry run](#dry-run) describes. Use `--force` to ignore the [build cache](#build-cache) for one build. Use `-v, --verbose` to print build progress to `stderr`.
 - `sosig config`: Print the resolved project configuration as TOML.
 
 Run these commands for help:
@@ -41,9 +41,10 @@ remove	public/old-post/index.html
 ```
 
 - `write`: an output the build would write.
+- `keep`: a content page, aggregate, or feed the build would leave as it is, because the [build cache](#build-cache) finds it current.
 - `remove`: a path that the build would remove because the current inputs no longer produce it, directories included.
 
-The `write` lines come first, in the order the build plans them: content pages newest first, then aggregates, feeds, and static files. The `remove` lines follow, sorted. `cut -f2-` gives the bare paths for `sort`, `diff`, or `comm`. A dry run reports a failure exactly as a build does, on `stderr` and with the same exit code, and then prints no listing. With `-v`, progress still goes to `stderr`, so the listing stays clean to pipe.
+The `write` and `keep` lines come first, in the order the build plans them: content pages newest first, then aggregates, feeds, static files, and the build cache. The `remove` lines follow, sorted. `cut -f2-` gives the bare paths for `sort`, `diff`, or `comm`. A dry run reports a failure exactly as a build does, on `stderr` and with the same exit code, and then prints no listing. With `-v`, progress still goes to `stderr`, so the listing stays clean to pipe.
 
 A dry run that passes does not promise that the build will. It writes nothing, so it cannot find these failures:
 
@@ -51,6 +52,14 @@ A dry run that passes does not promise that the build will. It writes nothing, s
 - A static file that cannot be read. A dry run opens no file that it would copy.
 - An old file where a new output needs a directory, or an old directory where a new output needs a file, such as `public/blog` becoming `public/blog/index.html`.
 - An `output_dir` that exists but is not a usable directory.
+
+### Build cache
+
+A build records in `_sosig/v1-build-cache.tsv` below `output_dir` the size and modification time of every input the pages depend on: each content source and each file below `templates_dir`. Its first line records the config fields a render reads and the `sosig` version. The next build keeps a content page whose source, templates, and config are unchanged, without rendering it, and keeps the aggregates and feeds when no source changed. A page whose template reads `content_entries` or `site.updated` is made again when any entry changes. Any change below `templates_dir`, such as to a partial, makes every page again. Markdown is still converted for every source on every build.
+
+A tool that changes a file but keeps its size and modification time, such as `exiftool -P`, can leave a page that no longer matches its source. Run `sosig build --force` once to make every page again and write the build cache afresh.
+
+The file is published with the rest of `output_dir`. Its output paths are public already, but it also holds the names of the template files and the size and modification time of each source and template. Exclude `_sosig/v1-build-cache.tsv` when you deploy if that matters.
 
 ### Site layout
 

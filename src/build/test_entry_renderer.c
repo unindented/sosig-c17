@@ -83,10 +83,11 @@ static int render_pages(const struct SiteConfig* site_config,
   const struct Str site_updated =
       content_entry_date_latest((const struct ContentEntry* const*)entries, entry_count);
   const struct OutputWriter writer = {.manifest = &manifest, .os = os_posix()};
+  bool* entry_list_flags = arena_new(log->buf.arena, source_entry_count, bool);
   return page_renderer_render_pages(
       &writer, site_config, (const struct ContentEntry* const*)source_entries, source_entry_count,
-      (const struct ContentEntry* const*)entries, entry_count, site_updated, worker_count,
-      worker_arenas, false, os_posix(), test_arena(), log);
+      (const struct ContentEntry* const*)entries, entry_count, site_updated, NULL, worker_count,
+      worker_arenas, false, os_posix(), test_arena(), entry_list_flags, log);
 }
 
 /**

@@ -7,6 +7,7 @@
 #include "shared/arena.h"
 #include "shared/str.h"
 
+struct BuildCacheEntry;
 struct ContentEntry;
 struct JobArenas;
 struct Log;
@@ -26,10 +27,11 @@ struct SiteConfig;
  * One job runs per slot of `source_entries`. Each job renders its entry's page into a copy of its
  * worker's `perm` and its temporaries into a copy of its worker's scratch, writes the page to the
  * entry's `output_path` through `writer`, and leaves both regions as it found them, so at most one
- * page per worker is held in memory. `NULL` slots are skipped. A failed write is that entry's
- * diagnostic, like a failed render, and leaves the other pages written. Each finished job reports
- * progress when `is_verbose`. Failing jobs' errors go to `log` in entry order, as `job_run`
- * collects them.
+ * page per worker is held in memory. A slot whose `fresh_rows` entry is set and whose page exists
+ * keeps the page through `writer` instead, with no render. `NULL` slots are skipped. A failed write
+ * is that entry's diagnostic, like a failed render, and leaves the other pages written. Each
+ * finished job reports progress when `is_verbose`. Failing jobs' errors go to `log` in entry order,
+ * as `job_run` collects them.
  *
  * Call this only after `manifest_builder_populate` accepts every output path. Jobs write
  * concurrently, and the manifest is what guarantees that no two of them target the same file, so
@@ -47,6 +49,9 @@ struct SiteConfig;
  *                            `NULL` only when `content_entry_count` is 0.
  * @param content_entry_count Number of entries in `content_entries`.
  * @param site_updated        Site last-updated timestamp exposed as `site.updated`.
+ * @param fresh_rows          One slot per source, holding the build cache row that vouches for the
+ *                            page's inputs, or `NULL` where the page must be made. May be `NULL`
+ *                            when no page is fresh.
  * @param worker_count        Requested worker threads, as for `pool_run`.
  * @param worker_arenas       One `JobArenas` per requested worker, as for `job_run`. Must not be
  *                            `NULL`.
@@ -54,6 +59,9 @@ struct SiteConfig;
  * @param os                  Host the templates are read from and progress printed on, by every
  *                            worker at once. Must not be `NULL`.
  * @param scratch             Arena for the phase's own bookkeeping, as for `job_run`.
+ * @param entry_list_flags    One slot per source, which receives whether the page read the entry
+ *                            list: the render's answer, or the row's for a kept page. A skipped
+ *                            slot is left as it is. Must not be `NULL`.
  * @param log                 Log that receives the collected render errors. Its arena must be none
  *                            of the others. Must not be `NULL`.
  * @return `0` when every job succeeded, or `-1` when a page failed to render or write or the worker
@@ -66,11 +74,13 @@ int page_renderer_render_pages(const struct OutputWriter* writer,
                                const struct ContentEntry* const* content_entries,
                                ptrdiff_t content_entry_count,
                                struct Str site_updated,
+                               const struct BuildCacheEntry* const* fresh_rows,
                                ptrdiff_t worker_count,
                                struct JobArenas* worker_arenas,
                                bool is_verbose,
                                struct Os* os,
                                struct Arena scratch,
-                               struct Log* log) __attribute__((nonnull(1, 2, 9, 11, 13)));
+                               bool* entry_list_flags,
+                               struct Log* log) __attribute__((nonnull(1, 2, 10, 12, 14, 15)));
 
 #endif

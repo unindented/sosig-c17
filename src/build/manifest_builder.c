@@ -7,6 +7,7 @@
 #include "build/output_path.h"
 #include "core/path.h"
 #include "core/path_list.h"
+#include "domain/build_cache.h"
 #include "domain/content_entry.h"
 #include "domain/manifest.h"
 #include "domain/site_config.h"
@@ -559,6 +560,12 @@ int manifest_builder_populate(struct Manifest* manifest,
   }
   if (register_static_list(manifest, static_paths, site_config->static_dir, &inputs, &roots, perm,
                            scratch, log) != 0) {
+    rc = -1;
+  }
+  // The build cache is recorded last, so a dry run lists it last.
+  const struct Str cache_path = build_cache_path(site_config->output_dir, &scratch);
+  if (register_output_path(manifest, cache_path, S("build cache"), &inputs, &roots, perm, log) !=
+      0) {
     rc = -1;
   }
   // Every path is now recorded, so the prefix scan sees all of them.

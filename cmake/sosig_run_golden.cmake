@@ -1,5 +1,6 @@
-# This script builds one copied fixture site twice. It checks that the second build leaves the
-# generated output unchanged, then compares the result with the expected output. The release
+# This script builds one copied fixture site three times. It checks that the second build, which
+# reuses the build cache, and a third, `--force` build, which ignores it, each leave the generated
+# output unchanged, then compares the result with the expected output. The release
 # workflow runs it against a packaged binary, with `SOSIG_EMULATOR` naming a launcher such as
 # `qemu-aarch64` when the binary targets another architecture.
 
@@ -37,36 +38,44 @@ if(NOT build_result EQUAL 0)
 endif()
 file(COPY "${actual_dir}" DESTINATION "${SOSIG_SCRATCH_DIR}/first")
 
-execute_process(
-  COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2
-  WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
-  RESULT_VARIABLE build_result
-  OUTPUT_VARIABLE build_stdout
-  ERROR_VARIABLE build_stderr
-)
-if(NOT build_result EQUAL 0)
-  message(
-    FATAL_ERROR "second fixture site build failed with exit status ${build_result}:\n"
-                "${build_stdout}${build_stderr}"
-  )
-endif()
-
-file(GLOB_RECURSE first_files RELATIVE "${first_dir}" "${first_dir}/*")
-foreach(file IN LISTS first_files)
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E compare_files "${first_dir}/${file}" "${actual_dir}/${file}"
-    RESULT_VARIABLE compare_result
-    OUTPUT_QUIET ERROR_QUIET
-  )
-  if(NOT compare_result EQUAL 0)
-    message(FATAL_ERROR "second build changed generated output: '${file}'")
+foreach(build IN ITEMS second third)
+  set(build_args)
+  if(build STREQUAL "third")
+    set(build_args --force)
   endif()
+  execute_process(
+    COMMAND ${SOSIG_EMULATOR} "${SOSIG_EXECUTABLE}" build --workers 2 ${build_args}
+    WORKING_DIRECTORY "${SOSIG_SCRATCH_DIR}"
+    RESULT_VARIABLE build_result
+    OUTPUT_VARIABLE build_stdout
+    ERROR_VARIABLE build_stderr
+  )
+  if(NOT build_result EQUAL 0)
+    message(
+      FATAL_ERROR "${build} fixture site build failed with exit status ${build_result}:\n"
+                  "${build_stdout}${build_stderr}"
+    )
+  endif()
+
+  file(GLOB_RECURSE first_files RELATIVE "${first_dir}" "${first_dir}/*")
+  foreach(file IN LISTS first_files)
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E compare_files "${first_dir}/${file}" "${actual_dir}/${file}"
+      RESULT_VARIABLE compare_result
+      OUTPUT_QUIET ERROR_QUIET
+    )
+    if(NOT compare_result EQUAL 0)
+      message(FATAL_ERROR "${build} build changed generated output: '${file}'")
+    endif()
+  endforeach()
 endforeach()
 
 # Collect both file lists after `sosig` runs. Runtime lists are not build inputs. Fixture site
 # changes do not require CMake to run again.
 file(GLOB_RECURSE expected_files RELATIVE "${SOSIG_EXPECTED_DIR}" "${SOSIG_EXPECTED_DIR}/*")
 file(GLOB_RECURSE actual_files RELATIVE "${actual_dir}" "${actual_dir}/*")
+# The build cache holds the modification times of the copied sources, so it has no expected copy.
+list(REMOVE_ITEM actual_files "_sosig/v1-build-cache.tsv")
 list(SORT expected_files)
 list(SORT actual_files)
 

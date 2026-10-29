@@ -158,7 +158,7 @@ static int render_limited(const char* templates_dir,
   struct Str html = {0};
   if (template_render_file_limited(str_from_cstr(templates_dir), str_from_cstr(template_name),
                                    context, output_len_max, os_posix(), perm, test_arena(), &html,
-                                   log) != 0) {
+                                   NULL, log) != 0) {
     return -1;
   }
   if (html_out != NULL) {
@@ -194,7 +194,7 @@ static int render(const char* templates_dir,
   }
   struct Str html = {0};
   if (template_render_file(str_from_cstr(templates_dir), str_from_cstr(template_name), context,
-                           os_posix(), perm, test_arena(), &html, log) != 0) {
+                           os_posix(), perm, test_arena(), &html, NULL, log) != 0) {
     return -1;
   }
   if (html_out != NULL) {
@@ -222,6 +222,48 @@ static void test_renders_escaped_title_and_raw_body(void) {
   TEST_CHECK(strstr(rendered_html, "Content Entry &lt;One&gt;") != NULL);
   TEST_CHECK(strstr(rendered_html, "<p>raw</p>") != NULL);
   TEST_CHECK(strstr(rendered_html, "rel=\"alternate\"") != NULL);
+}
+
+// A render reports whether it read the entry list: `content_entries` and `site.updated` depend on
+// every entry, directly or through a partial, and the other `site.*` fields and the current entry's
+// own fields do not.
+static void test_reports_whether_it_read_the_entry_list(void) {
+  static const struct {
+    const char* text;
+    bool is_entry_list_read;
+  } cases[] = {
+      {"{{title}} {{site.title}} {{generator}}", false},
+      {"{{#content_entries}}{{title}}{{/content_entries}}", true},
+      {"{{^content_entries}}none{{/content_entries}}", true},
+      {"{{site.updated}}", true},
+      {"{{>card}}", true},
+  };
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct Arena perm = test_arena();
+    char root_dir[] = "/tmp/sosig-template-XXXXXX";
+    if (write_template_fixture(root_dir, cases[i].text) != 0) {
+      return;
+    }
+    if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "{{site.updated}}") == 0)) {
+      remove_fixture_tree(root_dir);
+      return;
+    }
+    struct SiteConfig site_config;
+    init_test_site_config(&site_config);
+    struct ContentEntry entry;
+    init_test_content_entry(&entry);
+    const struct TemplateContext context = {
+        .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+    struct Str html = {0};
+    bool is_entry_list_read = !cases[i].is_entry_list_read;
+    struct Log log = test_log();
+    const int rc =
+        template_render_file(str_from_cstr(root_dir), S("index.html"), &context, os_posix(), &perm,
+                             test_arena(), &html, &is_entry_list_read, &log);
+    remove_fixture_tree(root_dir);
+    TEST_CHECK(rc == 0);
+    TEST_CHECK_(is_entry_list_read == cases[i].is_entry_list_read, "'%s'", cases[i].text);
+  }
 }
 
 // Content entries and their tag lists iterate with escaping.
@@ -1422,6 +1464,7 @@ cleanup:
 
 TEST_LIST = {
     {"renders escaped title and raw body", test_renders_escaped_title_and_raw_body},
+    {"reports whether it read the entry list", test_reports_whether_it_read_the_entry_list},
     {"iterates content entries and tags", test_iterates_content_entries_and_tags},
     {"empty tag does not truncate tag list", test_empty_tag_does_not_truncate_tag_list},
     {"nested section reiterates content entries", test_nested_section_reiterates_content_entries},

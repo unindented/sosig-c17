@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "runtime/os.h"
 #include "shared/str.h"
 
 /**
@@ -21,6 +22,12 @@
 struct ContentEntry {
   /** Source Markdown path, used for diagnostics and output messages. */
   struct Str source_path;
+
+  /**
+   * What `os_stat` reported for the source just before the parse read it. The build cache records
+   * it, so the next build can tell whether the source changed since.
+   */
+  struct OsStat source_stat;
 
   /** Required frontmatter title. */
   struct Str title;

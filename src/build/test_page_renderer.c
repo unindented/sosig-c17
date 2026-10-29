@@ -117,10 +117,11 @@ static int render_entry_slots(struct ContentEntry* const* source_entries,
   struct SiteConfig site_config;
   site_config_init(&site_config);
   const struct OutputWriter writer = {.manifest = &manifest, .os = os};
+  bool* entry_list_flags = arena_new(&perm, source_entry_count > 0 ? source_entry_count : 1, bool);
   return page_renderer_render_pages(
       &writer, &site_config, (const struct ContentEntry* const*)source_entries, source_entry_count,
-      (const struct ContentEntry* const*)entries, entry_count, site_updated, worker_count,
-      worker_arenas, false, os, test_arena(), log);
+      (const struct ContentEntry* const*)entries, entry_count, site_updated, NULL, worker_count,
+      worker_arenas, false, os, test_arena(), entry_list_flags, log);
 }
 
 // A content template resolves `site.updated` to the newest entry's date, not to nothing. The page
@@ -211,9 +212,10 @@ static void test_accepts_empty_entry_set(void) {
   struct Os* os = os_memory();
   const struct OutputWriter writer = {.manifest = &manifest, .os = os};
 
+  bool entry_list_flag = false;
   TEST_CHECK(page_renderer_render_pages(&writer, &site_config, NULL, 0, NULL, 0,
-                                        S("1970-01-01T00:00:00Z"), 1, &worker_arenas, false, os,
-                                        test_arena(), &log) == 0);
+                                        S("1970-01-01T00:00:00Z"), NULL, 1, &worker_arenas, false,
+                                        os, test_arena(), &entry_list_flag, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 }
 

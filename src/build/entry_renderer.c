@@ -71,9 +71,10 @@ static int render_content_entry_job(ptrdiff_t index,
                                     void* userdata) __attribute__((nonnull(2, 3, 4)));
 
 /**
- * @brief Reads a content entry source file and parses its frontmatter into the entry.
+ * @brief Stats and reads a content entry source file and parses its frontmatter into the entry.
  *
- * @param entry          Entry that receives the parsed metadata. Must not be `NULL`.
+ * @param entry          Entry that receives the source's stat and the parsed metadata. Must not be
+ *                       `NULL`.
  * @param source_path    Path of the source file to read.
  * @param source_len_max Largest source file accepted, in bytes.
  * @param os             Host the file is read from. Must not be `NULL`.
@@ -232,6 +233,9 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
                                             struct Arena* source_arena,
                                             struct ContentEntryRenderSource* source_out,
                                             struct Log* log) {
+  // The stat comes first, so an edit made during the read changes the stat the build cache records
+  // and the next build sees it. A source that cannot be inspected fails the read below.
+  (void)os_stat(os, source_path, &entry->source_stat);
   if (os_read(os, source_path, source_len_max, source_arena, &source_out->markdown,
               S("failed to read content"), log) != 0) {
     return -1;

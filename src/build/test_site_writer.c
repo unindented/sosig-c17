@@ -89,9 +89,9 @@ static void test_writes_complete_output_layer(void) {
   struct Arena output = test_arena();
   struct Log log = test_log();
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, aggregates, 2, entries, 2,
-                                         SITE_UPDATED, os, output, test_arena(), &log) == 0);
+                                         SITE_UPDATED, false, os, output, test_arena(), &log) == 0);
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, feeds, 1, entries, 1, SITE_UPDATED,
-                                         os, output, test_arena(), &log) == 0);
+                                         false, os, output, test_arena(), &log) == 0);
   TEST_CHECK(
       site_writer_copy_static_files(&writer, &site_config, &static_paths, test_arena(), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
@@ -120,7 +120,8 @@ static void test_write_templates_reports_write_failure(void) {
   struct Arena output = test_arena();
   struct Log log = test_log();
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, aggregates, 1, NULL, 0,
-                                         SITE_UPDATED, os, output, test_arena(), &log) == -1);
+                                         SITE_UPDATED, false, os, output, test_arena(),
+                                         &log) == -1);
   TEST_CHECK(test_log_is(&log, "failed to write template output: %s ('public/index.html')\n",
                          strerror(EISDIR)));
 }
