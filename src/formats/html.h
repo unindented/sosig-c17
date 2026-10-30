@@ -12,8 +12,8 @@ struct Buf;
  * verbatim.
  *
  * This is the project's escaping boundary against markup injection. Every `{{ ... }}` interpolation
- * in a template reaches it through `out_escaped`, including untrusted text from frontmatter and
- * Markdown bodies. The five bytes are sufficient for the two contexts that templates use:
+ * in a template reaches it through `out_escaped`, including untrusted text from the metadata and
+ * bodies of content sources. The five bytes are sufficient for the two contexts that templates use:
  * - element text
  * - a quoted attribute value in HTML or XML, with either quote style
  *

@@ -9,7 +9,7 @@
 #include "shared/str.h"
 
 /**
- * Content entry metadata and generated paths for one Markdown source file.
+ * Content entry metadata and generated paths for one content source file.
  *
  * The entry and every string it points at live in the long-lived arena of the worker that parsed
  * it, or are string literals, so an entry stays valid for the rest of the build. Nothing borrows
@@ -20,7 +20,7 @@
  * write would race. Do not add a field that a later phase fills in place.
  */
 struct ContentEntry {
-  /** Source Markdown path, used for diagnostics and output messages. */
+  /** Content source path, used for diagnostics and output messages. */
   struct Str source_path;
 
   /**
@@ -29,7 +29,7 @@ struct ContentEntry {
    */
   struct OsStat source_stat;
 
-  /** Required frontmatter title. */
+  /** Required title, from the frontmatter or the Org keywords. */
   struct Str title;
 
   /**
@@ -40,23 +40,24 @@ struct ContentEntry {
 
   /**
    * Same instant as `date` in Unix epoch seconds, used to sort content entries. Both come from the
-   * one frontmatter `date` key and are written together, so a change to either must keep them
+   * one `date` key or keyword and are written together, so a change to either must keep them
    * agreeing or the feed order stops matching the shown dates.
    */
   int64_t date_epoch;
 
-  /** Optional summary text for templates. Empty when the frontmatter omits it. */
+  /** Optional summary text for templates. Empty when the source omits it. */
   struct Str description;
 
-  /** URL-safe slug derived from frontmatter or source filename. */
+  /** URL-safe slug derived from the `slug` key or keyword, or from the source filename. */
   struct Str slug;
 
   /** Array of arena-owned tag strings. */
   struct Str* tags;
 
   /**
-   * Number of `tags` entries. `0` with `tags` as `NULL` when the frontmatter had no `tags` key, and
-   * `0` with `tags` non-`NULL` for an empty array. Readers must not distinguish the two.
+   * Number of `tags` entries. `0` with `tags` as `NULL` when the source had no `tags` key or
+   * `filetags` keyword, and `0` with `tags` non-`NULL` for an empty one. Readers must not
+   * distinguish the two.
    */
   ptrdiff_t tag_count;
 

@@ -643,13 +643,13 @@ static int load_build_inputs(struct BuildState* state, struct Log* log) {
   }
 
   build_verbose(state, "discovering content");
-  static const struct Str content_suffixes[] = {STR_INIT(".md")};
+  static const struct Str content_suffixes[] = {STR_INIT(".md"), STR_INIT(".org")};
   // A failure names the directory or entry that failed, which is more precise than the configured
   // root, so the root is not repeated.
   if (walk_files_with_suffixes(
           &state->source_paths, state->site_config.content_dir, state->site_config.output_dir,
           content_suffixes, sizeof(content_suffixes) / sizeof(content_suffixes[0]), false,
-          state->os, &state->perm, state->scratch, S("failed to list Markdown files"), log) != 0) {
+          state->os, &state->perm, state->scratch, S("failed to list content files"), log) != 0) {
     return -1;
   }
   build_verbose(state, "discovering static files");

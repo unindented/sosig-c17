@@ -327,6 +327,60 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
+// An Org source renders its keyword metadata and its whole file as the body, through the Org
+// converter, with the same slug, paths and page as a Markdown source of that name.
+static void test_renders_org_entry_metadata_and_html(void) {
+  char root_dir[] = "/tmp/sosig-entry-org.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
+    return;
+  }
+
+  const char content[] =
+      ":PROPERTIES:\n"
+      ":ID: 1234\n"
+      ":END:\n"
+      "#+title: Hello\n"
+      "#+date: [2026-07-01 Wed]\n"
+      "/Body/\n";
+  struct SiteConfig site_config;
+  site_config_init(&site_config);
+  struct PathList source_paths = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
+  struct Arena perm = test_arena();
+  struct Log log = {.buf = {.arena = &perm}};
+  const struct ContentEntry* entry = NULL;
+  struct Str page = {0};
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.org", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
+                                     "<main>{{title}} {{{body}}}</main>\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(render_single_source(root_dir, "content/hello.org", &site_config, &source_paths,
+                                  source_entries, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  entry = source_entries[0];
+  TEST_CHECK(entry != NULL);
+  if (entry != NULL) {
+    TEST_CHECK(str_eq(entry->title, S("Hello")));
+    TEST_CHECK(str_eq(entry->slug, S("hello")));
+    TEST_CHECK(str_eq(entry->body_html, S("<p><i>Body</i></p>\n")));
+    TEST_CHECK(str_eq(entry->url_path, S("/hello.html")));
+    TEST_CHECK(str_eq(entry->output_path, S("public/hello.html")));
+  }
+
+  TEST_CHECK(read_output(root_dir, "public/hello.html", &perm, &page) == 0);
+  TEST_CHECK(str_eq(page, S("<main>Hello <p><i>Body</i></p>\n</main>\n")));
+
+cleanup:
+  remove_fixture_tree(root_dir);
+}
+
 // A draft source is parsed but leaves its entry slot `NULL` and writes no page.
 static void test_skips_draft_entry(void) {
   char root_dir[] = "/tmp/sosig-entry-draft.XXXXXX";
@@ -359,6 +413,47 @@ static void test_skips_draft_entry(void) {
   }
 
   TEST_CHECK(render_single_source(root_dir, "content/hello.md", &site_config, &source_paths,
+                                  source_entries, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(source_entries[0] == NULL);
+
+  TEST_CHECK(read_output(root_dir, "public/hello.html", &perm, &page) == -1);
+
+cleanup:
+  remove_fixture_tree(root_dir);
+}
+
+// An Org draft is parsed but leaves its entry slot `NULL` and writes no page, as a Markdown one
+// does.
+static void test_skips_org_draft_entry(void) {
+  char root_dir[] = "/tmp/sosig-entry-org-draft.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
+    return;
+  }
+
+  const char content[] =
+      "#+title: Hello\n"
+      "#+date: 2026-07-01\n"
+      "#+draft: true\n"
+      "Body\n";
+  struct SiteConfig site_config;
+  site_config_init(&site_config);
+  struct PathList source_paths = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
+  struct Arena perm = test_arena();
+  struct Log log = {.buf = {.arena = &perm}};
+  struct Str page = {0};
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.org", content) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html", "{{{body}}}\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(render_single_source(root_dir, "content/hello.org", &site_config, &source_paths,
                                   source_entries, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(source_entries[0] == NULL);
@@ -924,9 +1019,47 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
+// An Org source without its required keywords fails in `frontmatter_parse_org`, which names the
+// source after each cause, as a Markdown source without a fence fails in `frontmatter_split`.
+static void test_reports_missing_org_keywords(void) {
+  char root_dir[] = "/tmp/sosig-entry-org-keywords.XXXXXX";
+  if (init_fixture_dir(root_dir) != 0) {
+    return;
+  }
+
+  struct SiteConfig site_config;
+  site_config_init(&site_config);
+  struct PathList source_paths = {0};
+  struct ContentEntry* source_entries[1] = {NULL};
+  struct Arena perm = test_arena();
+  struct Log log = {.buf = {.arena = &perm}};
+  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml", SITE_CONFIG) == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content/hello.org", "* No keywords here\n") == 0)) {
+    goto cleanup;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "templates/content.html",
+                                     "<main>{{title}}</main>\n") == 0)) {
+    goto cleanup;
+  }
+
+  TEST_CHECK(render_single_source(root_dir, "content/hello.org", &site_config, &source_paths,
+                                  source_entries, &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "missing required Org keyword 'title' (in 'content/hello.org')\n"
+                         "missing required Org keyword 'date' (in 'content/hello.org')\n"));
+  TEST_CHECK(source_entries[0] == NULL);
+
+cleanup:
+  remove_fixture_tree(root_dir);
+}
+
 TEST_LIST = {
     {"renders entry metadata and html", test_renders_entry_metadata_and_html},
+    {"renders org entry metadata and html", test_renders_org_entry_metadata_and_html},
     {"skips draft entry", test_skips_draft_entry},
+    {"skips org draft entry", test_skips_org_draft_entry},
     {"keeps perm only for a published entry", test_keeps_perm_only_for_a_published_entry},
     {"verbose prints one progress line per job", test_verbose_prints_one_progress_line_per_job},
     {"nests output under slugified sections", test_nests_output_under_slugified_sections},
@@ -938,5 +1071,6 @@ TEST_LIST = {
     {"rejects oversize output path", test_rejects_oversize_output_path},
     {"rejects oversize path segment", test_rejects_oversize_path_segment},
     {"reports missing frontmatter fence", test_reports_missing_frontmatter_fence},
+    {"reports missing org keywords", test_reports_missing_org_keywords},
     {NULL, NULL},
 };

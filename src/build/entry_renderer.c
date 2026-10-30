@@ -14,6 +14,7 @@
 #include "domain/permalink.h"
 #include "domain/site_config.h"
 #include "formats/markdown.h"
+#include "formats/org.h"
 #include "runtime/memory.h"
 #include "runtime/os.h"
 #include "shared/arena.h"
@@ -21,13 +22,18 @@
 #include "shared/log.h"
 #include "shared/str.h"
 
-/** Source bytes and frontmatter slices for one content entry parse job. */
+/** Source bytes and body slice for one content entry parse job. */
 struct ContentEntryRenderSource {
-  /** Complete Markdown source file contents, in the job's scratch. */
-  struct Str markdown;
+  /**
+   * Complete source file contents, in the job's scratch. The body of an Org source is all of it.
+   */
+  struct Str text;
 
-  /** Borrowed slices into `markdown` after frontmatter splitting. */
-  struct FrontmatterSplit split;
+  /** Borrowed slice of `text` that the converter renders. */
+  struct Str body;
+
+  /** Whether the source is Org rather than Markdown. */
+  bool is_org;
 };
 
 /**
@@ -71,7 +77,8 @@ static int render_content_entry_job(ptrdiff_t index,
                                     void* userdata) __attribute__((nonnull(2, 3, 4)));
 
 /**
- * @brief Stats and reads a content entry source file and parses its frontmatter into the entry.
+ * @brief Stats and reads a content entry source file and parses its frontmatter or Org keywords
+ *        into the entry.
  *
  * @param entry          Entry that receives the source's stat and the parsed metadata. Must not be
  *                       `NULL`.
@@ -82,7 +89,7 @@ static int render_content_entry_job(ptrdiff_t index,
  * @param source_arena   Arena that owns the file bytes, which the caller keeps until the body is
  *                       converted. The parse takes its temporaries from the free space after them.
  *                       Must not be `NULL`.
- * @param source_out     Receives the file bytes and frontmatter/body slices. Must not be `NULL`.
+ * @param source_out     Receives the file bytes, the body slice and the format. Must not be `NULL`.
  * @param log            Log of the job, which receives the failure. Must not be `NULL`.
  * @return `0` on success, or `-1` on a read, split, or parse failure.
  */
@@ -130,7 +137,7 @@ static int render_content_entry_finalize_paths(struct ContentEntry* entry,
  * that does not carry that prefix is a contract violation the caller reports. This function cannot
  * derive a section from it.
  *
- * @param source_relative_path Source Markdown path with the `<content_dir>/` prefix removed.
+ * @param source_relative_path Content source path with the `<content_dir>/` prefix removed.
  * @param arena                Arena that owns the returned section string. Must not be `NULL`.
  * @return Section owned by `arena`.
  */
@@ -174,7 +181,7 @@ int entry_renderer_render_entries(const struct SiteConfig* site_config,
                                   struct Arena scratch,
                                   struct ContentEntry** source_entries,
                                   struct Log* log) {
-  // A source within this limit is a body `markdown_to_html` accepts.
+  // A source within this limit is a body either converter accepts.
   assert(source_len_max <= CONTENT_FILE_LEN_MAX);
   struct EntryRenderContext context = {
       .site_config = site_config,
@@ -208,12 +215,13 @@ static int render_content_entry_job(ptrdiff_t index,
   }
   // The HTML grows in place at the end of `perm`, which nothing else allocates from while the
   // converter runs, so a large body is built without a copy. The read capped the file at
-  // `CONTENT_FILE_LEN_MAX`, the converter's input limit.
-  entry->body_html = markdown_to_html(source.split.body, &perm);
+  // `CONTENT_FILE_LEN_MAX`, the input limit of both converters.
+  entry->body_html =
+      source.is_org ? org_to_html(source.body, &perm) : markdown_to_html(source.body, &perm);
   // The entry keeps copies of what it needs. The worker's scratch outlives the job, so a large
   // source's pages are given back.
-  if (source.markdown.len >= JOB_SOURCE_DISCARD_LEN_MIN) {
-    arena_discard(&scratch, source.markdown.data, source.markdown.len);
+  if (source.text.len >= JOB_SOURCE_DISCARD_LEN_MIN) {
+    arena_discard(&scratch, source.text.data, source.text.len);
   }
   if (render_content_entry_finalize_paths(entry, context->site_config, source_path, &perm, scratch,
                                           log) != 0) {
@@ -236,16 +244,25 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
   // The stat comes first, so an edit made during the read changes the stat the build cache records
   // and the next build sees it. A source that cannot be inspected fails the read below.
   (void)os_stat(os, source_path, &entry->source_stat);
-  if (os_read(os, source_path, source_len_max, source_arena, &source_out->markdown,
+  if (os_read(os, source_path, source_len_max, source_arena, &source_out->text,
               S("failed to read content"), log) != 0) {
     return -1;
   }
-  // Both name the source in each error they record, so nothing is added here.
-  if (frontmatter_split(source_out->markdown, source_path, &source_out->split, log) != 0) {
+  // The walk finds only the suffixes in `cmd_build.c`'s `content_suffixes`, so a source that is not
+  // Org is Markdown. Every parse below names the source in each error it records, so nothing is
+  // added here.
+  source_out->is_org = str_endswith(source_path, S(".org"));
+  if (source_out->is_org) {
+    // Org keywords render nothing, so the whole file is the body and nothing is cut out of it.
+    source_out->body = source_out->text;
+    return frontmatter_parse_org(entry, source_out->text, source_path, perm, *source_arena, log);
+  }
+  struct FrontmatterSplit split = {0};
+  if (frontmatter_split(source_out->text, source_path, &split, log) != 0) {
     return -1;
   }
-  return frontmatter_parse(entry, source_out->split.frontmatter, source_path, perm, *source_arena,
-                           log);
+  source_out->body = split.body;
+  return frontmatter_parse(entry, split.frontmatter, source_path, perm, *source_arena, log);
 }
 
 static int render_content_entry_finalize_paths(struct ContentEntry* entry,

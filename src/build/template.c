@@ -236,8 +236,9 @@ static int out_escaped(const char* output, size_t output_len, void* renderer_dat
  * one append, and an append is not necessarily small. `node_dump` hands `out_fn` a whole scalar in
  * a single call, and mustache4c hands `out_verbatim` each literal run of a template or partial
  * whole, so the largest append is the longest literal run or scalar. For `{{{body}}}` that scalar
- * is an entry's entire rendered HTML. md4c is not on this path at all. It fills `markdown.c`'s own
- * buffer and never reaches these callbacks. A non-zero return aborts `mustache_process`.
+ * is an entry's entire rendered HTML. md4c and org4c are not on this path at all. They fill
+ * `markdown.c`'s and `org.c`'s own buffers and never reach these callbacks. A non-zero return
+ * aborts `mustache_process`.
  *
  * @param render_output Render destination whose buffer length is checked. Must not be `NULL`.
  * @return `0` when the render may continue, or `-1` once the limit is passed.

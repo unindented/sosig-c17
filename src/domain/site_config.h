@@ -46,7 +46,7 @@ struct SiteConfig {
    */
   struct Str permalink;
 
-  /** Directory containing Markdown content. Defaults to `content`. */
+  /** Directory containing the content source files. Defaults to `content`. */
   struct Str content_dir;
 
   /** Directory where generated files are written. Defaults to `public`. */

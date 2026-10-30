@@ -55,7 +55,7 @@ A dry run that passes does not promise that the build will. It writes nothing, s
 
 ### Build cache
 
-A build records in `_sosig/v1-build-cache.tsv` below `output_dir` the size and modification time of every input the pages depend on: each content source and each file below `templates_dir`. Its first line records the config fields a render reads and the `sosig` version. The next build keeps a content page whose source, templates, and config are unchanged, without rendering it, and keeps the aggregates and feeds when no source changed. A page whose template reads `content_entries` or `site.updated` is made again when any entry changes. Any change below `templates_dir`, such as to a partial, makes every page again. Markdown is still converted for every source on every build.
+A build records in `_sosig/v1-build-cache.tsv` below `output_dir` the size and modification time of every input the pages depend on: each content source and each file below `templates_dir`. Its first line records the config fields a render reads and the `sosig` version. The next build keeps a content page whose source, templates, and config are unchanged, without rendering it, and keeps the aggregates and feeds when no source changed. A page whose template reads `content_entries` or `site.updated` is made again when any entry changes. Any change below `templates_dir`, such as to a partial, makes every page again. Markdown and Org are still converted for every source on every build.
 
 A tool that changes a file but keeps its size and modification time, such as `exiftool -P`, can leave a page that no longer matches its source. Run `sosig build --force` once to make every page again and write the build cache afresh.
 
@@ -87,7 +87,7 @@ sosig.toml
 
 The tool removes trailing `/` characters from `content_dir`, `output_dir`, `templates_dir`, and `static_dir`. These fields must not be empty. Each field can contain an absolute or parent-relative path.
 
-The build searches all directories under `content_dir` for regular files that end in `.md`. It creates `output_dir` and all required output subdirectories. It overwrites each output file that the current build generates.
+The build searches all directories under `content_dir` for regular files that end in `.md` or `.org`. It creates `output_dir` and all required output subdirectories. It overwrites each output file that the current build generates.
 
 The searches of `content_dir` and `static_dir` follow symlinked directories but read each directory only once. A directory that more than one path reaches publishes its files once, not once per path. For example, with `blog` a symlink to `posts`, the entries publish only under `posts`. The build prefers the path that uses no symlink. For a directory that only symlinks reach, it uses the first such path in byte order. A symlink back into its own parent directories is skipped.
 
@@ -105,7 +105,7 @@ Before the tool renders page templates or writes output files, it rejects an out
 
 - Two producers use the same output path. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
-- An output is at or below `content_dir`, `templates_dir`, or `static_dir`, even if no file exists at that path yet, such as through a symlink inside `output_dir`. Otherwise the next build would read a generated `.md` file as a content source or copy a generated file as a static file, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
+- An output is at or below `content_dir`, `templates_dir`, or `static_dir`, even if no file exists at that path yet, such as through a symlink inside `output_dir`. Otherwise the next build would read a generated content file as a content source or copy a generated file as a static file, and a template could include a generated partial in the same build. The check compares directories, not path text, so it also catches another spelling of a directory or a symlink to it.
 - An output overwrites the config, a content source, a static file, or any file below `templates_dir`, including partials.
 
 The build creates `output_dir` only after these checks pass, so a rejected build creates nothing. After a successful build, it removes every file and directory below `output_dir` that the build did not write: the pages of deleted or renamed entries, the outputs of removed templates and static files, and anything added by hand. `output_dir` therefore holds only what the current inputs produce, and must name a directory used for nothing else, because the first build into a directory empties it of everything else, hidden files included. A symlink in `output_dir` that leads to no current output is removed as a link, so what it points to is untouched. A failed build removes nothing. If rendering or writing fails partway, some outputs can be new while others remain unchanged.
@@ -128,7 +128,7 @@ author = "Author Name"
 # `index.html`. For example, `/{slug}/` gives the entry a URL such as `/<slug>/index.html`.
 permalink = "/{section}/{slug}.html"
 
-# Directory containing Markdown source files.
+# Directory containing content source files.
 content_dir = "content"
 
 # Directory where generated files are written. This directory is site-owned.
@@ -140,7 +140,7 @@ templates_dir = "templates"
 # Directory containing files copied recursively into `output_dir` as-is.
 static_dir = "static"
 
-# Template used for content entries unless a frontmatter template overrides it.
+# Template used for content entries unless the entry's `template` overrides it.
 content_template = "content.html"
 
 # Aggregate templates rendered with all non-draft content entries.
@@ -159,7 +159,7 @@ An aggregate or feed template name has two uses. It is the source path below `te
 
 ### Content
 
-Each content entry starts with TOML frontmatter between `+++` fences. The parser accepts a UTF-8 BOM and CRLF line endings. For a nested source, `{section}` contains its source directory relative to `content_dir`. The tool normalizes each directory segment as a slug. The example below lists every key the frontmatter can contain. The tool rejects any other key, so a misspelled key such as `drfat` fails the build instead of leaving the default in place.
+A Markdown entry starts with TOML frontmatter between `+++` fences. The parser accepts a UTF-8 BOM and CRLF line endings. The example below lists every key the frontmatter can contain. The tool rejects any other key, so a misspelled key such as `drfat` fails the build instead of leaving the default in place.
 
 ```toml
 +++
@@ -188,6 +188,24 @@ template = "feature.html"
 +++
 ```
 
+An Org entry needs no fences. The tool reads the keywords at the top of the file, such as `#+title: Content Entry Title`, up to its first line that is not blank, a comment, a property drawer, or a keyword. A keyword in the body, such as one inside a source block, is not read. A key matches in any case, so `#+TITLE:` and `#+title:` are the same, and the tool trims the value. The parser accepts a UTF-8 BOM and CRLF line endings. Emacs reads the first four keywords too, so a note it exports publishes as it stands:
+
+| Keyword | Entry field | Value |
+| --- | --- | --- |
+| `#+title:` | `title` | Required. |
+| `#+date:` | `date` | Required. An Org timestamp, such as `[2024-07-12 Fri]`, `<2024-08-19 Mon 11:02>`, or `2024-07-12`, read as UTC. |
+| `#+description:` | `description` | Optional. |
+| `#+filetags:` | `tags` | Optional. `:Emacs:Hugo:` gives `Emacs` and `Hugo`. |
+| `#+slug:` | `slug` | Optional. Defaults to the source filename without extension, as for Markdown. |
+| `#+draft:` | `draft` | Optional. `true` or `false`. |
+| `#+template:` | `template` | Optional. The same rules as the frontmatter `template`. |
+
+The tool ignores every other keyword, such as `#+options:`, `#+author:`, or ox-hugo's `#+hugo_bundle:`, because Org files carry keywords for other tools. So a misspelled optional keyword, such as `#+drfat:`, does nothing, and so does ox-hugo's `#+hugo_draft: true`: mark a draft with `#+draft: true`. A repeated keyword merges as in Emacs: `#+title:` lines join with a space, `#+description:` lines with a newline, `#+filetags:` lines add their tags, and the first `#+slug:`, `#+draft:`, or `#+template:` applies, as for most single-valued Emacs keywords. Two `#+date:` lines join too, so the build rejects them as more than one timestamp. A title is plain text, as in TOML, so Org markup in `#+title:`, such as `=foo=`, shows as written.
+
+A denote or org-roam filename starts with a timestamp, and a denote filename also holds the tags. Without `#+slug:`, such a note publishes at a URL such as `/20240819t110231-a-test-note-typescript.html`, which changes when the note is retagged. Set `#+slug:` to keep the URL fixed.
+
+For a nested source of either format, `{section}` contains its source directory relative to `content_dir`. The tool normalizes each directory segment as a slug.
+
 The tool normalizes a slug as follows:
 
 1. It changes ASCII letters to lowercase.
@@ -196,7 +214,7 @@ The tool normalizes a slug as follows:
 4. It replaces each non-ASCII input byte with lowercase hexadecimal digits.
 5. It uses `untitled` if no characters remain.
 
-A frontmatter `template` override follows the same safe-relative-path rules as configured template names.
+An entry's `template` override follows the same safe-relative-path rules as configured template names.
 
 ### Markdown
 
@@ -214,6 +232,20 @@ The tool renders Markdown with md4c. It enables these extensions:
 
 The renderer permits raw HTML and does not sanitize it. Only use content files that you trust.
 
+### Org
+
+The tool renders Org with [org4c](https://github.com/unindented/org4c). It renders `a_{b}` as a subscript and keeps `snake_case` as text, as `#+OPTIONS: ^:{}` does. It also differs from Emacs's own HTML export in these ways:
+
+- A file's `#+OPTIONS:` line overrides these settings, such as with `^:t`, `f:nil`, or `tex:nil`, even when the line is inside a source block.
+- A top-level `*` headline renders as `<h1>`, like Markdown's `#`, where Emacs uses `<h2>`.
+- `#+BEGIN_EXPORT html` blocks and `@@html:...@@` snippets pass raw HTML through without sanitizing it, and `#+HTML:` lines are dropped. Only use content files that you trust.
+- Math renders as `\(...\)` and `\[...\]`, and `$y$` becomes `\(y\)`. Markdown math renders as `<x-equation>`, so a site that uses both formats needs a math setup that handles both.
+- A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work, and a `[[file:other.org]]` link points to `other.html` next to the page, which works only when the other note's permalink is that path.
+
+As in Emacs, a property drawer at the top of the file renders nothing, and a `Footnotes` headline and its subtree render nothing while the footnote definitions in it go to the footnotes block at the end. See org4c's [README](https://github.com/unindented/org4c#differences-from-emacs-ox-html) for its other differences from Emacs.
+
+The two formats render the same features as different HTML: `<strong>` and `<em>` against `<b>` and `<i>`, md4c's footnotes section against Org's footnotes block, checkboxes against `[X]` text, `admonition-note` blocks against plain `note` ones, and `<x-equation>` against `\(...\)`. Org headlines and Markdown headings start at the same level.
+
 ### Templates
 
 Templates use [Mustache](https://mustache.github.io/) syntax and live in `templates_dir`. There are three kinds:
@@ -222,7 +254,7 @@ Templates use [Mustache](https://mustache.github.io/) syntax and live in `templa
 - **Aggregate templates** (`aggregate_templates`): The tool renders each template once. It writes the result to the same relative path below `output_dir`. Entry fields are not available at the top level.
 - **Feed templates** (`feed_templates`): These work like aggregate templates. They can access only the newest `feed_count` entries.
 
-`{{value}}` HTML-escapes its output. `{{{value}}}` writes it raw. Use `{{{body}}}` to emit the rendered Markdown body.
+`{{value}}` HTML-escapes its output. `{{{value}}}` writes it raw. Use `{{{body}}}` to emit the rendered body.
 
 Available variables:
 

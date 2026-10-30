@@ -4,8 +4,10 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "formats/markdown.h"
+#include "formats/org.h"
 #include "shared/arena.h"
 
 struct ContentEntry;
@@ -16,15 +18,19 @@ struct PathList;
 struct SiteConfig;
 
 /**
- * Largest content source file read, in bytes, frontmatter and fences included.
+ * Largest content source file read, in bytes, metadata included.
  *
- * The body alone must not exceed `MARKDOWN_INPUT_LEN_MAX`, and a file is never smaller than its
- * body, so this cap is what keeps the converter's input in range. Checking the whole file at the
- * read rejects it before it is resident. Content jobs read in parallel, so each worker would
- * otherwise hold a full oversize file before it failed. It also bounds the frontmatter, which has
- * no smaller cap of its own.
+ * The body alone must not exceed `MARKDOWN_INPUT_LEN_MAX` or `ORG_INPUT_LEN_MAX`, and a file is
+ * never smaller than its body, so this cap is what keeps either converter's input in range.
+ * Checking the whole file at the read rejects it before it is resident. Content jobs read in
+ * parallel, so each worker would otherwise hold a full oversize file before it failed. It also
+ * bounds the frontmatter and the Org keywords, which have no smaller cap of their own.
  */
 enum { CONTENT_FILE_LEN_MAX = MARKDOWN_INPUT_LEN_MAX };
+
+// An Org source is converted whole, so the one read limit must also be the Org converter's.
+_Static_assert((uintmax_t)CONTENT_FILE_LEN_MAX <= (uintmax_t)ORG_INPUT_LEN_MAX,
+               "a content file must fit the Org converter's input limit");
 
 // `frontmatter_parse` hands tomlc17 the frontmatter behind one added line, and tomlc17 takes the
 // document length as an `int`.
@@ -35,9 +41,9 @@ _Static_assert(CONTENT_FILE_LEN_MAX < INT_MAX,
  * @brief Turns every discovered content source into a rendered `ContentEntry`.
  *
  * This is the first of the two parallel phases. When `source_paths->count` is 0, it runs no job and
- * returns `0`. Each job reads its source, splits and parses the frontmatter, converts the Markdown
- * body to HTML, and finalizes the entry's URL and output paths. It deliberately leaves page
- * rendering to `page_renderer_render_pages`, because a content template can read `site.updated` and
+ * returns `0`. Each job reads its source, parses its frontmatter or Org keywords, converts the body
+ * to HTML, and finalizes the entry's URL and output paths. It deliberately leaves page rendering to
+ * `page_renderer_render_pages`, because a content template can read `site.updated` and
  * `content_entries`, and neither is known until every entry is parsed and sorted.
  *
  * One job runs per source path and fills that path's slot in `source_entries` with a rendered

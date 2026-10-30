@@ -64,4 +64,34 @@ int frontmatter_parse(struct ContentEntry* entry,
                       struct Arena scratch,
                       struct Log* log) __attribute__((nonnull(1, 4, 6)));
 
+/**
+ * @brief Reads the keywords at the top of an Org file and applies them to a zeroed content entry.
+ *
+ * Reads only the leading run of blank lines, comment lines, property drawers and keyword lines
+ * (`#+key: value`), after a UTF-8 BOM, so a keyword in the body is never read. A key matches
+ * whatever its case, and its value is trimmed. The entry reads the schema's keys, with `filetags`
+ * for `tags`. It ignores every other keyword, because Org files carry keywords for other tools. A
+ * repeated keyword merges as in Emacs: `title` and `date` lines join with a space, `description`
+ * lines with a newline, `filetags` lines add their tags, and the first `slug`, `draft` or
+ * `template` applies, as the first line of most single-valued Emacs keywords does. Copies every
+ * value it keeps into `perm`.
+ *
+ * @param entry       Zeroed entry that receives the metadata. On failure the parse may leave it
+ *                    partially populated, and the values it already copied stay in `perm`. Must not
+ *                    be `NULL`.
+ * @param org         Full Org file bytes.
+ * @param source_path Source file path, used for slug fallback and named in every error.
+ * @param perm        Arena that owns the values copied onto the entry. Must not be `NULL`.
+ * @param scratch     Arena for the lines a repeated keyword joins.
+ * @param log         Log that receives every error. Every keyword is checked even after one fails,
+ *                    so all of a file's mistakes are reported at once. Must not be `NULL`.
+ * @return `0` on success, or `-1` when `title` or `date` is missing or any value fails validation.
+ */
+int frontmatter_parse_org(struct ContentEntry* entry,
+                          struct Str org,
+                          struct Str source_path,
+                          struct Arena* perm,
+                          struct Arena scratch,
+                          struct Log* log) __attribute__((nonnull(1, 4, 6)));
+
 #endif

@@ -1,6 +1,8 @@
 #include <acutest.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "domain/content_entry.h"
@@ -30,6 +32,25 @@ static int parse_frontmatter(struct ContentEntry* entry,
   struct Arena perm = test_arena();
   return frontmatter_parse(entry, frontmatter, str_from_cstr(source_path), &perm, test_arena(),
                            log);
+}
+
+/**
+ * @brief Reads an Org file's keywords into an entry with a fresh long-lived arena and a fresh
+ *        scratch arena.
+ *
+ * @param entry       Zeroed entry that receives the metadata. Must not be `NULL`.
+ * @param org         Org file bytes.
+ * @param source_path Terminated source file path. Must not be `NULL`.
+ * @param log         Log that receives every error `frontmatter_parse_org` records. Must not be
+ *                    `NULL`.
+ * @return The result of `frontmatter_parse_org`.
+ */
+static int parse_frontmatter_org(struct ContentEntry* entry,
+                                 struct Str org,
+                                 const char* source_path,
+                                 struct Log* log) {
+  struct Arena perm = test_arena();
+  return frontmatter_parse_org(entry, org, str_from_cstr(source_path), &perm, test_arena(), log);
 }
 
 /**
@@ -490,6 +511,295 @@ static void test_parse_rejects_raw_nul_in_frontmatter(void) {
   TEST_CHECK(strncmp(buf_cstr(&log.buf), expected_head, sizeof(expected_head) - 1) == 0);
 }
 
+// An org-roam note reads as it stands: its keywords follow the top property drawer, the tags come
+// from `#+filetags:`, and a keyword for another tool, such as ox-hugo's, is ignored rather than
+// rejected.
+static void test_org_fills_note_after_property_drawer(void) {
+  const struct Str org =
+      S(":PROPERTIES:\n"
+        ":ID:       dece65d2-55e4-46fb-a2ad-5c21eca78842\n"
+        ":END:\n"
+        "#+title: Auto-export Org files to Hugo when modified\n"
+        "#+date: [2024-07-12 Fri]\n"
+        "#+filetags: :Emacs:Hugo:\n"
+        "#+hugo_bundle: auto-export\n"
+        "\n"
+        "* Using =org-hugo-auto-export-mode=\n");
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, org, "content/auto-export.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.source_path, S("content/auto-export.org")));
+  TEST_CHECK(str_eq(entry.title, S("Auto-export Org files to Hugo when modified")));
+  TEST_CHECK(str_eq(entry.date, S("2024-07-12T00:00:00Z")));
+  TEST_CHECK(entry.date_epoch == 1720742400);
+  TEST_CHECK(str_eq(entry.description, S("")));
+  TEST_CHECK(str_eq(entry.slug, S("auto-export")));
+  TEST_CHECK(entry.tag_count == 2);
+  TEST_CHECK(str_eq(entry.tags[0], S("Emacs")));
+  TEST_CHECK(str_eq(entry.tags[1], S("Hugo")));
+  TEST_CHECK(entry.template.len == 0);
+  TEST_CHECK(!entry.is_draft);
+}
+
+// The optional keywords apply under the TOML keys' names, and an explicit slug is normalized
+// instead of trusted as a path.
+static void test_org_fills_optional_keywords(void) {
+  const struct Str org =
+      S("#+title: Title\n"
+        "#+date: 2026-07-01\n"
+        "#+description: Desc\n"
+        "#+slug: ../../Pinned Outside\n"
+        "#+draft: true\n"
+        "#+template: article_1.html\n");
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, org, "content/20240819t110231--title.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.description, S("Desc")));
+  TEST_CHECK(str_eq(entry.slug, S("pinned-outside")));
+  TEST_CHECK(entry.is_draft);
+  TEST_CHECK(str_eq(entry.template, S("article_1.html")));
+}
+
+// A key matches whatever its case, as Org's keywords do, so `#+TITLE:` and `#+title:` are the same.
+static void test_org_matches_keys_in_any_case(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry,
+                                   S("#+TITLE: Title\n#+Date: 2026-07-01\n#+DRAFT: false\n"),
+                                   "content/title.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("Title")));
+  TEST_CHECK(str_eq(entry.date, S("2026-07-01T00:00:00Z")));
+  TEST_CHECK(!entry.is_draft);
+}
+
+// Each `#+date:` form gives the RFC 3339 date and epoch a TOML date would: bracketed with a day
+// name, active with a day name in another language and a one-digit hour, inactive with a time, and
+// bare. A leap day is in range. An empty `#+date:` line beside a timestamp leaves one timestamp, as
+// in Emacs.
+static void test_org_reads_each_timestamp_form(void) {
+  static const struct {
+    const char* org;
+    const char* date;
+    int64_t date_epoch;
+  } cases[] = {
+      {"#+title: T\n#+date: [2024-07-12 Fri]\n", "2024-07-12T00:00:00Z", 1720742400},
+      {"#+title: T\n#+date: <2024-07-12 vie. 9:30>\n", "2024-07-12T09:30:00Z", 1720776600},
+      {"#+title: T\n#+date: [2024-08-19 Mon 11:02]\n", "2024-08-19T11:02:00Z", 1724065320},
+      {"#+title: T\n#+date: [2024-08-19 11:02]\n", "2024-08-19T11:02:00Z", 1724065320},
+      {"#+title: T\n#+date: 2024-07-12\n", "2024-07-12T00:00:00Z", 1720742400},
+      {"#+title: T\n#+date: [2024-02-29 Thu]\n", "2024-02-29T00:00:00Z", 1709164800},
+      {"#+title: T\n#+date:\n#+date: [2024-07-12 Fri]\n", "2024-07-12T00:00:00Z", 1720742400},
+  };
+
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter_org(&entry, str_from_cstr(cases[i].org), "content/t.org", &log) ==
+               0);
+    TEST_CHECK(test_log_is_empty(&log));
+    TEST_CHECK(str_eq(entry.date, str_from_cstr(cases[i].date)));
+    TEST_CHECK(entry.date_epoch == cases[i].date_epoch);
+  }
+}
+
+// A denote note reads the same with its padded keys and no headline, and the slug falls back to its
+// timestamped filename. The keywords inside a `#+begin_src org` block of its body are not read, so
+// neither the block's `#+title:` nor its `#+description:` applies.
+static void test_org_reads_denote_note_without_headline(void) {
+  const struct Str org =
+      S("#+title:      A Test Note\n"
+        "#+date:       [2024-08-19 Mon 11:02]\n"
+        "#+filetags:   :typescript:\n"
+        "#+identifier: 20240819T110231\n"
+        "\n"
+        "Body.\n"
+        "\n"
+        "#+begin_src org\n"
+        "#+title: Not this\n"
+        "#+description: Not this\n"
+        "#+end_src\n");
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(
+                 &entry, org, "content/20240819t110231--a-test-note__typescript.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("A Test Note")));
+  TEST_CHECK(str_eq(entry.date, S("2024-08-19T11:02:00Z")));
+  TEST_CHECK(str_eq(entry.description, S("")));
+  TEST_CHECK(str_eq(entry.slug, S("20240819t110231-a-test-note-typescript")));
+  TEST_CHECK(entry.tag_count == 1);
+  TEST_CHECK(str_eq(entry.tags[0], S("typescript")));
+}
+
+// The first headline ends the keywords, so a keyword below it is not read.
+static void test_org_ignores_keyword_after_headline(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(
+                 &entry, S("#+title: T\n#+date: 2026-07-01\n* Heading\n#+description: No\n"),
+                 "content/t.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.description, S("")));
+}
+
+// Comment lines and blank lines in the leading run are skipped, and CRLF line endings leave no `\r`
+// in a value.
+static void test_org_skips_comments_and_crlf(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(
+                 &entry, S("# A comment\r\n\r\n#\r\n#+title: T\r\n#+date: 2026-07-01\r\n"),
+                 "content/t.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("T")));
+}
+
+// A repeated keyword merges as Emacs merges it: `#+title:` lines join with a space,
+// `#+description:` lines with a newline, `#+filetags:` lines add their tags in order, a repeated
+// tag included, and the first `#+slug:`, `#+draft:` or `#+template:` applies.
+static void test_org_merges_repeated_keywords(void) {
+  const struct Str org =
+      S("#+title: First title\n"
+        "#+title: second part\n"
+        "#+date: 2026-07-01\n"
+        "#+description: First line\n"
+        "#+description: second line\n"
+        "#+filetags: :a:b:\n"
+        "#+filetags: :b:c:\n"
+        "#+slug: first-slug\n"
+        "#+slug: second-slug\n"
+        "#+draft: true\n"
+        "#+draft: false\n"
+        "#+template: first.html\n"
+        "#+template: second.html\n");
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, org, "content/t.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("First title second part")));
+  TEST_CHECK(str_eq(entry.description, S("First line\nsecond line")));
+  TEST_CHECK(entry.tag_count == 4);
+  TEST_CHECK(str_eq(entry.tags[0], S("a")));
+  TEST_CHECK(str_eq(entry.tags[1], S("b")));
+  TEST_CHECK(str_eq(entry.tags[2], S("b")));
+  TEST_CHECK(str_eq(entry.tags[3], S("c")));
+  TEST_CHECK(str_eq(entry.slug, S("first-slug")));
+  TEST_CHECK(entry.is_draft);
+  TEST_CHECK(str_eq(entry.template, S("first.html")));
+}
+
+// A UTF-8 BOM before `#+title:` is skipped, as `frontmatter_split` skips one before the fence.
+static void test_org_skips_utf8_bom(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, S("\xEF\xBB\xBF#+title: T\n#+date: 2026-07-01\n"),
+                                   "content/t.org", &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("T")));
+}
+
+// A missing required keyword is reported as absent, naming the keyword, for each of the two.
+static void test_org_rejects_missing_required_keyword(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, S("#+date: 2026-07-01\n"), "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "missing required Org keyword 'title'", "content/t.org"));
+
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter_org(&entry, S("#+title: T\n"), "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "missing required Org keyword 'date'", "content/t.org"));
+}
+
+// Every bad keyword in one note is reported by the one parse, in schema order, so a note with
+// several mistakes is fixed in one pass, as the TOML path reports every bad key.
+static void test_org_reports_every_bad_keyword(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, S("#+draft: yes\n#+template: ../x.html\n* Heading\n"),
+                                   "content/t.org", &log) == -1);
+  TEST_CHECK(
+      test_log_is(&log,
+                  "missing required Org keyword 'title' (in 'content/t.org')\n"
+                  "missing required Org keyword 'date' (in 'content/t.org')\n"
+                  "Org keyword 'draft' must be 'true' or 'false' (in 'content/t.org')\n"
+                  "Org keyword 'template' must be a safe relative template name: '../x.html' (in "
+                  "'content/t.org')\n"));
+  TEST_CHECK(log.errors == 4);
+}
+
+// `#` followed by a tab is text in Org, not a comment, so it ends the leading run and the keywords
+// after it are not read.
+static void test_org_ends_keywords_at_hash_and_tab(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, S("#\tnot a comment\n#+title: T\n#+date: 2026-07-01\n"),
+                                   "content/t.org", &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "missing required Org keyword 'title' (in 'content/t.org')\n"
+                         "missing required Org keyword 'date' (in 'content/t.org')\n"));
+}
+
+// A `#+date:` that is not a timestamp sosig reads is rejected with one message, whether it is
+// malformed, out of range, or carries a repeater the entry's date cannot hold.
+static void test_org_rejects_invalid_timestamp(void) {
+  static const char* const dates[] = {
+      "July 12, 2024",      "[2024-07-12 Fri",   "[2024-13-45 Fri]",     "[2023-02-29 Wed]",
+      "[2024-07-12 24:00]", "<2024-07-12 9:60>", "<2024-07-12 Fri +1w>", "[24-07-12]",
+  };
+
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(dates) / sizeof(dates[0])); i++) {
+    char text[128];
+    const int text_len = snprintf(text, sizeof(text), "#+title: T\n#+date: %s\n", dates[i]);
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter_org(&entry, (struct Str){text, text_len}, "content/t.org", &log) ==
+               -1);
+    TEST_CHECK(is_one_error_taken(
+        &log, "Org keyword 'date' must be one Org timestamp, such as '[2024-07-12 Fri]'",
+        "content/t.org"));
+  }
+}
+
+// Two `#+date:` lines join, as Emacs joins them, so they are no longer one timestamp and the date
+// is rejected rather than one of them chosen.
+static void test_org_rejects_repeated_date(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(
+                 &entry, S("#+title: T\n#+date: [2024-07-12 Fri]\n#+date: [2024-08-01 Thu]\n"),
+                 "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(
+      &log, "Org keyword 'date' must be one Org timestamp, such as '[2024-07-12 Fri]'",
+      "content/t.org"));
+}
+
+// `#+draft:` takes only the two TOML boolean spellings.
+static void test_org_rejects_invalid_draft(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry, S("#+title: T\n#+date: 2026-07-01\n#+draft: yes\n"),
+                                   "content/t.org", &log) == -1);
+  TEST_CHECK(
+      is_one_error_taken(&log, "Org keyword 'draft' must be 'true' or 'false'", "content/t.org"));
+  TEST_CHECK(!entry.is_draft);
+}
+
+// A template name that would escape the template root is rejected, naming the value.
+static void test_org_rejects_unsafe_template(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry,
+                                   S("#+title: T\n#+date: 2026-07-01\n#+template: ../x.html\n"),
+                                   "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(
+      &log, "Org keyword 'template' must be a safe relative template name: '../x.html'",
+      "content/t.org"));
+  TEST_CHECK(entry.template.len == 0);
+}
+
 TEST_LIST = {
     {"split handles crlf and body", test_split_handles_crlf_and_body},
     {"split skips utf8 bom", test_split_skips_utf8_bom},
@@ -514,5 +824,21 @@ TEST_LIST = {
     {"rejects nul in string values", test_rejects_nul_in_string_values},
     {"rejects nul in key", test_rejects_nul_in_key},
     {"parse rejects raw nul in frontmatter", test_parse_rejects_raw_nul_in_frontmatter},
+    {"org fills note after property drawer", test_org_fills_note_after_property_drawer},
+    {"org fills optional keywords", test_org_fills_optional_keywords},
+    {"org matches keys in any case", test_org_matches_keys_in_any_case},
+    {"org reads each timestamp form", test_org_reads_each_timestamp_form},
+    {"org reads denote note without headline", test_org_reads_denote_note_without_headline},
+    {"org ignores keyword after headline", test_org_ignores_keyword_after_headline},
+    {"org skips comments and crlf", test_org_skips_comments_and_crlf},
+    {"org merges repeated keywords", test_org_merges_repeated_keywords},
+    {"org skips utf8 bom", test_org_skips_utf8_bom},
+    {"org rejects missing required keyword", test_org_rejects_missing_required_keyword},
+    {"org reports every bad keyword", test_org_reports_every_bad_keyword},
+    {"org ends keywords at hash and tab", test_org_ends_keywords_at_hash_and_tab},
+    {"org rejects invalid timestamp", test_org_rejects_invalid_timestamp},
+    {"org rejects repeated date", test_org_rejects_repeated_date},
+    {"org rejects invalid draft", test_org_rejects_invalid_draft},
+    {"org rejects unsafe template", test_org_rejects_unsafe_template},
     {NULL, NULL},
 };

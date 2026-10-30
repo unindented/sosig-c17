@@ -61,7 +61,7 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * - an output path that is a `/`-delimited directory prefix of another output path
  *
  * The first case catches an output that would be read back as an input without overwriting one: a
- * new Markdown file below `content_dir` is parsed as a source by the next build and one below
+ * new content source file below `content_dir` is parsed as a source by the next build and one below
  * `static_dir` is copied as a static file by the next build, and a new file below `templates_dir`
  * can be read as a partial by the render of this same build. The caller has already run
  * `manifest_builder_check_output_dir`, so this compares each root by `(device, inode)` against each

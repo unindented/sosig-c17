@@ -52,7 +52,7 @@ struct PathList;
  * @param scratch      Arena for the listings of the directories the walk is inside, released when
  *                     the walk returns.
  * @param operation    Operation leading the failure message, such as
- *                     `failed to list Markdown files`. The message names the exact path the failure
+ *                     `failed to list content files`. The message names the exact path the failure
  *                     happened on: the directory that could not be inspected, opened, read or
  *                     closed, or the entry that could not be inspected. A caller must not add the
  *                     root it passed, because the message is already more precise than that.
