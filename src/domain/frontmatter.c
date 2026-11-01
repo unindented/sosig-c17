@@ -263,6 +263,9 @@ static int view_string_value(toml_datum_t value,
 /**
  * @brief Copies the required `#+title:`.
  *
+ * The title is plain text, as a TOML `title` is, so Org markup in it, such as `=foo=`, shows as
+ * written.
+ *
  * @param entry       Entry that receives `title`. Must not be `NULL`.
  * @param org         Full Org file bytes.
  * @param source_path Source file the keywords came from, named in the error.
@@ -282,8 +285,9 @@ static int frontmatter_parse_org_title(struct ContentEntry* entry,
  * @brief Reads the required `#+date:` timestamp and records both its display and sortable forms.
  *
  * The timestamp becomes a TOML date or datetime datum, so it takes the same conversion and RFC 3339
- * spelling as a TOML `date`. Repeated lines join, as Emacs joins them, so two dates are not one
- * timestamp, while an empty line beside one date leaves it one.
+ * spelling as a TOML `date`, and is UTC, as a TOML date without an offset is. Repeated lines join,
+ * as Emacs joins them, so two dates are not one timestamp, while an empty line beside one date
+ * leaves it one.
  *
  * @param entry       Entry that receives `date` and `date_epoch`. Must not be `NULL`.
  * @param org         Full Org file bytes.
@@ -317,7 +321,9 @@ static void frontmatter_parse_org_description(struct ContentEntry* entry,
  * @brief Slugifies an explicit `#+slug:` or derives one from the source filename.
  *
  * Both are slugified, as in `frontmatter_parse_metadata_slug`, so `/` and `..` cannot survive into
- * the output path.
+ * the output path. A note without `#+slug:` takes its slug from the filename, as a Markdown entry
+ * does, although a denote or org-roam filename starts with a timestamp, and a denote one holds the
+ * tags, so such a note's URL changes when it is renamed or retagged unless `#+slug:` pins it.
  *
  * @param entry       Entry that receives the slug. Must not be `NULL`.
  * @param org         Full Org file bytes.
@@ -970,6 +976,8 @@ static struct OrgKeyword find_org_keyword(struct Str org, struct Str key) {
     if (trimmed.len == 0 || str_eq(line, S("#")) || str_startswith(line, S("# "))) {
       continue;
     }
+    // A drawer is skipped wherever it sits in the run. org4c renders one that is not the file's
+    // first element as text, but Emacs reads keywords anywhere, so the keywords after it count.
     if (is_equal_folded(trimmed, S(":properties:"))) {
       const struct StrCut drawer = cut_org_drawer(rest);
       if (!drawer.is_found) {

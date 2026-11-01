@@ -70,8 +70,9 @@ int frontmatter_parse(struct ContentEntry* entry,
  * Reads only the leading run of blank lines, comment lines, property drawers and keyword lines
  * (`#+key: value`), after a UTF-8 BOM, so a keyword in the body is never read. A key matches
  * whatever its case, and its value is trimmed. The entry reads the schema's keys, with `filetags`
- * for `tags`. It ignores every other keyword, because Org files carry keywords for other tools. A
- * repeated keyword merges as in Emacs: `title` and `date` lines join with a space, `description`
+ * for `tags`. It ignores every other keyword, because Org files carry keywords for other tools, so
+ * a misspelled optional keyword does nothing while a misspelled `title` or `date` fails as missing.
+ * A repeated keyword merges as in Emacs: `title` and `date` lines join with a space, `description`
  * lines with a newline, `filetags` lines add their tags, and the first `slug`, `draft` or
  * `template` applies, as the first line of most single-valued Emacs keywords does. Copies every
  * value it keeps into `perm`.

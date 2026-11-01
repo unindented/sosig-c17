@@ -253,7 +253,8 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
   // added here.
   source_out->is_org = str_endswith(source_path, S(".org"));
   if (source_out->is_org) {
-    // Org keywords render nothing, so the whole file is the body and nothing is cut out of it.
+    // Org keywords and a top property drawer render nothing, so the whole file is the body and
+    // nothing is cut out of it.
     source_out->body = source_out->text;
     return frontmatter_parse_org(entry, source_out->text, source_path, perm, *source_arena, log);
   }
