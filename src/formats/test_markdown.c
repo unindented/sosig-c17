@@ -8,14 +8,83 @@
 #include "shared/str.h"
 #include "test_support.h"
 
+/**
+ * @brief Converts Markdown to HTML, in arenas of its own.
+ *
+ * @param markdown Terminated Markdown text. Must not be `NULL`.
+ * @return The HTML, in an arena that lives until the test exits.
+ */
+static struct Str render_markdown(const char* markdown) {
+  struct Arena perm = test_arena();
+  return markdown_to_html(str_from_cstr(markdown), &perm, test_arena());
+}
+
 // Common Markdown constructs render to their expected HTML elements.
 static void test_renders_basic_html(void) {
   const struct Str markdown = S("# Title\n\n*em* and `code`\n");
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm);
+  html = markdown_to_html(markdown, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<h1>Title</h1>\n<p><em>em</em> and <code>code</code></p>\n")));
+}
+
+// Bold and italics give the same HTML as in Org, which `test_org.c` checks with the same expected
+// HTML.
+static void test_renders_bold_and_italics(void) {
+  TEST_CHECK(str_eq(render_markdown("**b** *i*\n"), S("<p><strong>b</strong> <em>i</em></p>\n")));
+}
+
+// A one-paragraph footnote with two references gives the same HTML as in Org, which `test_org.c`
+// checks with the same expected HTML.
+static void test_renders_footnote(void) {
+  TEST_CHECK(str_eq(render_markdown("A[^1] B[^1].\n\n[^1]: Note.\n"),
+                    S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\">1</a></sup> B<sup><a "
+                      "href=\"#fn-1\" id=\"fnref-1-2\">1</a></sup>.</p>\n"
+                      "<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
+                      "<a href=\"#fnref-1-1\" class=\"footnote-backref\">&#8617;</a> "
+                      "<a href=\"#fnref-1-2\" "
+                      "class=\"footnote-backref\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
+}
+
+// A done and an open task give the same HTML as in Org, which `test_org.c` checks with the same
+// expected HTML.
+static void test_renders_task_list_items(void) {
+  TEST_CHECK(
+      str_eq(render_markdown("- [x] a\n- [ ] b\n"),
+             S("<ul>\n<li><input type=\"checkbox\" class=\"task-list-item-checkbox\" disabled "
+               "checked>a</li>\n"
+               "<li><input type=\"checkbox\" "
+               "class=\"task-list-item-checkbox\" disabled>b</li>\n</ul>\n")));
+}
+
+// A note gives the same HTML as in Org, which `test_org.c` checks with the same expected HTML.
+static void test_renders_note_admonition(void) {
+  TEST_CHECK(str_eq(render_markdown("> [!NOTE]\n> Be careful.\n"),
+                    S("<div class=\"admonition-note\"><p class=\"admonition-title\">note</p><p>Be "
+                      "careful.</p>\n</div>\n")));
+}
+
+// Inline and displayed math give the same HTML as in Org, which `test_org.c` checks with the same
+// expected HTML.
+static void test_renders_math(void) {
+  TEST_CHECK(str_eq(
+      render_markdown("$a$ and $$b$$\n"),
+      S("<p><x-equation>a</x-equation> and <x-equation type=\"display\">b</x-equation></p>\n")));
+}
+
+// A plain code block gives the same HTML as in Org, which `test_org.c` checks with the same
+// expected HTML.
+static void test_renders_code_block(void) {
+  TEST_CHECK(str_eq(render_markdown("```c\nint x;\n```\n"),
+                    S("<pre><code class=\"language-c\">int x;\n</code></pre>\n")));
+}
+
+// Headings at the first two levels give the same HTML as in Org, which `test_org.c` checks with the
+// same expected HTML.
+static void test_renders_heading_levels(void) {
+  TEST_CHECK(str_eq(render_markdown("# A\n\n## B\n"), S("<h1>A</h1>\n<h2>B</h2>\n")));
 }
 
 // The enabled extension set renders GitHub-style tables. The golden test compares the rendered
@@ -24,8 +93,9 @@ static void test_renders_basic_html(void) {
 static void test_renders_github_tables(void) {
   const struct Str markdown = S("| a | b |\n|---|---|\n| 1 | 2 |\n");
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm);
+  html = markdown_to_html(markdown, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n"
                             "<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n")));
@@ -39,8 +109,9 @@ static void test_renders_github_tables(void) {
 static void test_passes_through_raw_html(void) {
   const struct Str markdown = S("<div class=\"note\">raw <b>x</b></div>\n");
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm);
+  html = markdown_to_html(markdown, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<div class=\"note\">raw <b>x</b></div>\n")));
 }
@@ -51,8 +122,9 @@ static void test_passes_through_raw_html(void) {
 static void test_collapses_whitespace_runs(void) {
   const struct Str markdown = S("a    b   c\n");
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm);
+  html = markdown_to_html(markdown, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a b c</p>\n")));
 }
@@ -64,8 +136,9 @@ static void test_collapses_whitespace_runs(void) {
 static void test_skips_leading_byte_order_mark(void) {
   const struct Str markdown = S("\xef\xbb\xbfhello\n");
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm);
+  html = markdown_to_html(markdown, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>hello</p>\n")));
 }
@@ -73,8 +146,9 @@ static void test_skips_leading_byte_order_mark(void) {
 // Empty input succeeds with empty HTML.
 static void test_empty_input_yields_empty_string(void) {
   struct Arena perm = test_arena();
+  struct Arena scratch = test_arena();
   struct Str html = S("untouched");
-  html = markdown_to_html(S(""), &perm);
+  html = markdown_to_html(S(""), &perm, scratch);
   TEST_CHECK(html.len == 0);
 }
 
@@ -95,13 +169,20 @@ static void test_html_grows_in_place_in_perm(void) {
   struct Arena probe = perm;
   char* const start = arena_new(&probe, 0, char);
   struct Str html = {0};
-  html = markdown_to_html((struct Str){markdown, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm);
+  html = markdown_to_html((struct Str){markdown, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm, scratch);
   TEST_CHECK(html.data == start);
   TEST_CHECK(html.len == PARAGRAPH_COUNT * S("<p>ab</p>\n").len);
 }
 
 TEST_LIST = {
     {"renders basic html", test_renders_basic_html},
+    {"renders bold and italics", test_renders_bold_and_italics},
+    {"renders footnote", test_renders_footnote},
+    {"renders task list items", test_renders_task_list_items},
+    {"renders note admonition", test_renders_note_admonition},
+    {"renders math", test_renders_math},
+    {"renders code block", test_renders_code_block},
+    {"renders heading levels", test_renders_heading_levels},
     {"renders github tables", test_renders_github_tables},
     {"passes through raw html", test_passes_through_raw_html},
     {"collapses whitespace runs", test_collapses_whitespace_runs},

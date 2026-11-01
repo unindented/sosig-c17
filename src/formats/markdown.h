@@ -3,9 +3,8 @@
 
 #include <stddef.h>
 
+#include "shared/arena.h"
 #include "shared/str.h"
-
-struct Arena;
 
 /**
  * Upper bound on Markdown input passed to `markdown_to_html`, in bytes.
@@ -39,8 +38,10 @@ enum { MARKDOWN_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  *
  * @param markdown Input bytes of Markdown, at most `MARKDOWN_INPUT_LEN_MAX`.
  * @param perm     Arena that owns the HTML. Must not be `NULL`.
+ * @param scratch  Arena for a code block's language and text, held until the block ends.
  * @return The HTML, owned by `perm`.
  */
-struct Str markdown_to_html(struct Str markdown, struct Arena* perm) __attribute__((nonnull(2)));
+struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch)
+    __attribute__((nonnull(2)));
 
 #endif

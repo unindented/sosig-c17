@@ -122,7 +122,13 @@ struct OrgRender {
   /** Caption of a figure, held in scratch until the image it follows is written. */
   struct Buf caption;
 
-  /** Buffer every write goes to: `html`, or `caption` while one is held. */
+  /** Body of a footnote, held in scratch until its end tells how many paragraphs it has. */
+  struct Buf footnote;
+
+  /** Text of a plain source block, held in scratch and written whole when the block ends. */
+  struct Buf code;
+
+  /** Buffer every write goes to: `html`, `footnote` while one is held, or `caption`. */
   struct Buf* output;
 
   /** `enum OrgExport` bits. */
@@ -194,6 +200,15 @@ struct OrgRender {
   /** Whether a source block's opening tags wait for its caption, which is its first child. */
   bool is_source_pending;
 
+  /**
+   * Whether the source block's text is held in `code`, because nothing so far needs Org's own
+   * markup for it: a `#+NAME:`, a caption, line numbers or a code reference.
+   */
+  bool is_source_held;
+
+  /** Whether the text is inside a footnote's body. */
+  bool is_in_footnote;
+
   /** Whether a paragraph's opening tag waits to learn whether it is a figure. */
   bool is_paragraph_pending;
 
@@ -227,8 +242,8 @@ struct OrgTags {
 
 /**
  * Tags of each block type, by type. A block whose open or close tag depends on its detail, its
- * affiliated keywords or the render's state leaves that tag empty here and writes it in the
- * callback.
+ * affiliated keywords or the render's state, or one that `body_html` writes because Markdown has it
+ * too, leaves that tag empty here and writes it in the callback.
  */
 static const struct OrgTags block_tags[ORG_BLOCK_DYNAMIC + 1] = {
     [ORG_BLOCK_QUOTE] = {STR_INIT(""), STR_INIT("</blockquote>\n")},
@@ -242,18 +257,12 @@ static const struct OrgTags block_tags[ORG_BLOCK_DYNAMIC + 1] = {
     [ORG_BLOCK_TR] = {STR_INIT("<tr>\n"), STR_INIT("</tr>\n")},
     [ORG_BLOCK_TH] = {STR_INIT(""), STR_INIT("</th>\n")},
     [ORG_BLOCK_TD] = {STR_INIT(""), STR_INIT("</td>\n")},
-    [ORG_BLOCK_FOOTNOTE_DEF_SECTION] = {STR_INIT("<div id=\"footnotes\">\n"
-                                                 "<h2 class=\"footnotes\">Footnotes:</h2>\n"
-                                                 "<div id=\"text-footnotes\">\n"),
-                                        STR_INIT("</div>\n</div>\n")},
-    [ORG_BLOCK_FOOTNOTE_DEF] = {STR_INIT(""), STR_INIT("</div></div>\n")},
     [ORG_BLOCK_DL] = {STR_INIT(""), STR_INIT("</dl>\n")},
     [ORG_BLOCK_DT] = {STR_INIT(""), STR_INIT("</dt>\n")},
     [ORG_BLOCK_DD] = {STR_INIT("<dd>"), STR_INIT("</dd>\n")},
     [ORG_BLOCK_EXAMPLE] = {STR_INIT(""), STR_INIT("</pre>\n")},
     [ORG_BLOCK_VERSE] = {STR_INIT(""), STR_INIT("</p>\n")},
     [ORG_BLOCK_CENTER] = {STR_INIT(""), STR_INIT("</div>\n")},
-    [ORG_BLOCK_SPECIAL] = {STR_INIT(""), STR_INIT("</div>\n")},
     [ORG_BLOCK_FIXED_WIDTH] = {STR_INIT(""), STR_INIT("</pre>\n")},
 };
 
@@ -262,8 +271,8 @@ static const struct OrgTags block_tags[ORG_BLOCK_DYNAMIC + 1] = {
  * render's state leaves that tag empty here and writes it in the callback.
  */
 static const struct OrgTags span_tags[ORG_SPAN_CODEREF + 1] = {
-    [ORG_SPAN_ITALIC] = {STR_INIT("<i>"), STR_INIT("</i>")},
-    [ORG_SPAN_BOLD] = {STR_INIT("<b>"), STR_INIT("</b>")},
+    [ORG_SPAN_ITALIC] = {STR_INIT("<em>"), STR_INIT("</em>")},
+    [ORG_SPAN_BOLD] = {STR_INIT("<strong>"), STR_INIT("</strong>")},
     [ORG_SPAN_LINK] = {STR_INIT(""), STR_INIT("</a>")},
     [ORG_SPAN_CODE] = {STR_INIT("<code>"), STR_INIT("</code>")},
     [ORG_SPAN_STRIKE] = {STR_INIT("<del>"), STR_INIT("</del>")},
@@ -273,6 +282,15 @@ static const struct OrgTags span_tags[ORG_SPAN_CODEREF + 1] = {
     [ORG_SPAN_VERBATIM] = {STR_INIT("<code>"), STR_INIT("</code>")},
     [ORG_SPAN_INLINE_SRC] = {STR_INIT(""), STR_INIT("</code>")},
     [ORG_SPAN_STATISTICS_COOKIE] = {STR_INIT("<code>"), STR_INIT("</code>")},
+};
+
+/**
+ * Names of the special blocks that are admonitions, as Markdown's `> [!NOTE]` is. A block's name
+ * matches whatever its case, so `#+BEGIN_NOTE` is a note.
+ */
+static const struct Str admonition_types[] = {
+    STR_INIT("note"),    STR_INIT("tip"),     STR_INIT("important"),
+    STR_INIT("warning"), STR_INIT("caution"),
 };
 
 /**
@@ -486,16 +504,7 @@ static void write_headline_close(struct OrgRender* render,
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Returns the HTML heading level of a headline, from 1 to 6.
- *
- * @param headline Headline detail. Must not be `NULL`.
- * @return The `<hN>` level.
- */
-static unsigned headline_heading_level(const ORG_BLOCK_HEADLINE_DETAIL* headline)
-    __attribute__((nonnull(1)));
-
-/**
- * @brief Writes the opening tag of a list item or a term, with its checkbox and counter.
+ * @brief Writes the opening tag of a list item or a term, with its counter and its checkbox.
  *
  * @param render Render state. Must not be `NULL`.
  * @param tag    Tag name, `li` or `dt`.
@@ -635,36 +644,6 @@ static bool is_path_text_link(const ORG_SPAN_LINK_DETAIL* link) __attribute__((n
 static bool is_image_link(const ORG_SPAN_LINK_DETAIL* link) __attribute__((nonnull(1)));
 
 /**
- * @brief Writes the identifier of a footnote: its label, or its number for an anonymous footnote or
- *        one with a numeric label, as Emacs does.
- *
- * @param buffer Destination buffer. Must not be `NULL`.
- * @param id     Footnote number.
- * @param label  Footnote label. Must not be `NULL`.
- */
-static void write_footnote_name(struct Buf* buffer, unsigned id, const ORG_ATTRIBUTE* label)
-    __attribute__((nonnull(1, 3)));
-
-/**
- * @brief Writes a footnote reference.
- *
- * @param buffer    Destination buffer. Must not be `NULL`.
- * @param reference Footnote reference detail. Must not be `NULL`.
- */
-static void write_footnote_reference(struct Buf* buffer,
-                                     const ORG_SPAN_FOOTNOTE_REF_DETAIL* reference)
-    __attribute__((nonnull(1, 2)));
-
-/**
- * @brief Writes the opening of a footnote definition, with its number.
- *
- * @param buffer   Destination buffer. Must not be `NULL`.
- * @param footnote Footnote definition detail. Must not be `NULL`.
- */
-static void write_footnote_open(struct Buf* buffer, const ORG_BLOCK_FOOTNOTE_DEF_DETAIL* footnote)
-    __attribute__((nonnull(1, 2)));
-
-/**
  * @brief Writes the start of a citation, with its prefix.
  *
  * @param render   Render state. Must not be `NULL`.
@@ -723,13 +702,54 @@ static void write_timestamp(struct Buf* buffer, struct Str timestamp) __attribut
 static void write_entity(struct Buf* buffer, struct Str entity) __attribute__((nonnull(1)));
 
 /**
- * @brief Writes a LaTeX fragment for a script such as MathJax, with `$...$` as `\(...\)` and
- *        `$$...$$` as `\[...\]`, as Emacs does.
+ * @brief Writes a LaTeX fragment: an inline formula `\(...\)` or `$...$`, or a displayed one
+ *        `\[...\]` or `$$...$$`, as `body_html` writes math, and any other fragment as written.
  *
  * @param buffer   Destination buffer. Must not be `NULL`.
  * @param fragment Fragment as written, delimiters included.
  */
 static void write_latex(struct Buf* buffer, struct Str fragment) __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes the end of a footnote: its held body, shaped as a Markdown footnote is, and its
+ *        back-references.
+ *
+ * A footnote of one paragraph, the common case, is written without its `<p>`. With several blocks
+ * the back-references go inside the last one when it is a paragraph, and after it otherwise.
+ *
+ * @param render   Render state. Must not be `NULL`.
+ * @param footnote Footnote definition detail. Must not be `NULL`.
+ */
+static void write_footnote_close(struct OrgRender* render,
+                                 const ORG_BLOCK_FOOTNOTE_DEF_DETAIL* footnote)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Stops holding a source block's text, and writes it with Org's own markup.
+ *
+ * @param render Render state. Must not be `NULL`.
+ */
+static void release_held_source(struct OrgRender* render) __attribute__((nonnull(1)));
+
+/**
+ * @brief Finds the admonition type a special block's name names.
+ *
+ * @param special  Special block detail. Must not be `NULL`.
+ * @param type_out Receives the type in lowercase when the block is an admonition. Must not be
+ *                 `NULL`.
+ * @return `true` when the block is an admonition, `false` otherwise.
+ */
+static bool find_admonition_type(const ORG_BLOCK_SPECIAL_DETAIL* special, struct Str* type_out)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Returns the buffer the body is written to outside a caption: `footnote` while a footnote
+ *        is held, and `html` otherwise.
+ *
+ * @param render Render state. Must not be `NULL`.
+ * @return The buffer.
+ */
+static struct Buf* body_output(struct OrgRender* render) __attribute__((nonnull(1)));
 
 /**
  * @brief Writes a slice of an attribute's text, escaped by `escape`.
@@ -853,6 +873,8 @@ struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
   struct OrgRender render = {
       .html = {.arena = perm},
       .caption = {.arena = &scratch},
+      .footnote = {.arena = &scratch},
+      .code = {.arena = &scratch},
       .export_flags = export_flags,
   };
   render.output = &render.html;
@@ -1024,6 +1046,8 @@ static int org_to_html_enter_block(ORG_BLOCKTYPE type, void* detail, void* userd
       const ORG_BLOCK_SRC_DETAIL* source = detail;
       render->is_source_pending = true;
       render->source_language = attribute_text(&source->lang);
+      render->is_source_held = render->affiliated_name.len == 0 && source->first_line_number == 0;
+      render->code.len = 0;
       start_code_block(render, (ptrdiff_t)source->first_line_number, (ptrdiff_t)source->line_count);
       break;
     }
@@ -1050,18 +1074,33 @@ static int org_to_html_enter_block(ORG_BLOCKTYPE type, void* detail, void* userd
       write_open_tag(render, S("div"), S("org-center"), ORG_AFFILIATED_ID);
       buf_append(render->output, S("\n"));
       break;
-    case ORG_BLOCK_SPECIAL:
+    case ORG_BLOCK_SPECIAL: {
+      struct Str admonition_type = {0};
+      if (find_admonition_type(detail, &admonition_type)) {
+        body_html_admonition_open(render->output, admonition_type, render->affiliated_name);
+        break;
+      }
       buf_append(render->output, S("<div"));
       write_affiliated_attributes(render,
                                   attribute_text(&((const ORG_BLOCK_SPECIAL_DETAIL*)detail)->name),
                                   ORG_AFFILIATED_ID | ORG_AFFILIATED_ATTRS);
       buf_append(render->output, S(">\n"));
       break;
+    }
     case ORG_BLOCK_LATEX_ENVIRONMENT:
+      // The whole environment is the formula, as Emacs hands it to MathJax.
+      body_html_math_open(render->output, true);
       render->is_in_latex_environment = true;
       break;
+    case ORG_BLOCK_FOOTNOTE_DEF_SECTION:
+      body_html_footnotes_open(render->output);
+      break;
     case ORG_BLOCK_FOOTNOTE_DEF:
-      write_footnote_open(render->output, detail);
+      body_html_footnote_open(render->output,
+                              (ptrdiff_t)((const ORG_BLOCK_FOOTNOTE_DEF_DETAIL*)detail)->id);
+      render->footnote.len = 0;
+      render->is_in_footnote = true;
+      render->output = &render->footnote;
       break;
     default:
       buf_append(render->output, block_tags[type].open);
@@ -1091,8 +1130,14 @@ static int org_to_html_leave_block(ORG_BLOCKTYPE type, void* detail, void* userd
       write_paragraph_close(render);
       break;
     case ORG_BLOCK_SRC:
-      flush_pending_source(render);
-      buf_append(render->output, S("</code></pre>\n"));
+      if (render->is_source_held) {
+        body_html_code_block_write(render->output, render->source_language, buf_str(&render->code));
+        render->is_source_held = false;
+        render->is_source_pending = false;
+      } else {
+        flush_pending_source(render);
+        buf_append(render->output, S("</code></pre>\n"));
+      }
       render->is_in_code_block = false;
       break;
     case ORG_BLOCK_EXAMPLE:
@@ -1103,8 +1148,25 @@ static int org_to_html_leave_block(ORG_BLOCKTYPE type, void* detail, void* userd
       buf_append(render->output, block_tags[type].close);
       render->verse_depth--;
       break;
+    case ORG_BLOCK_SPECIAL: {
+      struct Str admonition_type = {0};
+      if (find_admonition_type(detail, &admonition_type)) {
+        body_html_admonition_close(render->output);
+      } else {
+        buf_append(render->output, S("</div>\n"));
+      }
+      break;
+    }
     case ORG_BLOCK_LATEX_ENVIRONMENT:
+      body_html_math_close(render->output);
+      buf_append(render->output, S("\n"));
       render->is_in_latex_environment = false;
+      break;
+    case ORG_BLOCK_FOOTNOTE_DEF_SECTION:
+      body_html_footnotes_close(render->output);
+      break;
+    case ORG_BLOCK_FOOTNOTE_DEF:
+      write_footnote_close(render, detail);
       break;
     case ORG_BLOCK_CAPTION:
       write_caption_close(render);
@@ -1132,6 +1194,10 @@ static int org_to_html_enter_span(ORG_SPANTYPE type, void* detail, void* userdat
   }
 
   render->is_at_verse_line_start = false;
+  // The only span inside a source block is a code reference, which needs Org's own markup.
+  if (render->is_source_held) {
+    release_held_source(render);
+  }
   flush_pending_source(render);
   flush_pending_paragraph(render, type == ORG_SPAN_LINK && is_image_link(detail));
 
@@ -1159,7 +1225,9 @@ static int org_to_html_enter_span(ORG_SPANTYPE type, void* detail, void* userdat
     }
     case ORG_SPAN_FOOTNOTE_REF:
       if ((render->export_flags & ORG_EXPORT_NO_FOOTNOTES) == 0) {
-        write_footnote_reference(render->output, detail);
+        const ORG_SPAN_FOOTNOTE_REF_DETAIL* reference = detail;
+        body_html_footnote_reference_write(render->output, (ptrdiff_t)reference->id,
+                                           (ptrdiff_t)reference->ref_id);
       }
       break;
     case ORG_SPAN_TIMESTAMP:
@@ -1268,6 +1336,10 @@ static int org_to_html_text(ORG_TEXTTYPE type,
                                    (type == ORG_TEXT_BR && render->verse_depth > 0) ||
                                    (type == ORG_TEXT_NORMAL && run.len > 0 && run.data[0] != '-'));
   if (render->suppress_depth > 0 || render->raw_link_depth > 0 || render->is_in_hidden_snippet) {
+    return 0;
+  }
+  if (render->is_source_held) {
+    buf_append(&render->code, type == ORG_TEXT_NULLCHAR ? UTF8_REPLACEMENT : run);
     return 0;
   }
   flush_pending_source(render);
@@ -1507,7 +1579,7 @@ static bool is_attr_html_key(struct Str word) {
 static void write_headline_open(struct OrgRender* render,
                                 const ORG_BLOCK_HEADLINE_DETAIL* headline) {
   struct Buf* output = render->output;
-  buf_printf(output, "<h%u>", headline_heading_level(headline));
+  body_html_heading_open(output, (ptrdiff_t)headline->level);
   if (headline->todo.size > 0 && (render->export_flags & ORG_EXPORT_NO_TODO) == 0) {
     buf_append(output, headline->is_done ? S("<span class=\"done ") : S("<span class=\"todo "));
     write_attribute(output, &headline->todo, html_escape_append);
@@ -1547,11 +1619,7 @@ static void write_headline_close(struct OrgRender* render,
     }
     buf_append(output, S("</span>"));
   }
-  buf_printf(output, "</h%u>\n", headline_heading_level(headline));
-}
-
-static unsigned headline_heading_level(const ORG_BLOCK_HEADLINE_DETAIL* headline) {
-  return headline->level < 6 ? headline->level : 6;
+  body_html_heading_close(output, (ptrdiff_t)headline->level);
 }
 
 static void write_list_item_open(struct OrgRender* render,
@@ -1560,35 +1628,12 @@ static void write_list_item_open(struct OrgRender* render,
   struct Buf* output = render->output;
   buf_append(output, S("<"));
   buf_append(output, tag);
-  switch (item->checkbox) {
-    case 'X':
-      buf_append(output, S(" class=\"on\""));
-      break;
-    case '-':
-      buf_append(output, S(" class=\"trans\""));
-      break;
-    case ' ':
-      buf_append(output, S(" class=\"off\""));
-      break;
-    default:
-      break;
-  }
   if (item->counter > 0) {
     buf_printf(output, " value=\"%u\"", item->counter);
   }
   buf_append(output, S(">"));
-  switch (item->checkbox) {
-    case 'X':
-      buf_append(output, S("<code>[X]</code> "));
-      break;
-    case '-':
-      buf_append(output, S("<code>[-]</code> "));
-      break;
-    case ' ':
-      buf_append(output, S("<code>[&#xa0;]</code> "));
-      break;
-    default:
-      break;
+  if (item->checkbox != 0) {
+    body_html_checkbox_write(output, item->checkbox == 'X');
   }
 }
 
@@ -1599,8 +1644,13 @@ static void flush_pending_source(struct OrgRender* render) {
   render->is_source_pending = false;
   write_open_tag(render, S("pre"), S(""), ORG_AFFILIATED_ID);
   buf_append(render->output, S("<code"));
+  // The class follows the rule of `body_html_code_block_write`, so a block reads the same whether
+  // or not its name makes it take this path.
   if (render->source_language.len > 0) {
-    buf_append(render->output, S(" class=\"language-"));
+    buf_append(render->output, S(" class=\""));
+    if (!str_startswith(render->source_language, S("language-"))) {
+      buf_append(render->output, S("language-"));
+    }
     html_escape_append(render->output, render->source_language);
     buf_append(render->output, S("\""));
   }
@@ -1679,6 +1729,7 @@ static void write_caption_open(struct OrgRender* render) {
                  render->table_count);
       break;
     case ORG_BLOCK_SRC:
+      render->is_source_held = false;
       render->listing_count++;
       buf_printf(render->output,
                  "<label class=\"org-src-name\"><span class=\"listing-number\">Listing %td: "
@@ -1706,7 +1757,7 @@ static void write_caption_close(struct OrgRender* render) {
       flush_pending_source(render);
       break;
     case ORG_BLOCK_P:
-      render->output = &render->html;
+      render->output = body_output(render);
       render->figure_caption_len = render->caption.len;
       break;
     default:
@@ -1853,42 +1904,6 @@ static bool is_image_link(const ORG_SPAN_LINK_DETAIL* link) {
          is_image_path(&link->path);
 }
 
-static void write_footnote_name(struct Buf* buffer, unsigned id, const ORG_ATTRIBUTE* label) {
-  const struct Str text = attribute_text(label);
-  bool is_numeric = true;
-  for (ptrdiff_t i = 0; i < text.len; i++) {
-    if (!ascii_is_digit((unsigned char)text.data[i])) {
-      is_numeric = false;
-      break;
-    }
-  }
-  if (text.len > 0 && !is_numeric) {
-    write_attribute(buffer, label, html_escape_append);
-  } else {
-    buf_printf(buffer, "%u", id);
-  }
-}
-
-static void write_footnote_reference(struct Buf* buffer,
-                                     const ORG_SPAN_FOOTNOTE_REF_DETAIL* reference) {
-  buf_append(buffer, S("<sup><a id=\"fnr."));
-  write_footnote_name(buffer, reference->id, &reference->label);
-  if (reference->ref_id > 1) {
-    buf_printf(buffer, ".%u", reference->ref_id - 1);
-  }
-  buf_append(buffer, S("\" class=\"footref\" href=\"#fn."));
-  write_footnote_name(buffer, reference->id, &reference->label);
-  buf_printf(buffer, "\">%u</a></sup>", reference->id);
-}
-
-static void write_footnote_open(struct Buf* buffer, const ORG_BLOCK_FOOTNOTE_DEF_DETAIL* footnote) {
-  buf_append(buffer, S("<div class=\"footdef\"><sup><a id=\"fn."));
-  write_footnote_name(buffer, footnote->id, &footnote->label);
-  buf_append(buffer, S("\" class=\"footnum\" href=\"#fnr."));
-  write_footnote_name(buffer, footnote->id, &footnote->label);
-  buf_printf(buffer, "\">%u</a></sup> <div class=\"footpara\">", footnote->id);
-}
-
 static void write_citation_open(struct OrgRender* render,
                                 const ORG_SPAN_CITATION_DETAIL* citation) {
   buf_append(render->output, S("<span class=\"citation\">("));
@@ -2003,17 +2018,76 @@ static void write_entity(struct Buf* buffer, struct Str entity) {
 }
 
 static void write_latex(struct Buf* buffer, struct Str fragment) {
-  if (fragment.len >= 4 && str_startswith(fragment, S("$$"))) {
-    buf_append(buffer, S("\\["));
-    html_escape_append(buffer, str_head(str_tail(fragment, 2), fragment.len - 4));
-    buf_append(buffer, S("\\]"));
+  bool is_display = false;
+  ptrdiff_t delimiter_len = 0;
+  if (fragment.len >= 4 &&
+      (str_startswith(fragment, S("$$")) ||
+       (str_startswith(fragment, S("\\[")) && str_endswith(fragment, S("\\]"))))) {
+    is_display = true;
+    delimiter_len = 2;
+  } else if (fragment.len >= 4 && str_startswith(fragment, S("\\(")) &&
+             str_endswith(fragment, S("\\)"))) {
+    delimiter_len = 2;
   } else if (fragment.len >= 2 && str_startswith(fragment, S("$"))) {
-    buf_append(buffer, S("\\("));
-    html_escape_append(buffer, str_head(str_tail(fragment, 1), fragment.len - 2));
-    buf_append(buffer, S("\\)"));
-  } else {
-    html_escape_append(buffer, fragment);
+    delimiter_len = 1;
   }
+  if (delimiter_len == 0) {
+    html_escape_append(buffer, fragment);
+    return;
+  }
+  body_html_math_open(buffer, is_display);
+  html_escape_append(buffer,
+                     str_head(str_tail(fragment, delimiter_len), fragment.len - 2 * delimiter_len));
+  body_html_math_close(buffer);
+}
+
+static void write_footnote_close(struct OrgRender* render,
+                                 const ORG_BLOCK_FOOTNOTE_DEF_DETAIL* footnote) {
+  render->is_in_footnote = false;
+  render->output = &render->html;
+  const ptrdiff_t id = (ptrdiff_t)footnote->id;
+  const ptrdiff_t reference_count = (ptrdiff_t)footnote->ref_count;
+  const struct Str body = buf_str(&render->footnote);
+  const struct Str paragraph_open = S("<p>");
+  const struct Str paragraph_close = S("</p>\n");
+  ptrdiff_t first_close = 0;
+  while (first_close < body.len && !str_startswith(str_tail(body, first_close), S("</p>"))) {
+    first_close++;
+  }
+  if (str_startswith(body, paragraph_open) && first_close == body.len - paragraph_close.len) {
+    buf_append(render->output, str_head(str_tail(body, paragraph_open.len),
+                                        body.len - paragraph_open.len - paragraph_close.len));
+    body_html_footnote_back_references_write(render->output, id, reference_count);
+  } else if (str_endswith(body, paragraph_close)) {
+    buf_append(render->output, str_head(body, body.len - paragraph_close.len));
+    body_html_footnote_back_references_write(render->output, id, reference_count);
+    buf_append(render->output, S("</p>"));
+  } else {
+    buf_append(render->output, body);
+    body_html_footnote_back_references_write(render->output, id, reference_count);
+  }
+  body_html_footnote_close(render->output);
+}
+
+static void release_held_source(struct OrgRender* render) {
+  render->is_source_held = false;
+  flush_pending_source(render);
+  html_escape_append(render->output, buf_str(&render->code));
+}
+
+static bool find_admonition_type(const ORG_BLOCK_SPECIAL_DETAIL* special, struct Str* type_out) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(admonition_types) / sizeof(admonition_types[0]));
+       i++) {
+    if (is_attribute_named(&special->name, admonition_types[i])) {
+      *type_out = admonition_types[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+static struct Buf* body_output(struct OrgRender* render) {
+  return render->is_in_footnote ? &render->footnote : &render->html;
 }
 
 static void write_attribute_part(struct Buf* buffer,

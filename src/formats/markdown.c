@@ -36,11 +36,20 @@ struct MarkdownRender {
   /** HTML written so far, growing in `perm`. */
   struct Buf html;
 
+  /** Language of the code block being read, its entities decoded, in scratch. */
+  struct Buf code_language;
+
+  /** Text of the code block being read, in scratch, written whole when the block ends. */
+  struct Buf code;
+
   /**
    * Count of images whose label is being written, zero outside one. An image's label becomes its
    * `alt` attribute, so nothing but its text is written there.
    */
   ptrdiff_t image_depth;
+
+  /** Whether the text is inside a code block. */
+  bool is_in_code_block;
 };
 
 /** Opening and closing tags of an element whose detail its HTML does not depend on. */
@@ -53,8 +62,9 @@ struct MarkdownTags {
 };
 
 /**
- * Tags of each block type, by type. A block whose open or close tag depends on its detail leaves
- * that tag empty here and writes it in the callback.
+ * Tags of each block type, by type. A block whose open or close tag depends on its detail, or one
+ * that `body_html` writes because Org has it too, leaves that tag empty here and writes it in the
+ * callback.
  */
 static const struct MarkdownTags block_tags[MD_BLOCK_BLANK + 1] = {
     [MD_BLOCK_QUOTE] = {STR_INIT("<blockquote>\n"), STR_INIT("</blockquote>\n")},
@@ -62,7 +72,6 @@ static const struct MarkdownTags block_tags[MD_BLOCK_BLANK + 1] = {
     [MD_BLOCK_OL] = {STR_INIT(""), STR_INIT("</ol>\n")},
     [MD_BLOCK_LI] = {STR_INIT(""), STR_INIT("</li>\n")},
     [MD_BLOCK_HR] = {STR_INIT("<hr>\n"), STR_INIT("")},
-    [MD_BLOCK_CODE] = {STR_INIT(""), STR_INIT("</code></pre>\n")},
     [MD_BLOCK_P] = {STR_INIT("<p>"), STR_INIT("</p>\n")},
     [MD_BLOCK_TABLE] = {STR_INIT("<table>\n"), STR_INIT("</table>\n")},
     [MD_BLOCK_THEAD] = {STR_INIT("<thead>\n"), STR_INIT("</thead>\n")},
@@ -70,14 +79,12 @@ static const struct MarkdownTags block_tags[MD_BLOCK_BLANK + 1] = {
     [MD_BLOCK_TR] = {STR_INIT("<tr>\n"), STR_INIT("</tr>\n")},
     [MD_BLOCK_TH] = {STR_INIT(""), STR_INIT("</th>\n")},
     [MD_BLOCK_TD] = {STR_INIT(""), STR_INIT("</td>\n")},
-    [MD_BLOCK_FOOTNOTE_DEF_SECTION] = {STR_INIT("<section class=\"footnotes\">\n<ol>\n"),
-                                       STR_INIT("</ol>\n</section>\n")},
-    [MD_BLOCK_ADMONITION] = {STR_INIT(""), STR_INIT("</div>\n")},
 };
 
 /**
- * Tags of each span type, by type. A span whose open or close tag depends on its detail leaves that
- * tag empty here and writes it in the callback.
+ * Tags of each span type, by type. A span whose open or close tag depends on its detail, or one
+ * that `body_html` writes because Org has it too, leaves that tag empty here and writes it in the
+ * callback.
  */
 static const struct MarkdownTags span_tags[MD_SPAN_MARK + 1] = {
     [MD_SPAN_EM] = {STR_INIT("<em>"), STR_INIT("</em>")},
@@ -85,9 +92,6 @@ static const struct MarkdownTags span_tags[MD_SPAN_MARK + 1] = {
     [MD_SPAN_A] = {STR_INIT(""), STR_INIT("</a>")},
     [MD_SPAN_CODE] = {STR_INIT("<code>"), STR_INIT("</code>")},
     [MD_SPAN_DEL] = {STR_INIT("<del>"), STR_INIT("</del>")},
-    [MD_SPAN_LATEXMATH] = {STR_INIT("<x-equation>"), STR_INIT("</x-equation>")},
-    [MD_SPAN_LATEXMATH_DISPLAY] = {STR_INIT("<x-equation type=\"display\">"),
-                                   STR_INIT("</x-equation>")},
     [MD_SPAN_SPOILER] = {STR_INIT("<x-spoiler>"), STR_INIT("</x-spoiler>")},
     [MD_SPAN_SUPERSCRIPT] = {STR_INIT("<sup>"), STR_INIT("</sup>")},
     [MD_SPAN_SUBSCRIPT] = {STR_INIT("<sub>"), STR_INIT("</sub>")},
@@ -161,24 +165,6 @@ static int markdown_to_html_text(MD_TEXTTYPE type,
                                  void* userdata);
 
 /**
- * @brief Writes the opening tag of a list item, with a disabled checkbox for a task item.
- *
- * @param buffer Destination buffer. Must not be `NULL`.
- * @param item   List item detail. Must not be `NULL`.
- */
-static void write_list_item_open(struct Buf* buffer, const MD_BLOCK_LI_DETAIL* item)
-    __attribute__((nonnull(1, 2)));
-
-/**
- * @brief Writes the opening tags of a code block, with a `language-` class when it names one.
- *
- * @param buffer Destination buffer. Must not be `NULL`.
- * @param code   Code block detail. Must not be `NULL`.
- */
-static void write_code_block_open(struct Buf* buffer, const MD_BLOCK_CODE_DETAIL* code)
-    __attribute__((nonnull(1, 2)));
-
-/**
  * @brief Writes the opening tag of a table cell, with its alignment.
  *
  * @param buffer Destination buffer. Must not be `NULL`.
@@ -188,24 +174,6 @@ static void write_code_block_open(struct Buf* buffer, const MD_BLOCK_CODE_DETAIL
 static void write_table_cell_open(struct Buf* buffer,
                                   struct Str tag,
                                   const MD_BLOCK_TD_DETAIL* cell) __attribute__((nonnull(1, 3)));
-
-/**
- * @brief Writes the opening of an admonition: its `admonition-<type>` block and its title.
- *
- * @param buffer     Destination buffer. Must not be `NULL`.
- * @param admonition Admonition detail. Must not be `NULL`.
- */
-static void write_admonition_open(struct Buf* buffer, const MD_BLOCK_ADMONITION_DETAIL* admonition)
-    __attribute__((nonnull(1, 2)));
-
-/**
- * @brief Writes the back-references that end a footnote, one for each reference to it.
- *
- * @param buffer   Destination buffer. Must not be `NULL`.
- * @param footnote Footnote definition detail. Must not be `NULL`.
- */
-static void write_footnote_close(struct Buf* buffer, const MD_BLOCK_FOOTNOTE_DEF_DETAIL* footnote)
-    __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Writes the opening tag of a link.
@@ -266,8 +234,12 @@ static void write_code_point(struct Buf* buffer, uint32_t code_point, EscapeFn* 
  */
 static uint32_t hex_digit_value(char c);
 
-struct Str markdown_to_html(struct Str markdown, struct Arena* perm) {
-  struct MarkdownRender render = {.html = {.arena = perm}};
+struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch) {
+  struct MarkdownRender render = {
+      .html = {.arena = perm},
+      .code_language = {.arena = &scratch},
+      .code = {.arena = &scratch},
+  };
 
   // This names extensions one at a time rather than through an `MD_DIALECT_*` constant, because
   // md4c documents that a dialect constant's meaning changes as it implements more of that dialect.
@@ -315,27 +287,47 @@ static int markdown_to_html_enter_block(MD_BLOCKTYPE type, void* detail, void* u
       }
       break;
     }
-    case MD_BLOCK_LI:
-      write_list_item_open(html, detail);
+    case MD_BLOCK_LI: {
+      const MD_BLOCK_LI_DETAIL* item = detail;
+      buf_append(html, S("<li>"));
+      if (item->is_task) {
+        body_html_checkbox_write(html, item->task_mark == 'x' || item->task_mark == 'X');
+      }
       break;
+    }
     case MD_BLOCK_H:
-      buf_printf(html, "<h%u>", ((const MD_BLOCK_H_DETAIL*)detail)->level);
+      body_html_heading_open(html, (ptrdiff_t)((const MD_BLOCK_H_DETAIL*)detail)->level);
       break;
-    case MD_BLOCK_CODE:
-      write_code_block_open(html, detail);
+    case MD_BLOCK_CODE: {
+      // The block is written whole when it ends, through the writer Org's plain blocks share.
+      const MD_ATTRIBUTE* language = &((const MD_BLOCK_CODE_DETAIL*)detail)->lang;
+      render->code_language.len = 0;
+      if (language->text != NULL) {
+        write_attribute(&render->code_language, language, buf_append);
+      }
+      render->code.len = 0;
+      render->is_in_code_block = true;
       break;
+    }
     case MD_BLOCK_TH:
       write_table_cell_open(html, S("th"), detail);
       break;
     case MD_BLOCK_TD:
       write_table_cell_open(html, S("td"), detail);
       break;
+    case MD_BLOCK_FOOTNOTE_DEF_SECTION:
+      body_html_footnotes_open(html);
+      break;
     case MD_BLOCK_FOOTNOTE_DEF:
-      buf_printf(html, "<li id=\"fn-%u\">\n", ((const MD_BLOCK_FOOTNOTE_DEF_DETAIL*)detail)->id);
+      body_html_footnote_open(html, (ptrdiff_t)((const MD_BLOCK_FOOTNOTE_DEF_DETAIL*)detail)->id);
       break;
-    case MD_BLOCK_ADMONITION:
-      write_admonition_open(html, detail);
+    case MD_BLOCK_ADMONITION: {
+      // md4c names the type in lowercase, as `body_html` takes it.
+      const MD_ATTRIBUTE* admonition_type = &((const MD_BLOCK_ADMONITION_DETAIL*)detail)->type;
+      body_html_admonition_open(
+          html, (struct Str){admonition_type->text, (ptrdiff_t)admonition_type->size}, S(""));
       break;
+    }
     default:
       buf_append(html, block_tags[type].open);
       break;
@@ -348,10 +340,24 @@ static int markdown_to_html_leave_block(MD_BLOCKTYPE type, void* detail, void* u
   struct Buf* html = &render->html;
   switch (type) {
     case MD_BLOCK_H:
-      buf_printf(html, "</h%u>\n", ((const MD_BLOCK_H_DETAIL*)detail)->level);
+      body_html_heading_close(html, (ptrdiff_t)((const MD_BLOCK_H_DETAIL*)detail)->level);
       break;
-    case MD_BLOCK_FOOTNOTE_DEF:
-      write_footnote_close(html, detail);
+    case MD_BLOCK_CODE:
+      body_html_code_block_write(html, buf_str(&render->code_language), buf_str(&render->code));
+      render->is_in_code_block = false;
+      break;
+    case MD_BLOCK_FOOTNOTE_DEF_SECTION:
+      body_html_footnotes_close(html);
+      break;
+    case MD_BLOCK_FOOTNOTE_DEF: {
+      const MD_BLOCK_FOOTNOTE_DEF_DETAIL* footnote = detail;
+      body_html_footnote_back_references_write(html, (ptrdiff_t)footnote->id,
+                                               (ptrdiff_t)footnote->ref_count);
+      body_html_footnote_close(html);
+      break;
+    }
+    case MD_BLOCK_ADMONITION:
+      body_html_admonition_close(html);
       break;
     default:
       buf_append(html, block_tags[type].close);
@@ -379,10 +385,16 @@ static int markdown_to_html_enter_span(MD_SPANTYPE type, void* detail, void* use
       write_attribute(html, &((const MD_SPAN_IMG_DETAIL*)detail)->src, body_html_url_escape_append);
       buf_append(html, S("\" alt=\""));
       break;
+    case MD_SPAN_LATEXMATH:
+      body_html_math_open(html, false);
+      break;
+    case MD_SPAN_LATEXMATH_DISPLAY:
+      body_html_math_open(html, true);
+      break;
     case MD_SPAN_FOOTNOTE_REF: {
       const MD_SPAN_FOOTNOTE_REF_DETAIL* reference = detail;
-      buf_printf(html, "<sup><a href=\"#fn-%u\" id=\"fnref-%u-%u\">%u</a></sup>", reference->id,
-                 reference->id, reference->ref_id, reference->id);
+      body_html_footnote_reference_write(html, (ptrdiff_t)reference->id,
+                                         (ptrdiff_t)reference->ref_id);
       break;
     }
     default:
@@ -400,10 +412,17 @@ static int markdown_to_html_leave_span(MD_SPANTYPE type, void* detail, void* use
   if (render->image_depth > 0) {
     return 0;
   }
-  if (type == MD_SPAN_IMG) {
-    write_image_close(&render->html, detail);
-  } else {
-    buf_append(&render->html, span_tags[type].close);
+  switch (type) {
+    case MD_SPAN_IMG:
+      write_image_close(&render->html, detail);
+      break;
+    case MD_SPAN_LATEXMATH:
+    case MD_SPAN_LATEXMATH_DISPLAY:
+      body_html_math_close(&render->html);
+      break;
+    default:
+      buf_append(&render->html, span_tags[type].close);
+      break;
   }
   return 0;
 }
@@ -416,6 +435,10 @@ static int markdown_to_html_text(MD_TEXTTYPE type,
   struct Buf* html = &render->html;
   const struct Str run = {text, (ptrdiff_t)size};
   const bool is_inside_image = render->image_depth > 0;
+  if (render->is_in_code_block) {
+    buf_append(&render->code, type == MD_TEXT_NULLCHAR ? UTF8_REPLACEMENT : run);
+    return 0;
+  }
   switch (type) {
     case MD_TEXT_NULLCHAR:
       buf_append(html, UTF8_REPLACEMENT);
@@ -445,33 +468,6 @@ static int markdown_to_html_text(MD_TEXTTYPE type,
   return 0;
 }
 
-static void write_list_item_open(struct Buf* buffer, const MD_BLOCK_LI_DETAIL* item) {
-  if (!item->is_task) {
-    buf_append(buffer, S("<li>"));
-    return;
-  }
-  buf_append(buffer, S("<li class=\"task-list-item\">"
-                       "<input type=\"checkbox\" class=\"task-list-item-checkbox\" disabled"));
-  if (item->task_mark == 'x' || item->task_mark == 'X') {
-    buf_append(buffer, S(" checked"));
-  }
-  buf_append(buffer, S(">"));
-}
-
-static void write_code_block_open(struct Buf* buffer, const MD_BLOCK_CODE_DETAIL* code) {
-  buf_append(buffer, S("<pre><code"));
-  if (code->lang.text != NULL) {
-    buf_append(buffer, S(" class=\""));
-    if (!str_startswith((struct Str){code->lang.text, (ptrdiff_t)code->lang.size},
-                        S("language-"))) {
-      buf_append(buffer, S("language-"));
-    }
-    write_attribute(buffer, &code->lang, html_escape_append);
-    buf_append(buffer, S("\""));
-  }
-  buf_append(buffer, S(">"));
-}
-
 static void write_table_cell_open(struct Buf* buffer,
                                   struct Str tag,
                                   const MD_BLOCK_TD_DETAIL* cell) {
@@ -491,26 +487,6 @@ static void write_table_cell_open(struct Buf* buffer,
       buf_append(buffer, S(">"));
       break;
   }
-}
-
-static void write_admonition_open(struct Buf* buffer,
-                                  const MD_BLOCK_ADMONITION_DETAIL* admonition) {
-  buf_append(buffer, S("<div class=\"admonition-"));
-  write_attribute(buffer, &admonition->type, html_escape_append);
-  buf_append(buffer, S("\"><p class=\"admonition-title\">"));
-  write_attribute(buffer, &admonition->type, html_escape_append);
-  buf_append(buffer, S("</p>"));
-}
-
-static void write_footnote_close(struct Buf* buffer, const MD_BLOCK_FOOTNOTE_DEF_DETAIL* footnote) {
-  for (unsigned ref_id = 1; ref_id <= footnote->ref_count; ref_id++) {
-    if (ref_id > 1) {
-      buf_append(buffer, S(" "));
-    }
-    buf_printf(buffer, "<a href=\"#fnref-%u-%u\" class=\"footnote-backref\">&#8617;</a>",
-               footnote->id, ref_id);
-  }
-  buf_append(buffer, S("\n</li>\n"));
 }
 
 static void write_link_open(struct Buf* buffer, const MD_SPAN_A_DETAIL* link) {

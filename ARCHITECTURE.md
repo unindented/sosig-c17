@@ -90,7 +90,7 @@ The phase order follows the data dependencies. A content template can read `site
 
 - [markdown](src/formats/markdown.h): `markdown_to_html` parses Markdown with md4c, with the project's extension set, and writes the HTML through its own callbacks.
 - [org](src/formats/org.h): `org_to_html` parses Org with org4c, with the project's flags and the file's `#+OPTIONS:` lines, and writes the HTML through its own callbacks.
-- [body_html](src/formats/body_html.h): HTML that the Markdown and Org renderers share, such as the URL escaping of link targets.
+- [body_html](src/formats/body_html.h): The markup the Markdown and Org renderers share, written in one place for both: headings, footnotes, task checkboxes, admonitions, math and plain code blocks, and the escaping of link targets.
 - [html](src/formats/html.h): HTML escaping of untrusted text for generated markup.
 - [toml](src/formats/toml.h): TOML text validation plus date/datetime conversion and formatting. `toml_require_known_keys` is the shared unknown-key check: it reports each table key that a loader's list of known keys does not contain.
 

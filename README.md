@@ -218,7 +218,7 @@ An entry's `template` override follows the same safe-relative-path rules as conf
 
 ### Markdown
 
-The tool renders Markdown with md4c. It enables these extensions:
+The tool parses Markdown with md4c and writes the HTML itself. It enables these extensions:
 
 - Tables
 - Strikethrough
@@ -234,17 +234,27 @@ The renderer permits raw HTML and does not sanitize it. Only use content files t
 
 ### Org
 
-The tool renders Org with [org4c](https://github.com/unindented/org4c). It renders `a_{b}` as a subscript and keeps `snake_case` as text, as `#+OPTIONS: ^:{}` does. It also differs from Emacs's own HTML export in these ways:
+The tool parses Org with [org4c](https://github.com/unindented/org4c) and writes the HTML itself. It renders `a_{b}` as a subscript and keeps `snake_case` as text, as `#+OPTIONS: ^:{}` does. It also differs from Emacs's own HTML export in these ways:
 
 - A file's `#+OPTIONS:` line overrides these settings, such as with `^:t`, `f:nil`, or `tex:nil`, even when the line is inside a source block.
 - A top-level `*` headline renders as `<h1>`, like Markdown's `#`, where Emacs uses `<h2>`.
 - `#+BEGIN_EXPORT html` blocks and `@@html:...@@` snippets pass raw HTML through without sanitizing it, and `#+HTML:` lines are dropped. Only use content files that you trust.
-- Math renders as `\(...\)` and `\[...\]`, and `$y$` becomes `\(y\)`. Markdown math renders as `<x-equation>`, so a site that uses both formats needs a math setup that handles both.
+- Where Markdown has the same feature, the HTML is Markdown's, as the next section describes, rather than Emacs's.
 - A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work, and a `[[file:other.org]]` link points to `other.html` next to the page, which works only when the other note's permalink is that path.
 
-As in Emacs, a property drawer at the top of the file renders nothing, and a `Footnotes` headline and its subtree render nothing while the footnote definitions in it go to the footnotes block at the end. See org4c's [README](https://github.com/unindented/org4c#differences-from-emacs-ox-html) for its other differences from Emacs.
+As in Emacs, a property drawer at the top of the file renders nothing, and a `Footnotes` headline and its subtree render nothing while the footnote definitions in it go to the footnote list at the end. See org4c's [README](https://github.com/unindented/org4c#differences-from-emacs-ox-html) for its other differences from Emacs. The tool's Org renderer is a port of org4c's, so they hold here too, apart from the shared HTML below.
 
-The two formats render the same features as different HTML: `<strong>` and `<em>` against `<b>` and `<i>`, md4c's footnotes section against Org's footnotes block, checkboxes against `[X]` text, `admonition-note` blocks against plain `note` ones, and `<x-equation>` against `\(...\)`. Org headlines and Markdown headings start at the same level.
+### HTML shared by both formats
+
+Markdown and Org write the features they share as the same HTML, so one stylesheet and one math script cover both:
+
+- Bold and italics are `<strong>` and `<em>`.
+- A footnote reference is `<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>`. The footnotes follow the body as a `<section class="footnotes">` list, each with links back to its references. A one-paragraph footnote has no `<p>`, and an Org footnote of several paragraphs keeps each one.
+- A task list item starts with a disabled `<input type="checkbox" class="task-list-item-checkbox">`. Org's partly done `[-]` is unchecked.
+- A note, tip, important note, warning or caution is a `<div class="admonition-note">`, or `admonition-tip` and so on, that starts with a `<p class="admonition-title">`. In Markdown it is a `> [!NOTE]` block, and in Org a `#+BEGIN_NOTE` block, in any case.
+- Math is `<x-equation>`, or `<x-equation type="display">` for a displayed formula, holding the LaTeX for a script such as MathJax or KaTeX. Org's `$y$` and `\(y\)` are inline, and `$$y$$`, `\[y\]` and a LaTeX environment are displayed.
+- A code block is `<pre><code class="language-c">`. An Org block with a `#+NAME:`, a `#+CAPTION:`, line numbers or code references keeps Org's own markup for them.
+- Markdown headings and Org headlines start at the same level.
 
 ### Templates
 

@@ -30,7 +30,8 @@ enum { ORG_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  *
  * @param org     Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
  * @param perm    Arena that owns the HTML. Must not be `NULL`.
- * @param scratch Arena for a figure's caption, held until the figure ends.
+ * @param scratch Arena for what is held until its element ends: a figure's caption, a footnote's
+ *                body, and a plain source block's code.
  * @return The HTML, owned by `perm`.
  */
 struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)

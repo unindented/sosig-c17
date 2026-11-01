@@ -217,7 +217,7 @@ static int render_content_entry_job(ptrdiff_t index,
   // converter runs, so a large body is built without a copy. The read capped the file at
   // `CONTENT_FILE_LEN_MAX`, the input limit of both converters.
   entry->body_html = source.is_org ? org_to_html(source.body, &perm, scratch)
-                                   : markdown_to_html(source.body, &perm);
+                                   : markdown_to_html(source.body, &perm, scratch);
   // The entry keeps copies of what it needs. The worker's scratch outlives the job, so a large
   // source's pages are given back.
   if (source.text.len >= JOB_SOURCE_DISCARD_LEN_MIN) {

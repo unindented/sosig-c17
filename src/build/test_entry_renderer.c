@@ -369,13 +369,13 @@ static void test_renders_org_entry_metadata_and_html(void) {
   if (entry != NULL) {
     TEST_CHECK(str_eq(entry->title, S("Hello")));
     TEST_CHECK(str_eq(entry->slug, S("hello")));
-    TEST_CHECK(str_eq(entry->body_html, S("<p><i>Body</i></p>\n")));
+    TEST_CHECK(str_eq(entry->body_html, S("<p><em>Body</em></p>\n")));
     TEST_CHECK(str_eq(entry->url_path, S("/hello.html")));
     TEST_CHECK(str_eq(entry->output_path, S("public/hello.html")));
   }
 
   TEST_CHECK(read_output(root_dir, "public/hello.html", &perm, &page) == 0);
-  TEST_CHECK(str_eq(page, S("<main>Hello <p><i>Body</i></p>\n</main>\n")));
+  TEST_CHECK(str_eq(page, S("<main>Hello <p><em>Body</em></p>\n</main>\n")));
 
 cleanup:
   remove_fixture_tree(root_dir);
