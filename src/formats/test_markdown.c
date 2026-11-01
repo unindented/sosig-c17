@@ -15,9 +15,7 @@ static void test_renders_basic_html(void) {
   struct Str html = {0};
   html = markdown_to_html(markdown, &perm);
 
-  TEST_CHECK(strstr(str_cstr(html, &perm), "<h1>Title</h1>") != NULL);
-  TEST_CHECK(strstr(str_cstr(html, &perm), "<em>em</em>") != NULL);
-  TEST_CHECK(strstr(str_cstr(html, &perm), "<code>code</code>") != NULL);
+  TEST_CHECK(str_eq(html, S("<h1>Title</h1>\n<p><em>em</em> and <code>code</code></p>\n")));
 }
 
 // The enabled extension set renders GitHub-style tables. The golden test compares the rendered
@@ -29,7 +27,8 @@ static void test_renders_github_tables(void) {
   struct Str html = {0};
   html = markdown_to_html(markdown, &perm);
 
-  TEST_CHECK(strstr(str_cstr(html, &perm), "<table>") != NULL);
+  TEST_CHECK(str_eq(html, S("<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n"
+                            "<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n")));
 }
 
 // Raw HTML in a body passes through verbatim. `markdown_to_html` deliberately omits
@@ -58,10 +57,10 @@ static void test_collapses_whitespace_runs(void) {
   TEST_CHECK(str_eq(html, S("<p>a b c</p>\n")));
 }
 
-// A body beginning with a UTF-8 BOM renders without it, which is `MD_HTML_FLAG_SKIP_UTF8_BOM`. This
-// is a reachable production case rather than a theoretical one. `frontmatter_split` strips only the
-// file's leading BOM, so an author who writes one immediately after the closing fence hands md4c a
-// body slice that still starts with it. Without the flag, a stray U+FEFF lands in the page text.
+// A body beginning with a UTF-8 BOM renders without it. This is a reachable production case rather
+// than a theoretical one. `frontmatter_split` strips only the file's leading BOM, so an author who
+// writes one immediately after the closing fence hands `markdown_to_html` a body slice that still
+// starts with it. Without the skip, a stray U+FEFF lands in the page text.
 static void test_skips_leading_byte_order_mark(void) {
   const struct Str markdown = S("\xef\xbb\xbfhello\n");
   struct Arena perm = test_arena();
@@ -80,8 +79,8 @@ static void test_empty_input_yields_empty_string(void) {
 }
 
 // The HTML grows in place at the start of `perm`'s free space, so a body that outgrows many
-// capacities is never copied: it starts where the free space did. md4c hands the output over in
-// small chunks, so two thousand paragraphs force many growths.
+// capacities is never copied: it starts where the free space did. The renderer writes the output in
+// small pieces, so two thousand paragraphs force many growths.
 static void test_html_grows_in_place_in_perm(void) {
   enum { PARAGRAPH_COUNT = 2000, PARAGRAPH_LEN = 4 };
   struct Arena scratch = test_arena();

@@ -29,9 +29,9 @@ enum { MARKDOWN_INPUT_LEN_MAX = 256 * 1024 * 1024 };
 /**
  * @brief Converts Markdown to HTML using the configured md4c extension set.
  *
- * The HTML is built in `perm`, growing in place while nothing else allocates there. md4c's own
- * working memory comes from `malloc`, and a failed allocation there ends in `os_oom`, like one from
- * `perm`.
+ * md4c parses the Markdown, and this module's callbacks write the HTML, which is built in `perm`,
+ * growing in place while nothing else allocates there. md4c's own working memory comes from
+ * `malloc`, and a failed allocation there ends in `os_oom`, like one from `perm`.
  *
  * This is reentrant, so content jobs may render in parallel across the worker pool. md4c holds no
  * writable global state, and all per-render state lives in this function's frame. A vendor bump

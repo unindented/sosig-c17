@@ -88,7 +88,7 @@ The phase order follows the data dependencies. A content template can read `site
 
 ### Formats (`src/formats`)
 
-- [markdown](src/formats/markdown.h): `markdown_to_html` wraps md4c with the project's extension set.
+- [markdown](src/formats/markdown.h): `markdown_to_html` parses Markdown with md4c, with the project's extension set, and writes the HTML through its own callbacks.
 - [org](src/formats/org.h): `org_to_html` wraps org4c with the project's flags.
 - [html](src/formats/html.h): HTML escaping of untrusted text for generated markup.
 - [toml](src/formats/toml.h): TOML text validation plus date/datetime conversion and formatting. `toml_require_known_keys` is the shared unknown-key check: it reports each table key that a loader's list of known keys does not contain.

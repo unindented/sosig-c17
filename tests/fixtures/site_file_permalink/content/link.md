@@ -8,3 +8,7 @@ draft = false
 +++
 
 This paragraph includes [a link](https://example.com).
+
+## A Second-Level Heading
+
+The heading sits below the paragraph.
