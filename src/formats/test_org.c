@@ -90,6 +90,12 @@ static void test_renders_heading_levels(void) {
   TEST_CHECK(str_eq(render_org("* A\n** B\n"), S("<h2>A</h2>\n<h3>B</h3>\n")));
 }
 
+// Entities give the same HTML as in Markdown, which `test_markdown.c` checks with the same expected
+// HTML.
+static void test_renders_entities(void) {
+  TEST_CHECK(str_eq(render_org("\\alpha and \\beta\n"), S("<p>&alpha; and &beta;</p>\n")));
+}
+
 // Braced sub/superscripts render, and an unbraced one such as an identifier with an underscore
 // stays text, which is `ORG_FLAG_SUBSUPERSCRIPTS_BRACED`, Org's `^:{}`.
 static void test_renders_braced_subscripts_only(void) {
@@ -221,6 +227,7 @@ TEST_LIST = {
     {"renders math", test_renders_math},
     {"renders code block", test_renders_code_block},
     {"renders heading levels", test_renders_heading_levels},
+    {"renders entities", test_renders_entities},
     {"renders braced subscripts only", test_renders_braced_subscripts_only},
     {"honors in-buffer options", test_honors_in_buffer_options},
     {"passes through export blocks", test_passes_through_export_blocks},

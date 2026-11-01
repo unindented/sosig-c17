@@ -46,7 +46,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Vendored at commit `f9e5eb232b95b737373ae706648cb75bd259ed1a`.
 
-Only the parser is vendored: `md4c.c`, `md4c.h`, `entity.c` and `entity.h`. This project writes the HTML itself, in `src/formats/markdown.c`, so a bump diffs upstream's `md4c-html.c` between the two commits and ports what applies.
+Only the parser is vendored: `md4c.c` and `md4c.h`. This project writes the HTML itself, in `src/formats/markdown.c`, so a bump diffs upstream's `md4c-html.c` between the two commits and ports what applies.
 
 Copyright (c) 2016-2026 Martin Mitáš
 

@@ -2,12 +2,10 @@
 
 #include <assert.h>
 #include <md4c.h>
-#include <md4c/entity.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "core/ascii.h"
 #include "formats/body_html.h"
 #include "formats/html.h"
 #include "shared/arena.h"
@@ -35,9 +33,6 @@ typedef void EscapeFn(struct Buf* buffer, struct Str text);
 struct MarkdownRender {
   /** HTML written so far, growing in `perm`. */
   struct Buf html;
-
-  /** Language of the code block being read, its entities decoded, in scratch. */
-  struct Buf code_language;
 
   /** Text of the code block being read, in scratch, written whole when the block ends. */
   struct Buf code;
@@ -194,7 +189,7 @@ static void write_image_close(struct Buf* buffer, const MD_SPAN_IMG_DETAIL* imag
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Writes an attribute's text, decoding its entities, escaped by `escape`.
+ * @brief Writes an attribute's text, escaped by `escape`, with its entities as written.
  *
  * @param buffer    Destination buffer. Must not be `NULL`.
  * @param attribute Attribute to write. Must not be `NULL`.
@@ -203,41 +198,9 @@ static void write_image_close(struct Buf* buffer, const MD_SPAN_IMG_DETAIL* imag
 static void write_attribute(struct Buf* buffer, const MD_ATTRIBUTE* attribute, EscapeFn* escape)
     __attribute__((nonnull(1, 2, 3)));
 
-/**
- * @brief Writes an entity as the UTF-8 text it stands for, escaped by `escape`.
- *
- * A numeric reference gives its code point. A named one is looked up in md4c's table of HTML
- * entities, and an unknown name is written as it is.
- *
- * @param buffer Destination buffer. Must not be `NULL`.
- * @param entity Entity as written, from `&` to `;`.
- * @param escape Escaping for the context the entity is written in. Must not be `NULL`.
- */
-static void write_entity(struct Buf* buffer, struct Str entity, EscapeFn* escape)
-    __attribute__((nonnull(1, 3)));
-
-/**
- * @brief Writes a code point as UTF-8, escaped by `escape`, or U+FFFD when it is not a valid one.
- *
- * @param buffer     Destination buffer. Must not be `NULL`.
- * @param code_point Code point to encode.
- * @param escape     Escaping for the context the text is written in. Must not be `NULL`.
- */
-static void write_code_point(struct Buf* buffer, uint32_t code_point, EscapeFn* escape)
-    __attribute__((nonnull(1, 3)));
-
-/**
- * @brief Returns the value of a hexadecimal digit.
- *
- * @param c Hexadecimal digit, in either case.
- * @return The digit's value, from 0 to 15.
- */
-static uint32_t hex_digit_value(char c);
-
 struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch) {
   struct MarkdownRender render = {
       .html = {.arena = perm},
-      .code_language = {.arena = &scratch},
       .code = {.arena = &scratch},
   };
 
@@ -298,17 +261,11 @@ static int markdown_to_html_enter_block(MD_BLOCKTYPE type, void* detail, void* u
     case MD_BLOCK_H:
       body_html_heading_open(html, (ptrdiff_t)((const MD_BLOCK_H_DETAIL*)detail)->level);
       break;
-    case MD_BLOCK_CODE: {
+    case MD_BLOCK_CODE:
       // The block is written whole when it ends, through the writer Org's plain blocks share.
-      const MD_ATTRIBUTE* language = &((const MD_BLOCK_CODE_DETAIL*)detail)->lang;
-      render->code_language.len = 0;
-      if (language->text != NULL) {
-        write_attribute(&render->code_language, language, buf_append);
-      }
       render->code.len = 0;
       render->is_in_code_block = true;
       break;
-    }
     case MD_BLOCK_TH:
       write_table_cell_open(html, S("th"), detail);
       break;
@@ -342,10 +299,13 @@ static int markdown_to_html_leave_block(MD_BLOCKTYPE type, void* detail, void* u
     case MD_BLOCK_H:
       body_html_heading_close(html, (ptrdiff_t)((const MD_BLOCK_H_DETAIL*)detail)->level);
       break;
-    case MD_BLOCK_CODE:
-      body_html_code_block_write(html, buf_str(&render->code_language), buf_str(&render->code));
+    case MD_BLOCK_CODE: {
+      const MD_ATTRIBUTE* language = &((const MD_BLOCK_CODE_DETAIL*)detail)->lang;
+      body_html_code_block_write(html, (struct Str){language->text, (ptrdiff_t)language->size},
+                                 buf_str(&render->code));
       render->is_in_code_block = false;
       break;
+    }
     case MD_BLOCK_FOOTNOTE_DEF_SECTION:
       body_html_footnotes_close(html);
       break;
@@ -459,7 +419,9 @@ static int markdown_to_html_text(MD_TEXTTYPE type,
       }
       break;
     case MD_TEXT_ENTITY:
-      write_entity(html, run, html_escape_append);
+      // An entity stays as written, such as `&copy;`, which the browser shows as the character it
+      // names. Org's entities are HTML entities too.
+      buf_append(html, run);
       break;
     default:
       html_escape_append(html, run);
@@ -517,75 +479,11 @@ static void write_attribute(struct Buf* buffer, const MD_ATTRIBUTE* attribute, E
         buf_append(buffer, UTF8_REPLACEMENT);
         break;
       case MD_TEXT_ENTITY:
-        write_entity(buffer, text, escape);
+        buf_append(buffer, text);
         break;
       default:
         escape(buffer, text);
         break;
     }
   }
-}
-
-static void write_entity(struct Buf* buffer, struct Str entity, EscapeFn* escape) {
-  // md4c reports only well-formed references, `&#` and digits or `&#x` and hex digits, each ending
-  // in `;`, or a name.
-  if (entity.len > 3 && entity.data[1] == '#') {
-    uint32_t code_point = 0;
-    if (entity.data[2] == 'x' || entity.data[2] == 'X') {
-      for (ptrdiff_t i = 3; i < entity.len - 1; i++) {
-        code_point = 16 * code_point + hex_digit_value(entity.data[i]);
-      }
-    } else {
-      for (ptrdiff_t i = 2; i < entity.len - 1; i++) {
-        code_point = 10 * code_point + (uint32_t)(entity.data[i] - '0');
-      }
-    }
-    write_code_point(buffer, code_point, escape);
-    return;
-  }
-  const ENTITY* named = entity_lookup(entity.data, (size_t)entity.len);
-  if (named == NULL) {
-    escape(buffer, entity);
-    return;
-  }
-  write_code_point(buffer, named->codepoints[0], escape);
-  if (named->codepoints[1] != 0) {
-    write_code_point(buffer, named->codepoints[1], escape);
-  }
-}
-
-static void write_code_point(struct Buf* buffer, uint32_t code_point, EscapeFn* escape) {
-  if (code_point == 0 || code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
-    escape(buffer, UTF8_REPLACEMENT);
-    return;
-  }
-  char utf8[4] = {0};
-  ptrdiff_t len = 0;
-  if (code_point <= 0x7F) {
-    utf8[0] = (char)code_point;
-    len = 1;
-  } else if (code_point <= 0x7FF) {
-    utf8[0] = (char)(0xC0 | (code_point >> 6));
-    utf8[1] = (char)(0x80 | (code_point & 0x3F));
-    len = 2;
-  } else if (code_point <= 0xFFFF) {
-    utf8[0] = (char)(0xE0 | (code_point >> 12));
-    utf8[1] = (char)(0x80 | ((code_point >> 6) & 0x3F));
-    utf8[2] = (char)(0x80 | (code_point & 0x3F));
-    len = 3;
-  } else {
-    utf8[0] = (char)(0xF0 | (code_point >> 18));
-    utf8[1] = (char)(0x80 | ((code_point >> 12) & 0x3F));
-    utf8[2] = (char)(0x80 | ((code_point >> 6) & 0x3F));
-    utf8[3] = (char)(0x80 | (code_point & 0x3F));
-    len = 4;
-  }
-  escape(buffer, (struct Str){utf8, len});
-}
-
-static uint32_t hex_digit_value(char c) {
-  if (ascii_is_digit((unsigned char)c)) {
-    return (uint32_t)(c - '0');
-  }
-  return (uint32_t)(ascii_to_lower((unsigned char)c) - 'a' + 10);
 }

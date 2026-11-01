@@ -89,6 +89,11 @@ static void test_renders_heading_levels(void) {
   TEST_CHECK(str_eq(render_markdown("# A\n\n## B\n"), S("<h2>A</h2>\n<h3>B</h3>\n")));
 }
 
+// Entities give the same HTML as in Org, which `test_org.c` checks with the same expected HTML.
+static void test_renders_entities(void) {
+  TEST_CHECK(str_eq(render_markdown("&alpha; and &beta;\n"), S("<p>&alpha; and &beta;</p>\n")));
+}
+
 // The enabled extension set renders GitHub-style tables. The golden test compares the rendered
 // table end to end with `tests/expected/site_file_permalink/table.html`. This checks the module
 // boundary: `markdown_to_html` enables the extension.
@@ -185,6 +190,7 @@ TEST_LIST = {
     {"renders math", test_renders_math},
     {"renders code block", test_renders_code_block},
     {"renders heading levels", test_renders_heading_levels},
+    {"renders entities", test_renders_entities},
     {"renders github tables", test_renders_github_tables},
     {"passes through raw html", test_passes_through_raw_html},
     {"collapses whitespace runs", test_collapses_whitespace_runs},

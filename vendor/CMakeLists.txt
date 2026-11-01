@@ -12,12 +12,9 @@ target_include_directories(
 
 # md4c, org4c, mustache4c and tomlc17 shape every page, so a change to the pinned version of one of
 # them bumps `PAGE_RECIPE_VERSION` in `src/domain/build_cache.h`, which makes every page again.
-add_library(sosig_vendor_md4c STATIC md4c/md4c.c md4c/entity.c)
-# `vendor/` is an include root too, so the Markdown renderer includes md4c's `entity.h` as
-# `<md4c/entity.h>`, which org4c's `entity.h` cannot shadow.
+add_library(sosig_vendor_md4c STATIC md4c/md4c.c)
 target_include_directories(
   sosig_vendor_md4c SYSTEM PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/md4c>"
-                                  "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>"
 )
 
 add_library(sosig_vendor_org4c STATIC org4c/org4c.c org4c/entity.c)
