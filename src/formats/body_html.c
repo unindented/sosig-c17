@@ -20,10 +20,10 @@ static const char HEX_DIGITS[] = "0123456789ABCDEF";
 static bool is_url_byte_kept(char c);
 
 /**
- * @brief Returns the HTML level of a heading, from 1 to 6.
+ * @brief Returns the HTML level of a heading: one below its level in the source, up to 6.
  *
  * @param level Heading level in the source, from 1.
- * @return The `N` of `<hN>`.
+ * @return The `N` of `<hN>`, from 2 to 6.
  */
 static ptrdiff_t heading_html_level(ptrdiff_t level);
 
@@ -165,5 +165,5 @@ static bool is_url_byte_kept(char c) {
 }
 
 static ptrdiff_t heading_html_level(ptrdiff_t level) {
-  return level < 6 ? level : 6;
+  return level < 5 ? level + 1 : 6;
 }

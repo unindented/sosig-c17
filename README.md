@@ -237,7 +237,6 @@ The renderer permits raw HTML and does not sanitize it. Only use content files t
 The tool parses Org with [org4c](https://github.com/unindented/org4c) and writes the HTML itself. It renders `a_{b}` as a subscript and keeps `snake_case` as text, as `#+OPTIONS: ^:{}` does. It also differs from Emacs's own HTML export in these ways:
 
 - A file's `#+OPTIONS:` line overrides these settings, such as with `^:t`, `f:nil`, or `tex:nil`, even when the line is inside a source block.
-- A top-level `*` headline renders as `<h1>`, like Markdown's `#`, where Emacs uses `<h2>`.
 - `#+BEGIN_EXPORT html` blocks and `@@html:...@@` snippets pass raw HTML through without sanitizing it, and `#+HTML:` lines are dropped. Only use content files that you trust.
 - Where Markdown has the same feature, the HTML is Markdown's, as the next section describes, rather than Emacs's.
 - A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work, and a `[[file:other.org]]` link points to `other.html` next to the page, which works only when the other note's permalink is that path.
@@ -254,7 +253,7 @@ Markdown and Org write the features they share as the same HTML, so one styleshe
 - A note, tip, important note, warning or caution is a `<div class="admonition-note">`, or `admonition-tip` and so on, that starts with a `<p class="admonition-title">`. In Markdown it is a `> [!NOTE]` block, and in Org a `#+BEGIN_NOTE` block, in any case.
 - Math is `<x-equation>`, or `<x-equation type="display">` for a displayed formula, holding the LaTeX for a script such as MathJax or KaTeX. Org's `$y$` and `\(y\)` are inline, and `$$y$$`, `\[y\]` and a LaTeX environment are displayed.
 - A code block is `<pre><code class="language-c">`. An Org block with a `#+NAME:`, a `#+CAPTION:`, line numbers or code references keeps Org's own markup for them.
-- Markdown headings and Org headlines start at the same level.
+- A heading starts at `<h2>`, below the page title's `<h1>` in a content template: Markdown's `#` and Org's `*` are `<h2>`, and each level below adds one, up to `<h6>`.
 
 ### Templates
 

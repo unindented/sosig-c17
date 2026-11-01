@@ -17,13 +17,14 @@ static void test_url_escape_keeps_url_bytes(void) {
   TEST_CHECK(str_eq(buf_str(&buf), S("https://example.com/a_b-c.d~e/f?g=h;i#j(k)*l!m,n+o$p@q%20")));
 }
 
-// A heading's tags follow its level in the source, and the line end follows the closing tag.
+// A heading's tags are one level below its level in the source, so the first level is `<h2>`, and
+// the line end follows the closing tag.
 static void test_heading_writes_level_tags(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_heading_open(&buf, 2);
+  body_html_heading_open(&buf, 1);
   buf_append(&buf, S("Title"));
-  body_html_heading_close(&buf, 2);
+  body_html_heading_close(&buf, 1);
   TEST_CHECK(str_eq(buf_str(&buf), S("<h2>Title</h2>\n")));
 }
 
@@ -99,13 +100,15 @@ static void test_code_block_names_language(void) {
       str_eq(buf_str(&buf), S("<pre><code class=\"language-c\">a &lt; b;\n</code></pre>\n")));
 }
 
-// A heading deeper than HTML's six levels stays at `<h6>`.
+// A heading at level 5 or deeper stays at `<h6>`, HTML's last level.
 static void test_heading_caps_level_at_six(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
+  body_html_heading_open(&buf, 5);
+  body_html_heading_close(&buf, 5);
   body_html_heading_open(&buf, 9);
   body_html_heading_close(&buf, 9);
-  TEST_CHECK(str_eq(buf_str(&buf), S("<h6></h6>\n")));
+  TEST_CHECK(str_eq(buf_str(&buf), S("<h6></h6>\n<h6></h6>\n")));
 }
 
 // An admonition with an id carries it, so a link can point to it.

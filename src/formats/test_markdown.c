@@ -27,7 +27,7 @@ static void test_renders_basic_html(void) {
   struct Str html = {0};
   html = markdown_to_html(markdown, &perm, scratch);
 
-  TEST_CHECK(str_eq(html, S("<h1>Title</h1>\n<p><em>em</em> and <code>code</code></p>\n")));
+  TEST_CHECK(str_eq(html, S("<h2>Title</h2>\n<p><em>em</em> and <code>code</code></p>\n")));
 }
 
 // Bold and italics give the same HTML as in Org, which `test_org.c` checks with the same expected
@@ -84,7 +84,7 @@ static void test_renders_code_block(void) {
 // Headings at the first two levels give the same HTML as in Org, which `test_org.c` checks with the
 // same expected HTML.
 static void test_renders_heading_levels(void) {
-  TEST_CHECK(str_eq(render_markdown("# A\n\n## B\n"), S("<h1>A</h1>\n<h2>B</h2>\n")));
+  TEST_CHECK(str_eq(render_markdown("# A\n\n## B\n"), S("<h2>A</h2>\n<h3>B</h3>\n")));
 }
 
 // The enabled extension set renders GitHub-style tables. The golden test compares the rendered

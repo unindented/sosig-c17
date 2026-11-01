@@ -26,7 +26,9 @@ void body_html_url_escape_append(struct Buf* buffer, struct Str text) __attribut
 /**
  * @brief Writes the opening tag of a heading.
  *
- * Markdown's `#` and Org's `*` are level 1.
+ * Markdown's `#` and Org's `*` are level 1, which is `<h2>`, so a body's sections sit below the
+ * `<h1>` a content template gives the page title, as in Emacs's export. Each level below adds one,
+ * up to `<h6>`.
  *
  * @param buffer Destination buffer. Must not be `NULL`.
  * @param level  Heading level in the source, from 1.
