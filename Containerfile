@@ -30,7 +30,7 @@ RUN mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # cwrap has no distribution package, so the image installs a pinned release and checks its digest.
-ARG CWRAP_VERSION=0.3.0
+ARG CWRAP_VERSION=0.3.1
 RUN case "$(uname -m)" in \
       x86_64) target=x86_64-linux-musl sha256=d75b646758e554718fa870098c15db78cd3eca101ba3d9c0fbb5dd47d2e1d4f4 ;; \
       aarch64) target=aarch64-linux-musl sha256=1ca0cc597c27eafafbb9650fff21c6bca96f8d0638bf9f1edc82f0b7d8060b42 ;; \

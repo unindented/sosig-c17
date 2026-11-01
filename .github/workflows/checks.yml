@@ -47,7 +47,7 @@ jobs:
 
       - name: Install cwrap
         env:
-          CWRAP_VERSION: 0.3.0
+          CWRAP_VERSION: 0.3.1
         run: |
           case "$RUNNER_OS-$RUNNER_ARCH" in
             Linux-X64)
