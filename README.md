@@ -299,8 +299,8 @@ Vendored dependencies are included under `vendor/`:
 - [`sharedstuff`](https://github.com/unindented/sharedstuff-c17): Arena allocation, counted strings, output buffers, and the diagnostic log.
 - [`copt`](https://github.com/fardaniqbal/copt): Command line option parsing.
 - [`tomlc17`](https://github.com/cktan/tomlc17): TOML configuration and frontmatter parsing.
-- [`md4c`](https://github.com/mity/md4c): Markdown-to-HTML conversion.
-- [`org4c`](https://github.com/unindented/org4c): Org-to-HTML conversion.
+- [`md4c`](https://github.com/mity/md4c): Markdown parsing.
+- [`org4c`](https://github.com/unindented/org4c): Org parsing.
 - [`mustache4c`](https://github.com/mity/mustache4c): Mustache template rendering.
 - [`acutest`](https://github.com/mity/acutest): Tests.
 

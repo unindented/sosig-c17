@@ -198,7 +198,7 @@ These terms have one meaning in this section:
 - No call site checks for allocation failure.
 - The report names the file the thread was working on, which a user needs to find the input that failed.
 
-**Vendored code.** md4c, org4c, mustache4c, and tomlc17 keep `malloc`. Each wrapper changes their allocation failure into a call to `os_oom`.
+**Vendored code.** md4c, org4c, mustache4c, and tomlc17 keep `malloc`. md4c and org4c only parse, and their callbacks write into arenas. Each wrapper changes their allocation failure into a call to `os_oom`.
 
 ### Address sanitizer coverage in arenas
 

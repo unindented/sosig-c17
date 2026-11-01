@@ -46,6 +46,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Vendored at commit `f9e5eb232b95b737373ae706648cb75bd259ed1a`.
 
+Only the parser is vendored: `md4c.c`, `md4c.h`, `entity.c` and `entity.h`. This project writes the HTML itself, in `src/formats/markdown.c`, so a bump diffs upstream's `md4c-html.c` between the two commits and ports what applies.
+
 Copyright (c) 2016-2026 Martin Mitáš
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -57,6 +59,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ### org4c (https://github.com/unindented/org4c)
 
 Vendored at release `0.1.5`, commit `1992acc87935839083e243e28c99d52dac3e5ad8`.
+
+Only the parser is vendored: `org4c.c`, `org4c.h`, `entity.c` and `entity.h`. This project writes the HTML itself, in `src/formats/org.c`, so a bump diffs upstream's `org4c-html.c` between the two releases and ports what applies.
 
 Copyright (c) 2026 Daniel Perez Alvarez
 
