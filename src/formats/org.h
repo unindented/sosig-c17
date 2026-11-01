@@ -3,9 +3,8 @@
 
 #include <stddef.h>
 
+#include "shared/arena.h"
 #include "shared/str.h"
-
-struct Arena;
 
 /**
  * Upper bound on Org input passed to `org_to_html`, in bytes.
@@ -19,20 +18,22 @@ struct Arena;
 enum { ORG_INPUT_LEN_MAX = 256 * 1024 * 1024 };
 
 /**
- * @brief Converts Org to HTML using the configured org4c flags.
+ * @brief Converts Org to HTML using the configured org4c flags and the file's `#+OPTIONS:` lines.
  *
- * The HTML is built in `perm`, growing in place while nothing else allocates there. org4c's own
- * working memory comes from `malloc`, and a failed allocation there ends in `os_oom`, like one from
- * `perm`.
+ * org4c parses the Org, and this module's callbacks write the HTML, which is built in `perm`,
+ * growing in place while nothing else allocates there. org4c's own working memory comes from
+ * `malloc`, and a failed allocation there ends in `os_oom`, like one from `perm`.
  *
  * This is reentrant, so content jobs may render in parallel across the worker pool. org4c holds no
- * writable global state, and all per-render state lives in this function's frame and `org_html`'s.
- * A vendor bump that introduced a global would invalidate that without any call site changing.
+ * writable global state, and all per-render state lives in this function's frame. A vendor bump
+ * that introduced a global would invalidate that without any call site changing.
  *
- * @param org  Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
- * @param perm Arena that owns the HTML. Must not be `NULL`.
+ * @param org     Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
+ * @param perm    Arena that owns the HTML. Must not be `NULL`.
+ * @param scratch Arena for a figure's caption, held until the figure ends.
  * @return The HTML, owned by `perm`.
  */
-struct Str org_to_html(struct Str org, struct Arena* perm) __attribute__((nonnull(2)));
+struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
+    __attribute__((nonnull(2)));
 
 #endif

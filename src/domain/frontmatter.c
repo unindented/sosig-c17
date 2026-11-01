@@ -976,8 +976,8 @@ static struct OrgKeyword find_org_keyword(struct Str org, struct Str key) {
     if (trimmed.len == 0 || str_eq(line, S("#")) || str_startswith(line, S("# "))) {
       continue;
     }
-    // A drawer is skipped wherever it sits in the run. org4c renders one that is not the file's
-    // first element as text, but Emacs reads keywords anywhere, so the keywords after it count.
+    // A drawer is skipped wherever it sits in the run. One that is not the file's first element
+    // renders as text, but Emacs reads keywords anywhere, so the keywords after it count.
     if (is_equal_folded(trimmed, S(":properties:"))) {
       const struct StrCut drawer = cut_org_drawer(rest);
       if (!drawer.is_found) {

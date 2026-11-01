@@ -10,11 +10,12 @@
 // Common Org constructs render to their expected HTML elements, and a top-level headline is an
 // `<h1>`, as Markdown's `#` is. The golden test compares a whole Org note end to end with
 // `tests/expected/site_file_permalink/org-document.html`, including its top property drawer and
-// `* Footnotes` headline, which render nothing. This checks the module boundary: `org_to_html`
-// leaves `ORG_HTML_FLAG_TOPLEVEL_H2` off.
+// `* Footnotes` headline, which render nothing. This checks the module boundary: a level-one
+// headline is not shifted to `<h2>`.
 static void test_renders_basic_html(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(S("* Title\n/em/ and =code=\n"), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html = org_to_html(S("* Title\n/em/ and =code=\n"), &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<h1>Title</h1>\n<p><i>em</i> and <code>code</code></p>\n")));
 }
@@ -23,16 +24,17 @@ static void test_renders_basic_html(void) {
 // stays text, which is `ORG_FLAG_SUBSUPERSCRIPTS_BRACED`, Org's `^:{}`.
 static void test_renders_braced_subscripts_only(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(S("a_{b} and a_b\n"), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html = org_to_html(S("a_{b} and a_b\n"), &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a<sub>b</sub> and a_b</p>\n")));
 }
 
-// A file's `#+OPTIONS:` line overrides the defaults, which is `ORG_HTML_FLAG_IN_BUFFER_OPTIONS`:
-// `^:nil` turns the braced subscripts off.
+// A file's `#+OPTIONS:` line overrides the defaults: `^:nil` turns the braced subscripts off.
 static void test_honors_in_buffer_options(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(S("#+OPTIONS: ^:nil\na_{b}\n"), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html = org_to_html(S("#+OPTIONS: ^:nil\na_{b}\n"), &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a_{b}</p>\n")));
 }
@@ -42,17 +44,20 @@ static void test_honors_in_buffer_options(void) {
 // unescaped as `{{{body}}}`. This pins the same trust decision as Markdown's raw HTML.
 static void test_passes_through_export_blocks(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(
-      S("#+BEGIN_EXPORT html\n<div class=\"note\">raw <b>x</b></div>\n#+END_EXPORT\n"), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html =
+      org_to_html(S("#+BEGIN_EXPORT html\n<div class=\"note\">raw <b>x</b></div>\n#+END_EXPORT\n"),
+                  &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<div class=\"note\">raw <b>x</b></div>\n")));
 }
 
-// A body beginning with a UTF-8 BOM renders without it, which is `ORG_HTML_FLAG_SKIP_UTF8_BOM`. An
-// Org source is converted whole, so a BOM at the start of the file reaches the converter.
+// A body beginning with a UTF-8 BOM renders without it. An Org source is converted whole, so a BOM
+// at the start of the file reaches the converter.
 static void test_skips_leading_byte_order_mark(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(S("\xef\xbb\xbfhello\n"), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html = org_to_html(S("\xef\xbb\xbfhello\n"), &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>hello</p>\n")));
 }
@@ -60,14 +65,15 @@ static void test_skips_leading_byte_order_mark(void) {
 // Empty input succeeds with empty HTML.
 static void test_empty_input_yields_empty_string(void) {
   struct Arena perm = test_arena();
-  const struct Str html = org_to_html(S(""), &perm);
+  struct Arena scratch = test_arena();
+  const struct Str html = org_to_html(S(""), &perm, scratch);
 
   TEST_CHECK(html.len == 0);
 }
 
 // The HTML grows in place at the start of `perm`'s free space, so a body that outgrows many
-// capacities is never copied: it starts where the free space did. org4c hands the output over in
-// small chunks, so two thousand paragraphs force many growths.
+// capacities is never copied: it starts where the free space did. The renderer writes the output in
+// small pieces, so two thousand paragraphs force many growths.
 static void test_html_grows_in_place_in_perm(void) {
   enum { PARAGRAPH_COUNT = 2000, PARAGRAPH_LEN = 4 };
   struct Arena scratch = test_arena();
@@ -81,7 +87,8 @@ static void test_html_grows_in_place_in_perm(void) {
   // arena keeps between allocations.
   struct Arena probe = perm;
   char* const start = arena_new(&probe, 0, char);
-  const struct Str html = org_to_html((struct Str){org, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm);
+  const struct Str html =
+      org_to_html((struct Str){org, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm, scratch);
   TEST_CHECK(html.data == start);
   TEST_CHECK(html.len == PARAGRAPH_COUNT * S("<p>ab</p>\n").len);
 }
