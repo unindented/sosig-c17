@@ -55,12 +55,13 @@ void body_html_heading_close(struct Buf* buffer, ptrdiff_t level) {
 }
 
 void body_html_footnote_reference_write(struct Buf* buffer, ptrdiff_t id, ptrdiff_t reference_id) {
-  buf_printf(buffer, "<sup><a href=\"#fn-%td\" id=\"fnref-%td-%td\">%td</a></sup>", id, id,
-             reference_id, id);
+  buf_printf(buffer,
+             "<sup><a href=\"#fn-%td\" id=\"fnref-%td-%td\" role=\"doc-noteref\">%td</a></sup>", id,
+             id, reference_id, id);
 }
 
 void body_html_footnotes_open(struct Buf* buffer) {
-  buf_append(buffer, S("<section class=\"footnotes\">\n<ol>\n"));
+  buf_append(buffer, S("<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n"));
 }
 
 void body_html_footnotes_close(struct Buf* buffer) {
@@ -78,8 +79,10 @@ void body_html_footnote_back_references_write(struct Buf* buffer,
     if (reference_id > 1) {
       buf_append(buffer, S(" "));
     }
-    buf_printf(buffer, "<a href=\"#fnref-%td-%td\" class=\"footnote-backref\">&#8617;</a>", id,
-               reference_id);
+    buf_printf(
+        buffer,
+        "<a href=\"#fnref-%td-%td\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a>",
+        id, reference_id);
   }
 }
 

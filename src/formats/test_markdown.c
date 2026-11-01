@@ -39,13 +39,15 @@ static void test_renders_bold_and_italics(void) {
 // A one-paragraph footnote with two references gives the same HTML as in Org, which `test_org.c`
 // checks with the same expected HTML.
 static void test_renders_footnote(void) {
-  TEST_CHECK(str_eq(render_markdown("A[^1] B[^1].\n\n[^1]: Note.\n"),
-                    S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\">1</a></sup> B<sup><a "
-                      "href=\"#fn-1\" id=\"fnref-1-2\">1</a></sup>.</p>\n"
-                      "<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
-                      "<a href=\"#fnref-1-1\" class=\"footnote-backref\">&#8617;</a> "
-                      "<a href=\"#fnref-1-2\" "
-                      "class=\"footnote-backref\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
+  TEST_CHECK(str_eq(
+      render_markdown("A[^1] B[^1].\n\n[^1]: Note.\n"),
+      S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup> B<sup><a "
+        "href=\"#fn-1\" id=\"fnref-1-2\" role=\"doc-noteref\">1</a></sup>.</p>\n"
+        "<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
+        "<a href=\"#fnref-1-1\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a> "
+        "<a href=\"#fnref-1-2\" "
+        "class=\"footnote-backref\" "
+        "role=\"doc-backlink\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
 }
 
 // A done and an open task give the same HTML as in Org, which `test_org.c` checks with the same

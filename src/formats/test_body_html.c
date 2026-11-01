@@ -33,7 +33,8 @@ static void test_footnote_reference_links_both_ways(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
   body_html_footnote_reference_write(&buf, 3, 2);
-  TEST_CHECK(str_eq(buf_str(&buf), S("<sup><a href=\"#fn-3\" id=\"fnref-3-2\">3</a></sup>")));
+  TEST_CHECK(str_eq(buf_str(&buf),
+                    S("<sup><a href=\"#fn-3\" id=\"fnref-3-2\" role=\"doc-noteref\">3</a></sup>")));
 }
 
 // The footnote list is an ordered list in a `footnotes` section, and each footnote ends with one
@@ -47,11 +48,13 @@ static void test_footnotes_write_list_with_backrefs(void) {
   body_html_footnote_back_references_write(&buf, 1, 2);
   body_html_footnote_close(&buf);
   body_html_footnotes_close(&buf);
-  TEST_CHECK(str_eq(buf_str(&buf),
-                    S("<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
-                      "<a href=\"#fnref-1-1\" class=\"footnote-backref\">&#8617;</a> "
-                      "<a href=\"#fnref-1-2\" class=\"footnote-backref\">&#8617;</a>\n</li>\n"
-                      "</ol>\n</section>\n")));
+  TEST_CHECK(str_eq(
+      buf_str(&buf),
+      S("<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
+        "<a href=\"#fnref-1-1\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a> "
+        "<a href=\"#fnref-1-2\" class=\"footnote-backref\" "
+        "role=\"doc-backlink\">&#8617;</a>\n</li>\n"
+        "</ol>\n</section>\n")));
 }
 
 // A checkbox is a disabled input, checked only for a done task.

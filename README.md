@@ -248,7 +248,7 @@ As in Emacs, a property drawer at the top of the file renders nothing, and a `Fo
 Markdown and Org write the features they share as the same HTML, so one stylesheet and one math script cover both:
 
 - Bold and italics are `<strong>` and `<em>`.
-- A footnote reference is `<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>`. The footnotes follow the body as a `<section class="footnotes">` list, each with links back to its references. A one-paragraph footnote has no `<p>`, and an Org footnote of several paragraphs keeps each one.
+- A footnote reference is `<sup><a href="#fn-1" id="fnref-1-1" role="doc-noteref">1</a></sup>`. The footnotes follow the body as a `<section class="footnotes" role="doc-endnotes">` list, each with `role="doc-backlink"` links back to its references. A one-paragraph footnote has no `<p>`, and an Org footnote of several paragraphs keeps each one.
 - A task list item starts with a disabled `<input type="checkbox" class="task-list-item-checkbox">`. Org's partly done `[-]` is unchecked.
 - A note, tip, important note, warning or caution is a `<div class="admonition-note">`, or `admonition-tip` and so on, that starts with a `<p class="admonition-title">`. In Markdown it is a `> [!NOTE]` block, and in Org a `#+BEGIN_NOTE` block, in any case.
 - Math is `<x-equation>`, or `<x-equation type="display">` for a displayed formula, holding the LaTeX for a script such as MathJax or KaTeX. Org's `$y$` and `\(y\)` are inline, and `$$y$$`, `\[y\]` and a LaTeX environment are displayed.

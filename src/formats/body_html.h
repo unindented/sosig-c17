@@ -46,6 +46,9 @@ void body_html_heading_close(struct Buf* buffer, ptrdiff_t level) __attribute__(
 /**
  * @brief Writes a reference to a footnote, which links to it.
  *
+ * The link has the DPUB-ARIA role `doc-noteref`, so a screen reader announces it as a note
+ * reference.
+ *
  * @param buffer       Destination buffer. Must not be `NULL`.
  * @param id           Footnote number, from 1, in the order of the first references.
  * @param reference_id Number of this reference among the footnote's references, from 1. The
@@ -56,6 +59,9 @@ void body_html_footnote_reference_write(struct Buf* buffer, ptrdiff_t id, ptrdif
 
 /**
  * @brief Writes the start of the footnote list at the end of a body.
+ *
+ * The section has the DPUB-ARIA role `doc-endnotes`, notes collected at the end of a work. The
+ * notes themselves take no role, because ARIA allows `doc-footnote` on no list item.
  *
  * @param buffer Destination buffer. Must not be `NULL`.
  */
@@ -78,6 +84,8 @@ void body_html_footnote_open(struct Buf* buffer, ptrdiff_t id) __attribute__((no
 
 /**
  * @brief Writes a footnote's links back to its references, one for each, after its text.
+ *
+ * Each link has the DPUB-ARIA role `doc-backlink`.
  *
  * @param buffer          Destination buffer. Must not be `NULL`.
  * @param id              Footnote number, from 1.

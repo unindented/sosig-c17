@@ -39,13 +39,15 @@ static void test_renders_bold_and_italics(void) {
 // A one-paragraph footnote with two references gives the same HTML as in Markdown, which
 // `test_markdown.c` checks with the same expected HTML.
 static void test_renders_footnote(void) {
-  TEST_CHECK(str_eq(render_org("A[fn:1] B[fn:1].\n\n[fn:1] Note.\n"),
-                    S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\">1</a></sup> B<sup><a "
-                      "href=\"#fn-1\" id=\"fnref-1-2\">1</a></sup>.</p>\n"
-                      "<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
-                      "<a href=\"#fnref-1-1\" class=\"footnote-backref\">&#8617;</a> "
-                      "<a href=\"#fnref-1-2\" "
-                      "class=\"footnote-backref\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
+  TEST_CHECK(str_eq(
+      render_org("A[fn:1] B[fn:1].\n\n[fn:1] Note.\n"),
+      S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup> B<sup><a "
+        "href=\"#fn-1\" id=\"fnref-1-2\" role=\"doc-noteref\">1</a></sup>.</p>\n"
+        "<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\">\nNote."
+        "<a href=\"#fnref-1-1\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a> "
+        "<a href=\"#fnref-1-2\" "
+        "class=\"footnote-backref\" "
+        "role=\"doc-backlink\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
 }
 
 // A done and an open task give the same HTML as in Markdown, which `test_markdown.c` checks with
@@ -123,12 +125,14 @@ static void test_passes_through_export_blocks(void) {
 // A footnote of several paragraphs keeps each one, and its back-references go inside the last, so
 // they still follow its text.
 static void test_renders_footnote_of_several_paragraphs(void) {
-  TEST_CHECK(str_eq(render_org("A[fn:1].\n\n[fn:1] One.\n\nTwo.\n"),
-                    S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\">1</a></sup>.</p>\n"
-                      "<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\">\n"
-                      "<p>One.</p>\n"
-                      "<p>Two.<a href=\"#fnref-1-1\" class=\"footnote-backref\">&#8617;</a></p>\n"
-                      "</li>\n</ol>\n</section>\n")));
+  TEST_CHECK(
+      str_eq(render_org("A[fn:1].\n\n[fn:1] One.\n\nTwo.\n"),
+             S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup>.</p>\n"
+               "<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\">\n"
+               "<p>One.</p>\n"
+               "<p>Two.<a href=\"#fnref-1-1\" class=\"footnote-backref\" "
+               "role=\"doc-backlink\">&#8617;</a></p>\n"
+               "</li>\n</ol>\n</section>\n")));
 }
 
 // A special block whose name is not an admonition type keeps its name as its class, as in Emacs.
