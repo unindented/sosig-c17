@@ -96,6 +96,7 @@ set(sosig_owned_sources
     "${PROJECT_SOURCE_DIR}/src/formats/test_toml.c"
     "${PROJECT_SOURCE_DIR}/src/formats/toml.c"
     "${PROJECT_SOURCE_DIR}/src/formats/toml.h"
+    "${PROJECT_SOURCE_DIR}/src/formats/tree_sitter_wctype.h"
     "${PROJECT_SOURCE_DIR}/src/runtime/fs.c"
     "${PROJECT_SOURCE_DIR}/src/runtime/fs.h"
     "${PROJECT_SOURCE_DIR}/src/runtime/memory.c"

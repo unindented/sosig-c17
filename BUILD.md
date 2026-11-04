@@ -11,7 +11,7 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 | `src/CMakeLists.txt` | Build the private application library and the `sosig` executable |
 | `src/*/CMakeLists.txt` | Add sources, header file sets, and local unit tests; `src/runtime/CMakeLists.txt` also defines the POSIX host library `sosig_os_posix` |
 | `tests/CMakeLists.txt` | Add the golden test suite, the shared unit-test support library, and the in-memory host |
-| `vendor/CMakeLists.txt` | Build each vendored dependency |
+| `vendor/CMakeLists.txt` | Build each vendored dependency, and embed each tree-sitter grammar's highlight queries in its library |
 | `cmake/sosig_build_profiles.cmake` | Set warnings, optimization, fortification, and sanitizers |
 | `cmake/sosig_quality.cmake` | Configure formatting and static analysis |
 | `cmake/sosig_testing.cmake` | Register a unit test and choose the host it links |

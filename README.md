@@ -302,6 +302,7 @@ Vendored dependencies are included under `vendor/`:
 - [`md4c`](https://github.com/mity/md4c): Markdown parsing.
 - [`org4c`](https://github.com/unindented/org4c): Org parsing.
 - [`mustache4c`](https://github.com/mity/mustache4c): Mustache template rendering.
+- [`tree-sitter`](https://github.com/tree-sitter/tree-sitter), with the grammars [`tree-sitter-c`](https://github.com/tree-sitter/tree-sitter-c), [`tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash), [`tree-sitter-javascript`](https://github.com/tree-sitter/tree-sitter-javascript) and [`tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript): Parsing code for syntax highlighting.
 - [`acutest`](https://github.com/mity/acutest): Tests.
 
 ### Building

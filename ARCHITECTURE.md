@@ -13,7 +13,7 @@
 - [tests/](tests/): Golden test suite, the shared unit-test support library ([tests/test_support.h](tests/test_support.h)), and the in-memory host ([tests/os_memory.h](tests/os_memory.h)). Each fixture site under [tests/fixtures/](tests/fixtures/) has a matching expected output directory under [tests/expected/](tests/expected/). [tests/fixtures/site_file_permalink/](tests/fixtures/site_file_permalink/) covers Markdown, Org, and templates with the default permalink. [tests/fixtures/site_index_permalink/](tests/fixtures/site_index_permalink/) covers a permalink that publishes a directory index for each entry. [tests/fixtures/site_nested_sections/](tests/fixtures/site_nested_sections/) covers nested and lopsided sections, source names with spaces, punctuation and non-ASCII characters, partials that include partials, and aggregate and feed outputs in subdirectories beside content outputs.
 - [CMakeLists.txt](CMakeLists.txt) and [CMakePresets.json](CMakePresets.json): Project entry point and supported build configurations.
 - [cmake/](cmake/): Build profiles, quality tools, packaging, the golden test driver, and reusable cross toolchains. [BUILD.md](BUILD.md) documents their boundaries and policy.
-- [vendor/](vendor/): Bundled dependencies (`sharedstuff`, `copt`, `tomlc17`, `md4c`, `org4c`, `mustache4c`, `acutest`).
+- [vendor/](vendor/): Bundled dependencies (`sharedstuff`, `copt`, `tomlc17`, `md4c`, `org4c`, `mustache4c`, `tree-sitter` and its grammars `tree-sitter-c`, `tree-sitter-bash`, `tree-sitter-javascript` and `tree-sitter-typescript`, `acutest`).
 
 First-party dependencies point inward:
 
