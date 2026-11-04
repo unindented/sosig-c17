@@ -142,6 +142,7 @@ struct InputRoots {
  * @param config_path  Path the configuration was loaded from.
  * @param source_paths Every discovered content source path, drafts included. Must not be `NULL`.
  * @param static_paths Every enumerated file below `static_dir`. Must not be `NULL`.
+ * @param asset_paths  Every enumerated asset below `content_dir`. Must not be `NULL`.
  * @param os           Host the inputs are on. Must not be `NULL`.
  * @param perm         Arena that owns the identity set. Must not be `NULL`.
  * @param scratch      Arena for the template paths, which must not overlap `perm`.
@@ -154,10 +155,11 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               struct Str config_path,
                               const struct PathList* source_paths,
                               const struct PathList* static_paths,
+                              const struct PathList* asset_paths,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
-                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 7, 9)));
+                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 7, 8, 10)));
 
 /**
  * @brief Lists every file below `templates_dir`, partials included.
@@ -355,8 +357,8 @@ static int register_template_output(struct Manifest* manifest,
  * @brief Registers the output path of every enumerated static file.
  *
  * @param manifest     Manifest that receives the output paths. Must not be `NULL`.
- * @param static_paths Static file source paths, each below `static_dir`. Must not be `NULL`.
- * @param static_dir   Configured static directory the paths are below.
+ * @param static_paths Static file source paths, each below `root_dir`. Must not be `NULL`.
+ * @param root_dir     Directory the paths are below: `static_dir`, or `content_dir` for assets.
  * @param inputs       Identities of this build's input files, which no output may name. Must not be
  *                     `NULL`.
  * @param roots        Input directory trees no output may land in. Must not be `NULL`.
@@ -367,7 +369,7 @@ static int register_template_output(struct Manifest* manifest,
  */
 static int register_static_list(struct Manifest* manifest,
                                 const struct PathList* static_paths,
-                                struct Str static_dir,
+                                struct Str root_dir,
                                 const struct InputIdentities* inputs,
                                 const struct InputRoots* roots,
                                 struct Arena* perm,
@@ -378,7 +380,7 @@ static int register_static_list(struct Manifest* manifest,
  * @brief Registers one enumerated static file's output path in the build manifest.
  *
  * @param manifest        Manifest that receives the output path. Must not be `NULL`.
- * @param static_relative Static file path relative to `static_dir`. Its destination is rooted under
+ * @param static_relative Static file path relative to its root. Its destination is rooted under
  *                        `roots->output_dir`.
  * @param static_path     Static file source path, the diagnostic label for the output.
  * @param inputs          Identities of this build's input files, which the output must not name.
@@ -524,6 +526,7 @@ int manifest_builder_populate(struct Manifest* manifest,
                               struct Str config_path,
                               const struct PathList* source_paths,
                               const struct PathList* static_paths,
+                              const struct PathList* asset_paths,
                               const struct ContentEntry* const* content_entries,
                               ptrdiff_t content_entry_count,
                               struct Os* os,
@@ -536,8 +539,8 @@ int manifest_builder_populate(struct Manifest* manifest,
   // An input failure makes every output path suspect, so it stops the check rather than reporting
   // the same cause once per output.
   claim_input_roots(&roots, site_config, os);
-  if (claim_build_inputs(&inputs, site_config, config_path, source_paths, static_paths, os,
-                         &scratch, *perm, log) != 0) {
+  if (claim_build_inputs(&inputs, site_config, config_path, source_paths, static_paths, asset_paths,
+                         os, &scratch, *perm, log) != 0) {
     return -1;
   }
 
@@ -562,6 +565,10 @@ int manifest_builder_populate(struct Manifest* manifest,
                            scratch, log) != 0) {
     rc = -1;
   }
+  if (register_static_list(manifest, asset_paths, site_config->content_dir, &inputs, &roots, perm,
+                           scratch, log) != 0) {
+    rc = -1;
+  }
   // The build cache is recorded last, so a dry run lists it last.
   const struct Str cache_path = build_cache_path(site_config->output_dir, &scratch);
   if (register_output_path(manifest, cache_path, S("build cache"), &inputs, &roots, perm, log) !=
@@ -580,6 +587,7 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                               struct Str config_path,
                               const struct PathList* source_paths,
                               const struct PathList* static_paths,
+                              const struct PathList* asset_paths,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
@@ -589,17 +597,21 @@ static int claim_build_inputs(struct InputIdentities* inputs,
                                         site_config->output_dir, os, &scratch, *perm, log) != 0) {
     return -1;
   }
-  // One slot for the configuration file, then one per source, per static file and per template
-  // file. The counts index arrays already in memory, so their sum cannot overflow.
-  inputs->items =
-      arena_new(perm, 1 + source_paths->count + static_paths->count + template_paths.count,
-                struct OsIdentity);
+  // One slot for the configuration file, then one per source, per static file, per asset and per
+  // template file. The counts index arrays already in memory, so their sum cannot overflow.
+  inputs->items = arena_new(
+      perm,
+      1 + source_paths->count + static_paths->count + asset_paths->count + template_paths.count,
+      struct OsIdentity);
   claim_build_inputs_identity(inputs, config_path, os);
   for (ptrdiff_t i = 0; i < source_paths->count; i++) {
     claim_build_inputs_identity(inputs, source_paths->items[i], os);
   }
   for (ptrdiff_t i = 0; i < static_paths->count; i++) {
     claim_build_inputs_identity(inputs, static_paths->items[i], os);
+  }
+  for (ptrdiff_t i = 0; i < asset_paths->count; i++) {
+    claim_build_inputs_identity(inputs, asset_paths->items[i], os);
   }
   for (ptrdiff_t i = 0; i < template_paths.count; i++) {
     claim_build_inputs_identity(inputs, template_paths.items[i], os);
@@ -804,7 +816,7 @@ static int register_template_output(struct Manifest* manifest,
 
 static int register_static_list(struct Manifest* manifest,
                                 const struct PathList* static_paths,
-                                struct Str static_dir,
+                                struct Str root_dir,
                                 const struct InputIdentities* inputs,
                                 const struct InputRoots* roots,
                                 struct Arena* perm,
@@ -812,9 +824,9 @@ static int register_static_list(struct Manifest* manifest,
                                 struct Log* log) {
   int rc = 0;
   for (ptrdiff_t i = 0; i < static_paths->count; i++) {
-    // The walk lists only files below `static_dir`, so this always finds the relative part.
+    // The walk lists only files below `root_dir`, so this always finds the relative part.
     struct Str relative = {0};
-    (void)path_is_below(static_paths->items[i], static_dir, &relative);
+    (void)path_is_below(static_paths->items[i], root_dir, &relative);
     if (register_static_output(manifest, relative, static_paths->items[i], inputs, roots, perm,
                                scratch, log) != 0) {
       rc = -1;

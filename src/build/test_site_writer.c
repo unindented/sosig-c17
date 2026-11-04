@@ -92,14 +92,36 @@ static void test_writes_complete_output_layer(void) {
                                          SITE_UPDATED, false, os, output, test_arena(), &log) == 0);
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, feeds, 1, entries, 1, SITE_UPDATED,
                                          false, os, output, test_arena(), &log) == 0);
-  TEST_CHECK(
-      site_writer_copy_static_files(&writer, &site_config, &static_paths, test_arena(), &log) == 0);
+  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths,
+                                           site_config.static_dir, test_arena(), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(os_memory_is_file(os, "public/index.html", "<h1>Site &amp; Co</h1>Newer;Older;"));
   TEST_CHECK(os_memory_is_file(os, "public/nested/links.html", "/newer.html;/older.html;"));
   TEST_CHECK(os_memory_is_file(os, "public/feeds/atom.xml",
                                "<updated>2026-07-01T00:00:00Z</updated>Newer;"));
   TEST_CHECK(os_memory_is_file(os, "public/icons/a.txt", "static"));
+}
+
+// A file below another root keeps its path relative to that root, not to `static_dir`.
+static void test_copy_static_files_keeps_path_below_root(void) {
+  struct Os* os = os_memory();
+  os_memory_write(os, "other/nested/a.svg", "<svg/>");
+  struct SiteConfig site_config;
+  init_config(&site_config);
+  site_config.static_dir = S("static");
+  struct Arena paths = test_arena();
+  struct PathList static_paths = {0};
+  path_list_push(&static_paths, S("other/nested/a.svg"), &paths);
+  static const char* const output_paths[] = {"public/nested/a.svg"};
+  struct Manifest manifest = {0};
+  struct OutputWriter writer;
+  init_writer(&writer, &manifest, output_paths, 1, os, &paths);
+  struct Log log = test_log();
+
+  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths, S("other"),
+                                           test_arena(), &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/nested/a.svg", "<svg/>"));
 }
 
 // A failed write names the operation and the cause, then the destination. The destination is an
@@ -144,22 +166,23 @@ static void test_copy_static_files_reports_copy_failure(void) {
   init_writer(&writer, &manifest, output_paths, 2, os, &paths);
   struct Log log = test_log();
 
-  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths, test_arena(),
-                                           &log) == -1);
+  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths,
+                                           site_config.static_dir, test_arena(), &log) == -1);
   TEST_CHECK(
       test_log_is(&log, "failed to copy static file: %s ('public/a.css')\n", strerror(EISDIR)));
 
   static_paths = (struct PathList){0};
   path_list_push(&static_paths, S("static/gone.css"), &paths);
   log = test_log();
-  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths, test_arena(),
-                                           &log) == -1);
+  TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths,
+                                           site_config.static_dir, test_arena(), &log) == -1);
   TEST_CHECK(
       test_log_is(&log, "failed to copy static file: %s ('static/gone.css')\n", strerror(ENOENT)));
 }
 
 TEST_LIST = {
     {"writes complete output layer", test_writes_complete_output_layer},
+    {"copy static files keeps path below root", test_copy_static_files_keeps_path_below_root},
     {"write templates reports write failure", test_write_templates_reports_write_failure},
     {"copy static files reports copy failure", test_copy_static_files_reports_copy_failure},
     {NULL, NULL},

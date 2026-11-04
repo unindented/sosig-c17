@@ -108,6 +108,7 @@ static int write_rendered_template(const struct OutputWriter* writer,
 int site_writer_copy_static_files(const struct OutputWriter* writer,
                                   const struct SiteConfig* site_config,
                                   const struct PathList* static_paths,
+                                  struct Str root_dir,
                                   struct Arena scratch,
                                   struct Log* log) {
   for (ptrdiff_t i = 0; i < static_paths->count; i++) {
@@ -115,7 +116,7 @@ int site_writer_copy_static_files(const struct OutputWriter* writer,
     // Each copy works in its own copy of `scratch`, so one file's path is dead before the next.
     struct Arena copy_scratch = scratch;
     struct Str relative = {0};
-    (void)path_is_below(static_paths->items[i], site_config->static_dir, &relative);
+    (void)path_is_below(static_paths->items[i], root_dir, &relative);
     const struct Str output_path = path_join(site_config->output_dir, relative, &copy_scratch);
     // The copy names the path that failed, the static file or its destination, which mirrors it.
     const struct OsSource source = {.kind = OS_SOURCE_FILE, .file_path = static_paths->items[i]};

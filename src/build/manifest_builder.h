@@ -98,6 +98,9 @@ int manifest_builder_check_output_dir(const struct SiteConfig* site_config,
  * @param static_paths        Every enumerated file below `static_dir`, each claimed as an input and
  *                            registered at its path relative to `static_dir`, below `output_dir`.
  *                            Must not be `NULL`.
+ * @param asset_paths         Every file below `content_dir` that is not a content source, each
+ *                            claimed and registered as a static file whose root is `content_dir`.
+ *                            Must not be `NULL`.
  * @param content_entries     Rendered non-draft content entries whose output paths, each joined
  *                            onto `output_dir`, are recorded. May be `NULL` only when
  *                            `content_entry_count` is 0.
@@ -117,11 +120,12 @@ int manifest_builder_populate(struct Manifest* manifest,
                               struct Str config_path,
                               const struct PathList* source_paths,
                               const struct PathList* static_paths,
+                              const struct PathList* asset_paths,
                               const struct ContentEntry* const* content_entries,
                               ptrdiff_t content_entry_count,
                               struct Os* os,
                               struct Arena* perm,
                               struct Arena scratch,
-                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 8, 9, 11)));
+                              struct Log* log) __attribute__((nonnull(1, 2, 4, 5, 6, 9, 10, 12)));
 
 #endif

@@ -7,3 +7,5 @@ draft = false
 +++
 
 This nested entry omits the slug frontmatter key; its section comes from the directory it lives in.
+
+![Diagram](diagram.svg)

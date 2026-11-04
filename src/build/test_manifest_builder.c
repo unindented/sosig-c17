@@ -60,6 +60,7 @@ static struct Os* init_manifest_fixture(struct SiteConfig* site_config) {
  * @param site_config         Configuration to populate from. Must not be `NULL`.
  * @param source_paths        Claimed content sources, or `NULL` for none.
  * @param static_paths        Enumerated static files, or `NULL` for none.
+ * @param asset_paths         Enumerated assets below `content_dir`, or `NULL` for none.
  * @param content_entries     Array of `content_entry_count` entries. May be `NULL` only when
  *                            `content_entry_count` is 0.
  * @param content_entry_count Number of entries.
@@ -71,16 +72,17 @@ static int populate(struct Manifest* manifest,
                     const struct SiteConfig* site_config,
                     const struct PathList* source_paths,
                     const struct PathList* static_paths,
+                    const struct PathList* asset_paths,
                     const struct ContentEntry* const* content_entries,
                     ptrdiff_t content_entry_count,
                     struct Os* os,
                     struct Log* log) {
   static const struct PathList empty = {0};
   struct Arena perm = test_arena();
-  return manifest_builder_populate(manifest, site_config, CONFIG_PATH,
-                                   source_paths != NULL ? source_paths : &empty,
-                                   static_paths != NULL ? static_paths : &empty, content_entries,
-                                   content_entry_count, os, &perm, test_arena(), log);
+  return manifest_builder_populate(
+      manifest, site_config, CONFIG_PATH, source_paths != NULL ? source_paths : &empty,
+      static_paths != NULL ? static_paths : &empty, asset_paths != NULL ? asset_paths : &empty,
+      content_entries, content_entry_count, os, &perm, test_arena(), log);
 }
 
 /**
@@ -100,7 +102,7 @@ static void check_rejects_output_in_root(const struct SiteConfig* site_config,
   const struct ContentEntry* entries[] = {&entry};
   struct Manifest manifest = {0};
   struct Log log = test_log();
-  TEST_CHECK(populate(&manifest, site_config, NULL, NULL, entries, 1, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, site_config, NULL, NULL, NULL, entries, 1, os, &log) == -1);
   TEST_CHECK(test_log_is(&log, "output path would write inside '%s' for 'content/a.md': '%s'\n",
                          root_key, output_path));
 }
@@ -189,7 +191,8 @@ static void test_registers_complete_output_set(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, &sources, &static_paths, entries, 2, os, &log) == 0);
+  TEST_CHECK(
+      populate(&manifest, &site_config, &sources, &static_paths, NULL, entries, 2, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   // The five outputs of the site, and the build cache.
   TEST_CHECK(manifest.count == 5 + 1);
@@ -208,7 +211,7 @@ static void test_accepts_missing_templates_dir(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 1, os, &log) == 0);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 1, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
   // The one output and the build cache.
   TEST_CHECK(manifest.count == 2);
@@ -231,7 +234,7 @@ static void test_accepts_output_beside_input_roots(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 3, os, &log) == 0);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 3, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 }
 
@@ -269,7 +272,7 @@ static void test_rejects_duplicate(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 2, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
                          "'site/public/post/index.html'\n"));
@@ -288,7 +291,7 @@ static void test_reports_every_collision(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 4, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 4, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
                          "'site/public/one/index.html'\n"
@@ -312,7 +315,7 @@ static void test_rejects_case_folded_duplicate(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 2, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'site/content/a.md' and 'site/content/b.md': "
                          "'site/public/about/index.html'\n"));
@@ -331,7 +334,7 @@ static void test_rejects_prefix_collision(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 2, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 2, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path for 'site/content/b.md' nests under output path for "
                          "'site/content/a.md': 'site/public/post/index.html'\n"));
@@ -351,7 +354,7 @@ static void test_rejects_every_prefix_collision(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 4, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 4, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path for 'site/content/b.md' nests under output path for "
                          "'site/content/a.md': 'site/public/post/index.html'\n"
@@ -374,7 +377,7 @@ static void test_rejects_entry_aggregate_collision(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, entries, 1, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, entries, 1, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'site/content/index.md' and "
                          "'aggregate_templates[0]': 'site/public/index.html'\n"));
@@ -396,8 +399,8 @@ static void test_rejects_duplicate_template(void) {
   site_config.aggregate_template_count = 2;
   struct Manifest one_list_manifest = {0};
   struct Log one_list_log = test_log();
-  TEST_CHECK(populate(&one_list_manifest, &site_config, NULL, NULL, NULL, 0, os, &one_list_log) ==
-             -1);
+  TEST_CHECK(populate(&one_list_manifest, &site_config, NULL, NULL, NULL, NULL, 0, os,
+                      &one_list_log) == -1);
   TEST_CHECK(test_log_is(&one_list_log,
                          "duplicate output path for 'aggregate_templates[0]' and "
                          "'aggregate_templates[1]': 'site/public/dup.html'\n"));
@@ -410,7 +413,8 @@ static void test_rejects_duplicate_template(void) {
   site_config.feed_template_count = 1;
   struct Manifest shared_manifest = {0};
   struct Log shared_log = test_log();
-  TEST_CHECK(populate(&shared_manifest, &site_config, NULL, NULL, NULL, 0, os, &shared_log) == -1);
+  TEST_CHECK(populate(&shared_manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &shared_log) ==
+             -1);
   TEST_CHECK(test_log_is(&shared_log,
                          "duplicate output path for 'aggregate_templates[0]' and "
                          "'feed_templates[0]': 'site/public/dup.html'\n"));
@@ -433,7 +437,7 @@ static void test_rejects_input_overwrite(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, &sources, NULL, entries, 1, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, &sources, NULL, NULL, entries, 1, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path would overwrite build input for 'site/content/a.md': "
                          "'site/public/a.md'\n"));
@@ -474,7 +478,7 @@ static void test_rejects_input_overwrite_among_many_inputs(void) {
     struct Manifest manifest = {0};
     struct Log log = test_log();
 
-    TEST_CHECK(populate(&manifest, &site_config, &sources, NULL, entries, 2, os, &log) == -1);
+    TEST_CHECK(populate(&manifest, &site_config, &sources, NULL, NULL, entries, 2, os, &log) == -1);
     TEST_CHECK(test_log_is(&log, "output path would overwrite build input for '%s': '%s'\n", target,
                            output));
   }
@@ -494,7 +498,7 @@ static void test_rejects_config_overwrite(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path would overwrite build input for 'aggregate_templates[0]': "
                          "'site/sosig.toml'\n"));
@@ -526,7 +530,7 @@ static void test_rejects_template_overwrite(void) {
   const struct ContentEntry* aggregate_entries[] = {&aggregate_entry};
   struct Manifest aggregate_manifest = {0};
   struct Log aggregate_log = test_log();
-  TEST_CHECK(populate(&aggregate_manifest, &site_config, NULL, NULL, aggregate_entries, 1, os,
+  TEST_CHECK(populate(&aggregate_manifest, &site_config, NULL, NULL, NULL, aggregate_entries, 1, os,
                       &aggregate_log) == -1);
   TEST_CHECK(test_log_is(&aggregate_log,
                          "output path would overwrite build input for 'content/a.md': "
@@ -542,7 +546,7 @@ static void test_rejects_template_overwrite(void) {
   const struct ContentEntry* override_entries[] = {&override_entry};
   struct Manifest override_manifest = {0};
   struct Log override_log = test_log();
-  TEST_CHECK(populate(&override_manifest, &site_config, NULL, NULL, override_entries, 1, os,
+  TEST_CHECK(populate(&override_manifest, &site_config, NULL, NULL, NULL, override_entries, 1, os,
                       &override_log) == -1);
   TEST_CHECK(test_log_is(&override_log,
                          "output path would overwrite build input for 'content/b.md': "
@@ -553,7 +557,7 @@ static void test_rejects_template_overwrite(void) {
   const struct ContentEntry* partial_entries[] = {&partial_entry};
   struct Manifest partial_manifest = {0};
   struct Log partial_log = test_log();
-  TEST_CHECK(populate(&partial_manifest, &site_config, NULL, NULL, partial_entries, 1, os,
+  TEST_CHECK(populate(&partial_manifest, &site_config, NULL, NULL, NULL, partial_entries, 1, os,
                       &partial_log) == -1);
   TEST_CHECK(test_log_is(&partial_log,
                          "output path would overwrite build input for 'content/c.md': "
@@ -662,7 +666,7 @@ static void test_rejects_output_in_templates_dir(void) {
   site_config.aggregate_template_count = 1;
   struct Manifest manifest = {0};
   struct Log log = test_log();
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path would write inside 'templates_dir' for "
                          "'aggregate_templates[0]': 'site/templates/index.html'\n"));
@@ -694,10 +698,76 @@ static void test_rejects_static_aggregate_collision(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, &static_paths, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, &static_paths, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "duplicate output path for 'aggregate_templates[0]' and "
                          "'site/static/index.html': 'site/public/index.html'\n"));
+}
+
+// An asset whose copy would land on a page collides with it. An Emacs export `a.html` beside
+// `a.org` is the common case, and the diagnostic names both files.
+static void test_rejects_asset_entry_collision(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.org", "source");
+  os_memory_write(os, "site/content/a.html", "export");
+  const struct ContentEntry entry = entry_at("site/public/a.html", "site/content/a.org");
+  const struct ContentEntry* entries[] = {&entry};
+  struct Arena arena = test_arena();
+  struct PathList asset_paths = {0};
+  path_list_push(&asset_paths, S("site/content/a.html"), &arena);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, &asset_paths, entries, 1, os, &log) ==
+             -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/content/a.org' and "
+                         "'site/content/a.html': 'site/public/a.html'\n"));
+}
+
+// An asset and a static file at the same relative path collide, rather than one silently replacing
+// the other.
+static void test_rejects_asset_static_collision(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/x.png", "asset");
+  os_memory_write(os, "site/static/x.png", "static");
+  struct Arena arena = test_arena();
+  struct PathList static_paths = {0};
+  path_list_push(&static_paths, S("site/static/x.png"), &arena);
+  struct PathList asset_paths = {0};
+  path_list_push(&asset_paths, S("site/content/x.png"), &arena);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+
+  TEST_CHECK(populate(&manifest, &site_config, NULL, &static_paths, &asset_paths, NULL, 0, os,
+                      &log) == -1);
+  TEST_CHECK(test_log_is(&log,
+                         "duplicate output path for 'site/static/x.png' and "
+                         "'site/content/x.png': 'site/public/x.png'\n"));
+}
+
+// An asset is a build input, so an output that names it is rejected. The output is a hard link to
+// the asset, for the reason `test_rejects_input_overwrite` gives.
+static void test_rejects_asset_overwrite(void) {
+  struct SiteConfig site_config;
+  struct Os* os = init_manifest_fixture(&site_config);
+  os_memory_write(os, "site/content/a.png", "asset");
+  os_memory_link(os, "site/content/a.png", "site/public/b.html");
+  const struct ContentEntry entry = entry_at("site/public/b.html", "site/content/b.md");
+  const struct ContentEntry* entries[] = {&entry};
+  struct Arena arena = test_arena();
+  struct PathList asset_paths = {0};
+  path_list_push(&asset_paths, S("site/content/a.png"), &arena);
+  struct Manifest manifest = {0};
+  struct Log log = test_log();
+
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, &asset_paths, entries, 1, os, &log) ==
+             -1);
+  TEST_CHECK(test_log_is(&log,
+                         "output path would overwrite build input for 'site/content/b.md': "
+                         "'site/public/b.html'\n"));
 }
 
 // A `templates_dir` that exists but cannot be walked fails the manifest rather than claiming
@@ -711,7 +781,7 @@ static void test_rejects_unlistable_templates_dir(void) {
   site_config.templates_dir = S("site/templates-file");
   struct Manifest manifest = {0};
   struct Log log = test_log();
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(
       &log, "failed to list template files: cannot open directory: %s ('site/templates-file')\n",
       strerror(ENOTDIR)));
@@ -721,7 +791,7 @@ static void test_rejects_unlistable_templates_dir(void) {
   os_memory_fail(os, OS_MEMORY_OP_LIST, "site/templates/partials", EACCES);
   site_config.templates_dir = S("site/templates");
   log = test_log();
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(
       &log,
       "failed to list template files: cannot open directory: %s ('site/templates/partials')\n",
@@ -742,7 +812,7 @@ static void test_rejects_oversize_template_path(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path for 'aggregate_templates[0]' exceeds max output path length "
                          "(%d bytes) at %td bytes: '%.*s'\n",
@@ -764,7 +834,7 @@ static void test_rejects_oversize_template_segment(void) {
   struct Manifest manifest = {0};
   struct Log log = test_log();
 
-  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, 0, os, &log) == -1);
+  TEST_CHECK(populate(&manifest, &site_config, NULL, NULL, NULL, NULL, 0, os, &log) == -1);
   TEST_CHECK(test_log_is(&log,
                          "output path segment for 'feed_templates[0]' exceeds max filename length "
                          "(%d bytes) at %zu bytes: '%s'\n",
@@ -798,6 +868,9 @@ TEST_LIST = {
     {"rejects output in templates dir", test_rejects_output_in_templates_dir},
     {"rejects output in static dir", test_rejects_output_in_static_dir},
     {"rejects static aggregate collision", test_rejects_static_aggregate_collision},
+    {"rejects asset entry collision", test_rejects_asset_entry_collision},
+    {"rejects asset static collision", test_rejects_asset_static_collision},
+    {"rejects asset overwrite", test_rejects_asset_overwrite},
     {"rejects unlistable templates dir", test_rejects_unlistable_templates_dir},
     {"rejects oversize template path", test_rejects_oversize_template_path},
     {"rejects oversize template segment", test_rejects_oversize_template_segment},

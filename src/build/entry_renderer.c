@@ -248,10 +248,10 @@ static int render_content_entry_load_source(struct ContentEntry* entry,
               S("failed to read content"), log) != 0) {
     return -1;
   }
-  // The walk finds only the suffixes in `cmd_build.c`'s `content_suffixes`, so a source that is not
-  // Org is Markdown. Every parse below names the source in each error it records, so nothing is
-  // added here.
-  source_out->is_org = str_endswith(source_path, S(".org"));
+  // `cmd_build.c`'s `load_build_inputs_split_sources` keeps only `.md` and `.org`, in any letter
+  // case, so a source that is not Org is Markdown. Every parse below names the source in each error
+  // it records, so nothing is added here.
+  source_out->is_org = text_has_suffix_folded(source_path, S(".org"));
   if (source_out->is_org) {
     // Org keywords and a top property drawer render nothing, so the whole file is the body and
     // nothing is cut out of it.

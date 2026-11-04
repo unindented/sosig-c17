@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "core/ascii.h"
+#include "core/text.h"
 #include "formats/body_html.h"
 #include "formats/html.h"
 #include "shared/arena.h"
@@ -715,7 +716,8 @@ static void write_link_target(struct Buf* buffer, const ORG_SPAN_LINK_DETAIL* li
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Writes the path of a `file` link, with an Org file's `.org` made `.html`.
+ * @brief Writes the path of a `file` link, with an Org file's `.org`, in any letter case, made
+ *        `.html`.
  *
  * Of the search options after `::`, only a custom ID (`file:a.org::#id`) is kept, as the fragment
  * `#id`. The others refer to the other file's contents, which the render does not see.
@@ -2078,7 +2080,7 @@ static void write_file_link_path(struct Buf* buffer, const ORG_ATTRIBUTE* path, 
       break;
     }
   }
-  if (file_len > 4 && str_endswith(str_head(text, file_len), S(".org"))) {
+  if (file_len > 4 && text_has_suffix_folded(str_head(text, file_len), S(".org"))) {
     write_attribute_part(buffer, path, 0, file_len - 4, escape);
     buf_append(buffer, S(".html"));
   } else {
@@ -2348,8 +2350,7 @@ static bool is_image_path(const ORG_ATTRIBUTE* path) {
   };
   const struct Str text = attribute_text(path);
   for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(extensions) / sizeof(extensions[0])); i++) {
-    if (text.len > extensions[i].len &&
-        is_equal_folded(str_tail(text, text.len - extensions[i].len), extensions[i])) {
+    if (text.len > extensions[i].len && text_has_suffix_folded(text, extensions[i])) {
       return true;
     }
   }

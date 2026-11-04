@@ -366,6 +366,14 @@ static void test_keeps_admonition_names(void) {
                "<p>A.</p>\n</div>\n<p>See <a href=\"#n1\">n1</a>.</p>\n")));
 }
 
+// A `file` link to an Org file points at that file's page, with `.org` in any letter case made
+// `.html`, as ox-html writes it. A link to any other file keeps its path.
+static void test_points_org_file_links_at_pages(void) {
+  TEST_CHECK(str_eq(render_org("[[file:a.org][A]] [[file:b.ORG][B]] [[file:c.txt][C]]\n"),
+                    S("<p><a href=\"a.html\">A</a> <a href=\"b.html\">B</a> "
+                      "<a href=\"c.txt\">C</a></p>\n")));
+}
+
 // Org's dollar delimiters are math too: `$...$` inline and `$$...$$` displayed.
 static void test_renders_dollar_math(void) {
   TEST_CHECK(str_eq(
@@ -436,6 +444,7 @@ TEST_LIST = {
     {"keeps other special blocks", test_keeps_other_special_blocks},
     {"matches admonition names in any case", test_matches_admonition_names_in_any_case},
     {"keeps admonition names", test_keeps_admonition_names},
+    {"points org file links at pages", test_points_org_file_links_at_pages},
     {"renders dollar math", test_renders_dollar_math},
     {"skips leading byte order mark", test_skips_leading_byte_order_mark},
     {"empty input yields empty string", test_empty_input_yields_empty_string},

@@ -380,6 +380,39 @@ static void test_copies_static_files_when_present(void) {
   TEST_CHECK(os_memory_is_file(os, "public/assets/sosig.css", "body{}\n"));
 }
 
+// Every file below `content_dir` that does not end in `.md` or `.org`, in any letter case, is an
+// asset, copied to its relative path below `output_dir`. That includes an editor backup such as
+// `e.org~`. `D.MD` publishes as `d.html`, and `f.ORG` renders as Org, where `*Bold*` is strong.
+static void test_copies_assets_beside_content(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md", HELLO_ENTRY);
+  os_memory_write(os, "content/b.org", "#+title: B\n#+date: [2026-07-01 Wed]\nB body\n");
+  os_memory_write(os, "content/c.png", "png");
+  os_memory_write(os, "content/D.MD", HELLO_ENTRY);
+  os_memory_write(os, "content/e.org~", "backup");
+  os_memory_write(os, "content/f.ORG", "#+title: F\n#+date: [2026-07-01 Wed]\n*Bold*\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  static const char* const expected[] = {
+      "public/_sosig/v1-build-cache.tsv",
+      "public/a.html",
+      "public/b.html",
+      "public/c.png",
+      "public/d.html",
+      "public/e.org~",
+      "public/f.html",
+  };
+  TEST_CHECK(is_file_list(os, "public", expected, 7));
+  TEST_CHECK(os_memory_is_file(os, "public/a.html", HELLO_PAGE));
+  TEST_CHECK(os_memory_is_file(os, "public/b.html", "<p>B body</p>\n\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/c.png", "png"));
+  TEST_CHECK(os_memory_is_file(os, "public/d.html", HELLO_PAGE));
+  TEST_CHECK(os_memory_is_file(os, "public/e.org~", "backup"));
+  TEST_CHECK(os_memory_is_file(os, "public/f.html", "<p><strong>Bold</strong></p>\n\n"));
+}
+
 // A custom pretty permalink publishes `<slug>/index.html` instead of `<slug>.html`. The golden test
 // compares that output shape end to end with `tests/expected/site_index_permalink`. What this adds
 // is the assertion at the command boundary.
@@ -444,6 +477,22 @@ static void test_rebuild_removes_stale_outputs(void) {
 
   TEST_CHECK(execute_build(os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(is_file_list(os, "public", expected, 2));
+}
+
+// A rebuild removes the copy of an asset that was deleted from `content_dir`.
+static void test_rebuild_removes_deleted_asset(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md", HELLO_ENTRY);
+  os_memory_write(os, "content/c.png", "png");
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(os_memory_is_file(os, "public/c.png", "png"));
+
+  TEST_CHECK(os_remove(os, S("content/c.png"), S("failed to remove fixture"), &log) == 0);
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/a.html"};
   TEST_CHECK(is_file_list(os, "public", expected, 2));
 }
 
@@ -1456,10 +1505,12 @@ TEST_LIST = {
     {"tolerates trailing slash on content_dir", test_tolerates_trailing_slash_on_content_dir},
     {"builds with no static dir", test_builds_with_no_static_dir},
     {"copies static files when present", test_copies_static_files_when_present},
+    {"copies assets beside content", test_copies_assets_beside_content},
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
     {"rebuild removes stale outputs", test_rebuild_removes_stale_outputs},
+    {"rebuild removes deleted asset", test_rebuild_removes_deleted_asset},
     {"rebuild skips output dir linked from content dir",
      test_rebuild_skips_output_dir_linked_from_content_dir},
     {"dry run lists every output and writes nothing",

@@ -19,6 +19,7 @@
 #include "core/error.h"
 #include "core/path.h"
 #include "core/path_list.h"
+#include "core/text.h"
 #include "domain/build_cache.h"
 #include "domain/content_entry.h"
 #include "domain/manifest.h"
@@ -141,10 +142,16 @@ struct BuildState {
   struct SiteConfig site_config;
 
   /**
-   * Discovered content entry source paths below `content_dir`, sorted by the walk that produced
-   * them.
+   * Discovered content entry source paths below `content_dir`, the files that end in `.md` or
+   * `.org` in any letter case, sorted by the walk that produced them.
    */
   struct PathList source_paths;
+
+  /**
+   * Every other file below `content_dir`, which the build copies as a static file, sorted by the
+   * walk that produced them.
+   */
+  struct PathList asset_paths;
 
   /** Discovered static file paths below `static_dir`, left empty when that directory is absent. */
   struct PathList static_paths;
@@ -258,24 +265,39 @@ static void build_state_init(struct BuildState* state,
 
 /**
  * @brief Loads `sosig.toml`, rejects an `output_dir` inside an input tree, and discovers content
- *        entry sources and static files.
+ *        entry sources, the assets next to them, and static files.
  *
  * The `output_dir` check runs before either walk, and both walks leave `output_dir` out, so a file
- * an earlier build generated is never read back as a source or copied as a static file.
+ * an earlier build generated is never read back as a source or copied as an asset or a static file.
  *
  * A config that was read and parsed but holds a bad key has logged it and kept that key's default,
  * so the checks after it still run against it. A rejected directory, permalink or template list key
  * is the exception: its default is a directory or an output the user never chose, so nothing checks
  * or walks it, and the load stops once it has checked the other read roots.
  *
- * @param state Build state that receives the configuration, content entry source paths, and static
- *              file paths. Must not be `NULL`.
+ * @param state Build state that receives the configuration, content entry source paths, asset
+ *              paths, and static file paths. Must not be `NULL`.
  * @param log   Log that receives every error. Must not be `NULL`.
  * @return `0` when there are sources to check, or `-1` on a configuration that cannot be read, a
  *         rejected directory, permalink or template list key, a directory, output directory, or
  *         listing failure.
  */
 static int load_build_inputs(struct BuildState* state, struct Log* log)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Splits every file below `content_dir` into the content sources and the assets.
+ *
+ * A content source ends in `.md` or `.org`, with ASCII letters in any case, so `post.MD` is
+ * Markdown, as Emacs opens `x.ORG` in Org mode. Every other file is an asset. Both lists keep the
+ * sorted order of `content_paths` and point at its path strings, so no path is copied.
+ *
+ * @param state         Build state that receives `source_paths` and `asset_paths`, in its perm.
+ *                      Must not be `NULL`.
+ * @param content_paths Every file below `content_dir`, sorted. Must not be `NULL`.
+ */
+static void load_build_inputs_split_sources(struct BuildState* state,
+                                            const struct PathList* content_paths)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -473,10 +495,10 @@ static int render_content_pages(struct BuildState* state, struct Log* log)
 
 /**
  * @brief Renders and writes the configured aggregate and feed templates, and copies the static
- *        files.
+ *        files and the assets.
  *
- * @param state Build state holding the collected entries and the static file paths. Must not be
- *              `NULL`.
+ * @param state Build state holding the collected entries, the static file paths, and the asset
+ *              paths. Must not be `NULL`.
  * @param log   Log that receives the failure. Must not be `NULL`.
  * @return `0` when every output was written, or `-1` on the first render or write failure.
  */
@@ -659,17 +681,39 @@ static int load_build_inputs(struct BuildState* state, struct Log* log) {
   }
 
   build_verbose(state, "discovering content");
-  static const struct Str content_suffixes[] = {STR_INIT(".md"), STR_INIT(".org")};
-  // A failure names the directory or entry that failed, which is more precise than the configured
-  // root, so the root is not repeated.
-  if (walk_files_with_suffixes(
-          &state->source_paths, state->site_config.content_dir, state->site_config.output_dir,
-          content_suffixes, sizeof(content_suffixes) / sizeof(content_suffixes[0]), false,
-          state->os, &state->perm, state->scratch, S("failed to list content files"), log) != 0) {
+  // One walk lists every file, so each directory is listed once, and the split sorts each file into
+  // a source or an asset. A failure names the directory or entry that failed, which is more precise
+  // than the configured root, so the root is not repeated.
+  static const struct Str content_suffixes[] = {STR_INIT("")};
+  struct PathList content_paths = {0};
+  if (walk_files_with_suffixes(&content_paths, state->site_config.content_dir,
+                               state->site_config.output_dir, content_suffixes, 1, false, state->os,
+                               &state->perm, state->scratch, S("failed to list content files"),
+                               log) != 0) {
     return -1;
   }
+  load_build_inputs_split_sources(state, &content_paths);
   build_verbose(state, "discovering static files");
   return load_build_inputs_static(state, log);
+}
+
+static void load_build_inputs_split_sources(struct BuildState* state,
+                                            const struct PathList* content_paths) {
+  // Each list gets a slot for every file, which spends a few bytes per file to fill both in one
+  // pass.
+  const ptrdiff_t count = content_paths->count;
+  state->source_paths =
+      (struct PathList){.items = arena_new(&state->perm, count, struct Str), .capacity = count};
+  state->asset_paths =
+      (struct PathList){.items = arena_new(&state->perm, count, struct Str), .capacity = count};
+  for (ptrdiff_t i = 0; i < count; i++) {
+    const struct Str path = content_paths->items[i];
+    struct PathList* list =
+        text_has_suffix_folded(path, S(".md")) || text_has_suffix_folded(path, S(".org"))
+            ? &state->source_paths
+            : &state->asset_paths;
+    list->items[list->count++] = path;
+  }
 }
 
 static int load_build_inputs_static(struct BuildState* state, struct Log* log) {
@@ -819,10 +863,11 @@ static int populate_output_manifest(struct BuildState* state, struct Log* log) {
   // This runs ahead of the page renders, so a duplicate output path fails before rendering is
   // wasted. It also runs ahead of every write, `output_dir` itself included, so an output aimed at
   // one of this build's own inputs is refused before it can destroy the file.
-  return manifest_builder_populate(
-      &state->manifest, &state->site_config, SITE_CONFIG_PATH_DEFAULT, &state->source_paths,
-      &state->static_paths, (const struct ContentEntry* const*)state->content_entries,
-      state->content_entry_count, state->os, &state->perm, state->scratch, log);
+  return manifest_builder_populate(&state->manifest, &state->site_config, SITE_CONFIG_PATH_DEFAULT,
+                                   &state->source_paths, &state->static_paths, &state->asset_paths,
+                                   (const struct ContentEntry* const*)state->content_entries,
+                                   state->content_entry_count, state->os, &state->perm,
+                                   state->scratch, log);
 }
 
 static int load_build_cache(struct BuildState* state, struct Log* log) {
@@ -996,8 +1041,13 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
     return -1;
   }
   build_verbose(state, "copying static files");
-  return site_writer_copy_static_files(&state->writer, site_config, &state->static_paths,
-                                       state->scratch, log);
+  // An asset is a static file whose root is `content_dir`, so it is copied the same way.
+  if (site_writer_copy_static_files(&state->writer, site_config, &state->static_paths,
+                                    site_config->static_dir, state->scratch, log) != 0) {
+    return -1;
+  }
+  return site_writer_copy_static_files(&state->writer, site_config, &state->asset_paths,
+                                       site_config->content_dir, state->scratch, log);
 }
 
 static int write_build_cache(struct BuildState* state, struct Log* log) {

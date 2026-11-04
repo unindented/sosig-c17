@@ -55,7 +55,7 @@ static void test_is_alnum_accepts_only_letters_and_digits(void) {
 
 // `ascii_to_lower` folds `[A-Z]` and returns every other byte unchanged. Slugs, URL schemes, file
 // suffixes, and manifest keys all use this exact locale-independent fold, through `text_slugify`,
-// `has_scheme`, `has_suffix` in `walk.c`, and `is_path_equal_folded` with `hash_path_folded`.
+// `has_scheme`, `text_has_suffix_folded`, and `is_path_equal_folded` with `hash_path_folded`.
 // `has_scheme` folds both the URL byte and the scheme byte before comparing, and a fold that set
 // bit 0x20 unconditionally would make the control byte 0x1A compare equal to ':' and 0x0F equal to
 // '/'. A scheme-less `base_url` spelled with those control bytes would then pass as absolute. The

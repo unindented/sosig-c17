@@ -24,5 +24,7 @@ while (n > 0) { (ref:loop)
 }
 #+END_SRC
 
+[[file:nested/diagram.svg]]
+
 * Footnotes
 [fn:1] Org files the definition under this headline.

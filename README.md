@@ -44,6 +44,7 @@ Run `sosig` from a directory that has this layout. The example uses the default 
 content/
   post-1.md
   post-2.md
+  diagram.svg
 static/
   assets/
     site.css
@@ -60,10 +61,13 @@ sosig.toml
 
 Each part of the project has one purpose:
 
-- `content/` holds the content files: the regular files whose names end in `.md` or `.org`, in any directory below `content/`. Each content file is one entry. `sosig` ignores every other file in `content/`, so it does not copy an image or a file named `post.MD`. Put a file that the site must publish as it is in `static/`.
-- `static/` holds the files that `sosig` copies into `output_dir` without changes, at the same relative path. For example, `static/robots.txt` becomes `output_dir/robots.txt`.
+- `content/` holds the content files and their assets. The content files are the regular files whose names end in `.md` or `.org`, in any letter case, in any directory below `content/`. For example, `post.md`, `post.MD` and `notes.Org` are content files. Each content file is one entry. Every other file below `content/` is an asset, and `sosig` copies it as it copies a static file. For example, `content/diagram.svg` becomes `output_dir/diagram.svg`, so `post-2.md` can show it with `![Diagram](diagram.svg)`. See [URLs and slugs](#urls-and-slugs) for when such a link works.
+- `static/` holds the files that `sosig` copies into `output_dir` without changes, at the same relative path. For example, `static/robots.txt` becomes `output_dir/robots.txt`. Put a file that belongs to one entry, such as an image, next to that entry in `content/`. Put a file that the whole site uses, such as a stylesheet, in `static/`.
 - `templates/` holds the Mustache templates and their partials, as [Templates](#templates) describes.
 - `sosig.toml` is the config file, as [Configuration](#configuration) describes.
+
+> [!caution]
+> `sosig` publishes every file below `content/`, including hidden files such as `.DS_Store`, a `.git/` directory, editor backups such as `notes.org~`, and Org archives such as `notes.org_archive`. Keep a file that must not be public outside `content/`.
 
 The content directory and the templates directory must exist, and the static directory is optional. The repository and the release archives contain no starter templates or static files, so each site supplies its own.
 
@@ -108,7 +112,7 @@ A template name in the configuration, or in the `template` field of an entry, mu
 > [!caution]
 > The first build into a directory removes everything in that directory that the build did not write, including hidden files. Set `output_dir` to a directory that you use for nothing else.
 
-When a build writes an output, it replaces any file that is already at that path. After a successful build, the build removes every file and directory below `output_dir` that it did not write, so `output_dir` contains only the outputs of the current inputs. For example, the build removes the pages of deleted or renamed entries, the outputs of removed templates and removed static files, and anything that you added by hand. If a symlink does not lead to a current output, the build removes the symlink itself. It does not change the file or directory that the symlink points to. A failed build removes nothing. If rendering or writing fails before the build completes, some outputs can be new while other outputs stay unchanged.
+When a build writes an output, it replaces any file that is already at that path. After a successful build, the build removes every file and directory below `output_dir` that it did not write, so `output_dir` contains only the outputs of the current inputs. For example, the build removes the pages of deleted or renamed entries, the outputs of removed templates, removed static files and removed assets, and anything that you added by hand. If a symlink does not lead to a current output, the build removes the symlink itself. It does not change the file or directory that the symlink points to. A failed build removes nothing. If rendering or writing fails before the build completes, some outputs can be new while other outputs stay unchanged.
 
 Before a build searches the content directory, `sosig` rejects `output_dir` in these cases:
 
@@ -119,10 +123,10 @@ Every search of an input directory skips `output_dir`, so a symlink that leads i
 
 Before it renders page templates or writes output files, `sosig` rejects an output plan that has one of these conflicts:
 
-- Two outputs have the same path, for example a static file at the same path as a content page, an aggregate, or a feed. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
+- Two outputs have the same path, for example a static file or an asset at the same path as a content page, an aggregate, or a feed. An HTML file that Emacs exported next to its Org file is such an asset: `content/a.html` has the same path as the page of `content/a.org`. To fix this conflict, delete the exported file or move it out of `content/`. Paths that differ only in ASCII letter case, such as `About/index.html` and `about/index.html`, count as the same path, because a case-insensitive filesystem such as the macOS default stores them as one file.
 - One output path must be both a file and a directory. This check also ignores ASCII letter case.
 - An output is at or below `content_dir`, `templates_dir`, or `static_dir`, for example through a symlink inside `output_dir`. This check also applies when no file exists at that path yet.
-- An output overwrites the config file, a content file, a static file, or any file below `templates_dir`, including partials.
+- An output overwrites the config file, a content file, a static file, an asset, or any file below `templates_dir`, including partials.
 
 These checks compare the directories themselves, not the text of the paths, so they also find a different spelling of the same directory, or a symlink to it. The build creates `output_dir` only after all of these checks pass, so a rejected build creates nothing.
 
@@ -152,7 +156,7 @@ The `write` and `keep` lines come first, in the order that the build plans them:
 1. Content pages, newest first.
 2. Aggregates.
 3. Feeds.
-4. Static files.
+4. Static files, then assets.
 5. The build cache.
 
 The `remove` lines come after them, in sorted order. To get only the paths for `sort`, `diff`, or `comm`, use `cut -f2-`. A dry run reports a failure in the same way as a build: on `stderr`, with the same exit code. A dry run that fails prints no listing. With `-v`, the progress messages still go to `stderr`, so `stdout` contains only the listing when you send it through a pipe.
@@ -160,7 +164,7 @@ The `remove` lines come after them, in sorted order. To get only the paths for `
 A dry run writes nothing, so a build can still fail after a dry run succeeds. A dry run cannot find these failures:
 
 - The build has no permission to write, or the disk is full.
-- `sosig` cannot read a static file. A dry run does not open the files that it would copy.
+- `sosig` cannot read a static file or an asset. A dry run does not open the files that it would copy.
 - An old file is at a path where a new output needs a directory, or an old directory is at a path where a new output needs a file. For example, the old output is the file `public/blog`, and the new output is `public/blog/index.html`.
 - `output_dir` exists but is not a usable directory.
 
@@ -261,6 +265,8 @@ The filename of a denote or org-roam note starts with a timestamp. The filename 
 
 The `permalink` pattern sets the URL and output path of each entry. It supports the placeholders `{slug}` and `{section}`. It must contain `{slug}`, so that each entry gets a different path. `{section}` is the directory of the content file, relative to `content_dir`, with each directory segment normalized as a slug. If an expanded path ends in `/`, `sosig` adds `index.html` to it. For example, `/{slug}/` gives an entry a URL such as `/<slug>/index.html`.
 
+A relative link from a page to an asset, such as `![Diagram](diagram.svg)`, or to another Org note, such as `[[file:other.org]]`, works only if the page is in the output directory that matches the directory of its content file. The default permalink, `/{section}/{slug}.html`, gives this result if slug normalization does not change the directory names. A `/{slug}/` permalink puts each page one directory lower, and a directory named `Field Notes` becomes the section `field-notes`, so in these cases the link breaks. The link also breaks in an aggregate or a feed that includes the body of a page below a section, because a browser resolves the link against the path of the aggregate or the feed. `sosig` does not change the link that you wrote.
+
 `sosig` normalizes a slug in these steps:
 
 1. It changes ASCII letters to lowercase.
@@ -291,7 +297,7 @@ The `permalink` pattern sets the URL and output path of each entry. It supports 
 - `#+BEGIN_EXPORT html` blocks and `@@html:...@@` snippets pass raw HTML through to the output. `sosig` omits `#+HTML:` lines from the output.
 - If Markdown has the same feature, `sosig` writes the same HTML as for Markdown. See [Generated HTML](#generated-html).
 - `sosig` writes an inline `src_c{…}` as its code, unless its `:exports` is `none` or `results`. By default, Emacs exports the results of an inline `src_c{…}`, but `sosig` never evaluates code.
-- A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work. A `[[file:other.org]]` link points to `other.html` in the same directory as the page. This link works only if the permalink of the other note gives that path.
+- A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work. A `[[file:other.org]]` link points to `other.html` in the same directory as the page, and so does a link to `other.ORG`. This link works only if the permalink of the other note gives that path, as [URLs and slugs](#urls-and-slugs) describes.
 
 As in Emacs, a property drawer at the top of the file renders nothing. A `Footnotes` headline and its subtree also render nothing, but their footnote definitions go into the footnote list at the end. The Org renderer of `sosig` is a port of the renderer in org4c, so the other differences that the org4c [README](https://github.com/unindented/org4c#differences-from-emacs-ox-html) lists also apply to `sosig`, except for the shared HTML that the next section describes.
 
