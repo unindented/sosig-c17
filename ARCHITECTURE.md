@@ -217,7 +217,9 @@ These terms have one meaning in this section:
 - The queries are immutable once compiled, a site that names no language compiles none, and freeing them at exit could race a worker still highlighting when `os_oom` ends the process. They are the one tree-sitter allocation no call frees.
 - musl's `malloc` makes a parse no faster on eight threads than on one. Allocating from each worker's scratch makes it scale, and running out ends in the arena's `os_oom`.
 - A `free` that did nothing would let text a grammar cannot parse commit memory up to the limit before the block is written plain. The free lists reuse each allocation for the next of its size.
-- The limit bounds the scratch one block can take, so the region each converter splits off its scratch for its code blocks, twice the limit, is sized from a limit, like every arena, and `BUILD_SCRATCH_LEN` counts it. Writing the block plain departs from failing fast at a limit: failing a build over a code block's colors helps no one, and `formats/` has no log.
+- The limit bounds the scratch one block can take, so the region each converter splits off its scratch for its code blocks, twice the limit, is sized from a limit, like every arena, and `BUILD_SCRATCH_LEN` counts it, with the code a converter holds until a block ends. Writing the block plain departs from failing fast at a limit: failing a build over a code block's colors helps no one, and `formats/` has no log.
+
+**Cost.** An Org block made almost wholly of code references with a short `-l` label format is the one input the limits accept that `BUILD_SCRATCH_LEN` does not hold, as its definition explains.
 
 ### Address sanitizer coverage in arenas
 

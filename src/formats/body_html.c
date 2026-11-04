@@ -133,9 +133,22 @@ struct Arena body_html_code_block_scratch(struct Arena* scratch) {
 
 void body_html_code_block_write(struct Buf* buffer,
                                 struct Str language,
+                                struct Str id,
                                 struct Str code,
                                 struct Arena scratch) {
-  buf_append(buffer, S("<pre><code"));
+  body_html_code_block_open(buffer, language, id);
+  body_html_code_write(buffer, language, code, NULL, scratch);
+  body_html_code_block_close(buffer);
+}
+
+void body_html_code_block_open(struct Buf* buffer, struct Str language, struct Str id) {
+  buf_append(buffer, S("<pre"));
+  if (id.len > 0) {
+    buf_append(buffer, S(" id=\""));
+    html_escape_append(buffer, id);
+    buf_append(buffer, S("\""));
+  }
+  buf_append(buffer, S("><code"));
   if (language.len > 0) {
     buf_append(buffer, S(" class=\""));
     if (!str_startswith(language, S("language-"))) {
@@ -145,7 +158,17 @@ void body_html_code_block_write(struct Buf* buffer,
     buf_append(buffer, S("\""));
   }
   buf_append(buffer, S(">"));
-  highlight_write(buffer, highlight_grammar_find(language), code, NULL, scratch);
+}
+
+void body_html_code_write(struct Buf* buffer,
+                          struct Str language,
+                          struct Str code,
+                          const struct HighlightLines* lines,
+                          struct Arena scratch) {
+  highlight_write(buffer, highlight_grammar_find(language), code, lines, scratch);
+}
+
+void body_html_code_block_close(struct Buf* buffer) {
   buf_append(buffer, S("</code></pre>\n"));
 }
 

@@ -16,5 +16,13 @@ It cites a footnote.[fn:1]
 int main(void) { return 0; }
 #+END_SRC
 
+The loop at [[(loop)]] counts down, as src_c{n--} does.
+
+#+BEGIN_SRC c -n
+while (n > 0) { (ref:loop)
+  n--;
+}
+#+END_SRC
+
 * Footnotes
 [fn:1] Org files the definition under this headline.

@@ -4,10 +4,16 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "formats/highlight.h"
 #include "shared/arena.h"
 #include "shared/str.h"
 
 struct Buf;
+
+// Each element takes the markup md4c's own HTML renderer gives it, apart from a heading's level, a
+// task item's `<li>` class, the footnotes' roles and a code block's highlighting. A stylesheet or
+// math script written for md4c's HTML then covers both formats, and changing an element is one edit
+// for both renderers.
 
 /**
  * @brief Appends `text` to a URL attribute of `buffer`, percent-encoding every byte a URL may not
@@ -165,17 +171,55 @@ struct Arena body_html_code_block_scratch(struct Arena* scratch) __attribute__((
  * @brief Writes a code block, with a `language-` class when it names its language, and its code
  *        highlighted when the language has a grammar.
  *
- * A language that already starts with `language-` does not get the prefix twice. The code of a
- * block whose language has no grammar, or names none, is only HTML-escaped.
+ * This is `body_html_code_block_open`, `body_html_code_write` with no line callbacks, and
+ * `body_html_code_block_close` in order.
  *
  * @param buffer   Destination buffer. Must not be `NULL`.
  * @param language Language, such as `c`, or empty when the block names none.
+ * @param id       Element id a link can point to, such as an Org block's `#+NAME:`, or empty for
+ *                 none.
  * @param code     Code, every line ending in `\n`.
  * @param scratch  Region from `body_html_code_block_scratch`, for highlighting the code.
  */
 void body_html_code_block_write(struct Buf* buffer,
                                 struct Str language,
+                                struct Str id,
                                 struct Str code,
                                 struct Arena scratch) __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes the opening tags of a code block, with a `language-` class when it names its
+ *        language.
+ *
+ * A language that already starts with `language-` does not get the prefix twice.
+ *
+ * @param buffer   Destination buffer. Must not be `NULL`.
+ * @param language Language, such as `c`, or empty when the block names none.
+ * @param id       Element id a link can point to, or empty for none.
+ */
+void body_html_code_block_open(struct Buf* buffer, struct Str language, struct Str id)
+    __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes code, highlighted when its language has a grammar, and only HTML-escaped otherwise.
+ *
+ * @param buffer   Destination buffer. Must not be `NULL`.
+ * @param language Language, such as `c`, or empty when the code names none.
+ * @param code     Code.
+ * @param lines    Callbacks around each line, such as an Org block's line numbers, or `NULL`.
+ * @param scratch  Region from `body_html_code_block_scratch`, for highlighting the code.
+ */
+void body_html_code_write(struct Buf* buffer,
+                          struct Str language,
+                          struct Str code,
+                          const struct HighlightLines* lines,
+                          struct Arena scratch) __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes the closing tags of a code block, and the line end after them.
+ *
+ * @param buffer Destination buffer. Must not be `NULL`.
+ */
+void body_html_code_block_close(struct Buf* buffer) __attribute__((nonnull(1)));
 
 #endif

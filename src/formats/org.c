@@ -114,6 +114,22 @@ struct OrgOption {
 };
 
 /**
+ * A code reference in a source block, which decorates its line. It is kept to 16 bytes, which
+ * `BUILD_SCRATCH_LEN` counts against the eight bytes of source a `(ref:name)` and its line end
+ * take.
+ */
+struct OrgCoderef {
+  /** Name of the reference, which borrows the document. */
+  const char* name;
+  uint32_t name_len;
+
+  /** Index of the line, from 0. */
+  uint32_t line;
+};
+
+_Static_assert(sizeof(struct OrgCoderef) <= 16, "a code reference's record must stay 16 bytes");
+
+/**
  * State of one render. It lives in `org_to_html`'s frame. Every string it holds borrows the
  * document, which outlives the parse.
  */
@@ -127,8 +143,31 @@ struct OrgRender {
   /** Body of a footnote, held in scratch until its end tells how many paragraphs it has. */
   struct Buf footnote;
 
-  /** Text of a plain source block, held in scratch and written whole when the block ends. */
+  /** Text of the source block, held in scratch and written whole when the block ends. */
   struct Buf code;
+
+  /** Text of an inline source, held in scratch and written whole when it ends. */
+  struct Buf inline_code;
+
+  /** Code references of the source block, in line order, in scratch. */
+  struct OrgCoderef* coderefs;
+  ptrdiff_t coderef_count;
+  ptrdiff_t coderef_capacity;
+
+  /** Index of the next code reference the line callbacks write. */
+  ptrdiff_t coderef_next;
+
+  /** Whether the source block's code references show their labels, ` (name)`, after the code. */
+  bool is_coderef_label_retained;
+
+  /** Lines of the source block held so far, which index the next code reference. */
+  ptrdiff_t source_line_count;
+
+  /** Value of the source block's `#+NAME:`, its id, or empty. */
+  struct Str source_name;
+
+  /** Number of the source block's first line, or zero when its lines are not numbered. */
+  ptrdiff_t source_first_line;
 
   /** Region of scratch a code block is highlighted in, in which no buffer of the render grows. */
   struct Arena code_scratch;
@@ -156,8 +195,11 @@ struct OrgRender {
   /** Type of the last block entered, which a caption belongs to. */
   ORG_BLOCKTYPE last_block_type;
 
-  /** Language of the pending source block, or empty when it names none. */
+  /** Language of the source block, or empty when it names none. */
   struct Str source_language;
+
+  /** Language of the inline source being held. */
+  struct Str inline_source_language;
 
   /** Number of the code block's current line, or zero when its lines are not numbered. */
   ptrdiff_t code_line;
@@ -202,14 +244,17 @@ struct OrgRender {
   /** Whether the last block entered is a paragraph holding only a link, which may be a figure. */
   bool is_last_block_standalone_link;
 
-  /** Whether a source block's opening tags wait for its caption, which is its first child. */
-  bool is_source_pending;
-
   /**
-   * Whether the source block's text is held in `code`, because nothing so far needs Org's own
-   * markup for it: a `#+NAME:`, a caption, line numbers or a code reference.
+   * Whether the text is a source block's, held in `code` until the block ends. Its caption's text,
+   * which is its first child, is not.
    */
   bool is_source_held;
+
+  /** Whether the text is an inline source's, held in `inline_code` until it ends. */
+  bool is_inline_source_held;
+
+  /** Whether the text is an inline source's that `:exports` leaves out. */
+  bool is_in_hidden_inline_source;
 
   /** Whether the text is inside a footnote's body. */
   bool is_in_footnote;
@@ -285,7 +330,6 @@ static const struct OrgTags span_tags[ORG_SPAN_CODEREF + 1] = {
     [ORG_SPAN_SUPERSCRIPT] = {STR_INIT("<sup>"), STR_INIT("</sup>")},
     [ORG_SPAN_SUBSCRIPT] = {STR_INIT("<sub>"), STR_INIT("</sub>")},
     [ORG_SPAN_VERBATIM] = {STR_INIT("<code>"), STR_INIT("</code>")},
-    [ORG_SPAN_INLINE_SRC] = {STR_INIT(""), STR_INIT("</code>")},
     [ORG_SPAN_STATISTICS_COOKIE] = {STR_INIT("<code>"), STR_INIT("</code>")},
 };
 
@@ -520,11 +564,57 @@ static void write_list_item_open(struct OrgRender* render,
                                  const ORG_BLOCK_LI_DETAIL* item) __attribute__((nonnull(1, 3)));
 
 /**
- * @brief Writes the opening tags of a source block that waits for its caption, once it is known.
+ * @brief Writes a held source block whole: its tags, and its code, highlighted when its language
+ *        has a grammar, with its line numbers and code references.
  *
  * @param render Render state. Must not be `NULL`.
  */
-static void flush_pending_source(struct OrgRender* render) __attribute__((nonnull(1)));
+static void write_source_block(struct OrgRender* render) __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes what starts a line of a source block: a code reference's span, when the line has
+ *        one, then the line's number, when its lines are numbered. A `HighlightLineFn`.
+ *
+ * @param buffer   Destination buffer. Must not be `NULL`.
+ * @param line     Index of the line, from 0.
+ * @param userdata Pointer to the `struct OrgRender`.
+ */
+static void write_source_line_open(struct Buf* buffer, ptrdiff_t line, void* userdata);
+
+/**
+ * @brief Writes what ends a line of a source block: a code reference's label, when it is kept, and
+ *        the end of its span. A `HighlightLineFn`.
+ *
+ * @param buffer   Destination buffer. Must not be `NULL`.
+ * @param line     Index of the line, from 0.
+ * @param userdata Pointer to the `struct OrgRender`.
+ */
+static void write_source_line_close(struct Buf* buffer, ptrdiff_t line, void* userdata);
+
+/**
+ * @brief Records a code reference of the held source block, on the line its text has reached.
+ *
+ * @param render  Render state. Must not be `NULL`.
+ * @param coderef Code reference detail. Must not be `NULL`.
+ */
+static void hold_coderef(struct OrgRender* render, const ORG_SPAN_CODEREF_DETAIL* coderef)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Starts an inline source: holds its text, or hides it when its `:exports` leaves it out.
+ *
+ * @param render Render state. Must not be `NULL`.
+ * @param source Inline source detail. Must not be `NULL`.
+ */
+static void start_inline_source(struct OrgRender* render, const ORG_SPAN_INLINE_SRC_DETAIL* source)
+    __attribute__((nonnull(1, 2)));
+
+/**
+ * @brief Ends an inline source, writing its held code, highlighted when its language has a grammar.
+ *
+ * @param render Render state. Must not be `NULL`.
+ */
+static void end_inline_source(struct OrgRender* render) __attribute__((nonnull(1)));
 
 /**
  * @brief Writes the opening tag of a paragraph that waits to learn whether it is a figure.
@@ -543,7 +633,7 @@ static void flush_pending_paragraph(struct OrgRender* render, bool is_figure)
 static void write_paragraph_close(struct OrgRender* render) __attribute__((nonnull(1)));
 
 /**
- * @brief Enters a source or example block, and starts its line numbers when it has them.
+ * @brief Enters an example block, and starts its line numbers when it has them.
  *
  * @param render     Render state. Must not be `NULL`.
  * @param first_line Number of the first line, or zero when the lines are not numbered.
@@ -551,6 +641,15 @@ static void write_paragraph_close(struct OrgRender* render) __attribute__((nonnu
  */
 static void start_code_block(struct OrgRender* render, ptrdiff_t first_line, ptrdiff_t line_count)
     __attribute__((nonnull(1)));
+
+/**
+ * @brief Returns the width of a block's widest line number, in digits.
+ *
+ * @param first_line Number of the first line, or zero when the lines are not numbered.
+ * @param line_count Count of the block's lines.
+ * @return The digits of the last line's number, or 0 when the lines are not numbered.
+ */
+static ptrdiff_t line_number_width(ptrdiff_t first_line, ptrdiff_t line_count);
 
 /**
  * @brief Writes the number of a code block's line, when the text starts a numbered line.
@@ -730,11 +829,13 @@ static void write_footnote_close(struct OrgRender* render,
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Stops holding a source block's text, and writes it with Org's own markup.
+ * @brief Reports whether a source's `:exports` leaves it out: `none`, or `results`, since no code
+ *        is evaluated.
  *
- * @param render Render state. Must not be `NULL`.
+ * @param params Header arguments of the source. Must not be `NULL`.
+ * @return `true` when it is left out, `false` otherwise.
  */
-static void release_held_source(struct OrgRender* render) __attribute__((nonnull(1)));
+static bool is_exports_hidden(const ORG_ATTRIBUTE* params) __attribute__((nonnull(1)));
 
 /**
  * @brief Finds the admonition type a special block's name names.
@@ -880,6 +981,7 @@ struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
       .caption = {.arena = &scratch},
       .footnote = {.arena = &scratch},
       .code = {.arena = &scratch},
+      .inline_code = {.arena = &scratch},
       .export_flags = export_flags,
   };
   render.output = &render.html;
@@ -1048,13 +1150,22 @@ static int org_to_html_enter_block(ORG_BLOCKTYPE type, void* detail, void* userd
       write_table_cell_open(render->output, S("td"), detail);
       break;
     case ORG_BLOCK_SRC: {
-      // The opening tags wait for a caption, which is the block's first child.
+      // Every source block is held until it ends and then written whole, so its code can be
+      // highlighted, as Emacs highlights every source block. Its caption, its first child, writes
+      // its label before it, as it comes.
       const ORG_BLOCK_SRC_DETAIL* source = detail;
-      render->is_source_pending = true;
       render->source_language = attribute_text(&source->lang);
-      render->is_source_held = render->affiliated_name.len == 0 && source->first_line_number == 0;
+      render->source_name = render->affiliated_name;
+      render->source_first_line = (ptrdiff_t)source->first_line_number;
+      render->is_source_held = true;
       render->code.len = 0;
-      start_code_block(render, (ptrdiff_t)source->first_line_number, (ptrdiff_t)source->line_count);
+      render->coderef_count = 0;
+      render->coderef_next = 0;
+      render->source_line_count = 0;
+      // The lines are numbered when the block is written, so the text that arrives meanwhile, its
+      // caption's included, takes no line number.
+      render->code_line_width =
+          line_number_width((ptrdiff_t)source->first_line_number, (ptrdiff_t)source->line_count);
       break;
     }
     case ORG_BLOCK_EXAMPLE: {
@@ -1136,16 +1247,8 @@ static int org_to_html_leave_block(ORG_BLOCKTYPE type, void* detail, void* userd
       write_paragraph_close(render);
       break;
     case ORG_BLOCK_SRC:
-      if (render->is_source_held) {
-        body_html_code_block_write(render->output, render->source_language, buf_str(&render->code),
-                                   render->code_scratch);
-        render->is_source_held = false;
-        render->is_source_pending = false;
-      } else {
-        flush_pending_source(render);
-        buf_append(render->output, S("</code></pre>\n"));
-      }
-      render->is_in_code_block = false;
+      render->is_source_held = false;
+      write_source_block(render);
       break;
     case ORG_BLOCK_EXAMPLE:
       buf_append(render->output, block_tags[type].close);
@@ -1201,11 +1304,11 @@ static int org_to_html_enter_span(ORG_SPANTYPE type, void* detail, void* userdat
   }
 
   render->is_at_verse_line_start = false;
-  // The only span inside a source block is a code reference, which needs Org's own markup.
-  if (render->is_source_held) {
-    release_held_source(render);
+  // The only span inside a source block's own text is a code reference, which marks its line.
+  if (render->is_source_held && !render->is_in_caption) {
+    hold_coderef(render, detail);
+    return 0;
   }
-  flush_pending_source(render);
   flush_pending_paragraph(render, type == ORG_SPAN_LINK && is_image_link(detail));
 
   switch (type) {
@@ -1242,10 +1345,7 @@ static int org_to_html_enter_span(ORG_SPANTYPE type, void* detail, void* userdat
       render->is_in_timestamp = true;
       break;
     case ORG_SPAN_INLINE_SRC:
-      buf_append(render->output, S("<code class=\"src src-"));
-      write_attribute(render->output, &((const ORG_SPAN_INLINE_SRC_DETAIL*)detail)->lang,
-                      html_escape_append);
-      buf_append(render->output, S("\">"));
+      start_inline_source(render, detail);
       break;
     case ORG_SPAN_TARGET: {
       // A radio target holds its text, while a plain one is empty.
@@ -1285,6 +1385,9 @@ static int org_to_html_leave_span(ORG_SPANTYPE type, void* detail, void* userdat
     render->is_in_hidden_snippet = false;
     return 0;
   }
+  if (render->is_source_held && !render->is_in_caption) {
+    return 0;
+  }
   if (render->raw_link_depth > 0) {
     if (type == ORG_SPAN_LINK) {
       render->raw_link_depth--;
@@ -1314,6 +1417,9 @@ static int org_to_html_leave_span(ORG_SPANTYPE type, void* detail, void* userdat
       buf_append(render->output, S(")</span>"));
       break;
     }
+    case ORG_SPAN_INLINE_SRC:
+      end_inline_source(render);
+      break;
     case ORG_SPAN_CODEREF: {
       const ORG_SPAN_CODEREF_DETAIL* coderef = detail;
       if (coderef->is_label_retained) {
@@ -1342,14 +1448,22 @@ static int org_to_html_text(ORG_TEXTTYPE type,
   flush_pending_dashes(render, type == ORG_TEXT_SOFTBR ||
                                    (type == ORG_TEXT_BR && render->verse_depth > 0) ||
                                    (type == ORG_TEXT_NORMAL && run.len > 0 && run.data[0] != '-'));
-  if (render->suppress_depth > 0 || render->raw_link_depth > 0 || render->is_in_hidden_snippet) {
+  if (render->suppress_depth > 0 || render->raw_link_depth > 0 || render->is_in_hidden_snippet ||
+      render->is_in_hidden_inline_source) {
     return 0;
   }
-  if (render->is_source_held) {
+  if (render->is_inline_source_held) {
+    buf_append(&render->inline_code, type == ORG_TEXT_NULLCHAR ? UTF8_REPLACEMENT : run);
+    return 0;
+  }
+
+  if (render->is_source_held && !render->is_in_caption) {
+    for (ptrdiff_t i = 0; i < run.len; i++) {
+      render->source_line_count += run.data[i] == '\n';
+    }
     buf_append(&render->code, type == ORG_TEXT_NULLCHAR ? UTF8_REPLACEMENT : run);
     return 0;
   }
-  flush_pending_source(render);
   flush_pending_paragraph(render, false);
 
   if (render->is_in_code_block && type == ORG_TEXT_CODE) {
@@ -1422,13 +1536,8 @@ static bool is_block_suppressed(const struct OrgRender* render,
   switch (type) {
     case ORG_BLOCK_EXPORT:
       return !is_attribute_named(&((const ORG_BLOCK_EXPORT_DETAIL*)detail)->backend, S("html"));
-    case ORG_BLOCK_SRC: {
-      // Org Babel's `:exports`. Code is never evaluated, so `results` exports nothing either.
-      struct Str exports = {0};
-      return find_header_argument(&((const ORG_BLOCK_SRC_DETAIL*)detail)->params, S(":exports"),
-                                  &exports) &&
-             (is_equal_folded(exports, S("none")) || is_equal_folded(exports, S("results")));
-    }
+    case ORG_BLOCK_SRC:
+      return is_exports_hidden(&((const ORG_BLOCK_SRC_DETAIL*)detail)->params);
     case ORG_BLOCK_DRAWER:
       // Org does not export a `LOGBOOK` drawer by default.
       return (render->export_flags & ORG_EXPORT_NO_DRAWERS) != 0 ||
@@ -1644,24 +1753,101 @@ static void write_list_item_open(struct OrgRender* render,
   }
 }
 
-static void flush_pending_source(struct OrgRender* render) {
-  if (!render->is_source_pending || render->is_in_caption) {
+static void write_source_block(struct OrgRender* render) {
+  const struct Str code = buf_str(&render->code);
+  if (render->source_first_line == 0 && render->coderef_count == 0) {
+    body_html_code_block_write(render->output, render->source_language, render->source_name, code,
+                               render->code_scratch);
     return;
   }
-  render->is_source_pending = false;
-  write_open_tag(render, S("pre"), S(""), ORG_AFFILIATED_ID);
-  buf_append(render->output, S("<code"));
-  // The class follows the rule of `body_html_code_block_write`, so a block reads the same whether
-  // or not its name makes it take this path.
-  if (render->source_language.len > 0) {
-    buf_append(render->output, S(" class=\""));
-    if (!str_startswith(render->source_language, S("language-"))) {
-      buf_append(render->output, S("language-"));
-    }
-    html_escape_append(render->output, render->source_language);
-    buf_append(render->output, S("\""));
+  // The writer closes every span before a line ends, so the callbacks put a line's number and its
+  // code reference around it without crossing one, and the block needs no copy.
+  const struct HighlightLines lines = {
+      .open = write_source_line_open,
+      .close = write_source_line_close,
+      .userdata = render,
+  };
+  body_html_code_block_open(render->output, render->source_language, render->source_name);
+  body_html_code_write(render->output, render->source_language, code, &lines, render->code_scratch);
+  body_html_code_block_close(render->output);
+}
+
+static void write_source_line_open(struct Buf* buffer, ptrdiff_t line, void* userdata) {
+  const struct OrgRender* render = userdata;
+  // As in Emacs, a referenced line's span holds its number, its code and its label.
+  if (render->coderef_next < render->coderef_count &&
+      (ptrdiff_t)render->coderefs[render->coderef_next].line == line) {
+    const struct OrgCoderef* coderef = &render->coderefs[render->coderef_next];
+    buf_append(buffer, S("<span id=\"coderef-"));
+    html_escape_append(buffer, (struct Str){coderef->name, (ptrdiff_t)coderef->name_len});
+    buf_append(buffer, S("\" class=\"coderef-off\">"));
   }
-  buf_append(render->output, S(">"));
+  if (render->source_first_line > 0) {
+    // A `printf` field width is an `int`, and a line count fits one.
+    buf_printf(buffer, "<span class=\"linenr\">%*td: </span>", (int)render->code_line_width,
+               render->source_first_line + line);
+  }
+}
+
+static void write_source_line_close(struct Buf* buffer, ptrdiff_t line, void* userdata) {
+  struct OrgRender* render = userdata;
+  if (render->coderef_next >= render->coderef_count ||
+      (ptrdiff_t)render->coderefs[render->coderef_next].line != line) {
+    return;
+  }
+  const struct OrgCoderef* coderef = &render->coderefs[render->coderef_next];
+  if (render->is_coderef_label_retained) {
+    buf_append(buffer, S(" ("));
+    html_escape_append(buffer, (struct Str){coderef->name, (ptrdiff_t)coderef->name_len});
+    buf_append(buffer, S(")"));
+  }
+  buf_append(buffer, S("</span>"));
+  render->coderef_next++;
+}
+
+static void hold_coderef(struct OrgRender* render, const ORG_SPAN_CODEREF_DETAIL* coderef) {
+  if (render->coderef_count == render->coderef_capacity) {
+    render->coderefs =
+        arena_grow(render->code.arena, render->coderefs, &render->coderef_capacity,
+                   (ptrdiff_t)sizeof(struct OrgCoderef), _Alignof(struct OrgCoderef));
+  }
+  // A block's switches, `-r` and `-k`, decide whether every reference in it shows its label.
+  const struct Str name = attribute_text(&coderef->name);
+  render->coderefs[render->coderef_count] = (struct OrgCoderef){
+      .name = name.data,
+      .name_len = (uint32_t)name.len,
+      .line = (uint32_t)render->source_line_count,
+  };
+  render->is_coderef_label_retained = coderef->is_label_retained != 0;
+  render->coderef_count++;
+}
+
+static void start_inline_source(struct OrgRender* render,
+                                const ORG_SPAN_INLINE_SRC_DETAIL* source) {
+  // Emacs exports an inline source's results unless `:exports` asks for its code. Code is never
+  // evaluated here, so that would drop the code a note shows; it is written unless `:exports` says
+  // `none` or `results`, as a source block is.
+  if (is_exports_hidden(&source->params)) {
+    render->is_in_hidden_inline_source = true;
+    return;
+  }
+  buf_append(render->output, S("<code class=\"src src-"));
+  write_attribute(render->output, &source->lang, html_escape_append);
+  buf_append(render->output, S("\">"));
+  render->inline_source_language = attribute_text(&source->lang);
+  render->inline_code.len = 0;
+  render->is_inline_source_held = true;
+}
+
+static void end_inline_source(struct OrgRender* render) {
+  if (render->is_in_hidden_inline_source) {
+    render->is_in_hidden_inline_source = false;
+    return;
+  }
+  render->is_inline_source_held = false;
+  body_html_code_write(render->output, render->inline_source_language,
+                       buf_str(&render->inline_code), NULL, render->code_scratch);
+  buf_append(render->output, S("</code>"));
 }
 
 static void flush_pending_paragraph(struct OrgRender* render, bool is_figure) {
@@ -1704,14 +1890,20 @@ static void start_code_block(struct OrgRender* render, ptrdiff_t first_line, ptr
   render->is_in_code_block = true;
   render->code_line = first_line;
   render->is_at_code_line_start = true;
-  if (first_line > 0) {
-    ptrdiff_t last_line = first_line + (line_count > 0 ? line_count - 1 : 0);
-    render->code_line_width = 1;
-    while (last_line >= 10) {
-      last_line /= 10;
-      render->code_line_width++;
-    }
+  render->code_line_width = line_number_width(first_line, line_count);
+}
+
+static ptrdiff_t line_number_width(ptrdiff_t first_line, ptrdiff_t line_count) {
+  if (first_line == 0) {
+    return 0;
   }
+  ptrdiff_t last_line = first_line + (line_count > 0 ? line_count - 1 : 0);
+  ptrdiff_t width = 1;
+  while (last_line >= 10) {
+    last_line /= 10;
+    width++;
+  }
+  return width;
 }
 
 static void write_code_line_number(struct OrgRender* render) {
@@ -1736,7 +1928,6 @@ static void write_caption_open(struct OrgRender* render) {
                  render->table_count);
       break;
     case ORG_BLOCK_SRC:
-      render->is_source_held = false;
       render->listing_count++;
       buf_printf(render->output,
                  "<label class=\"org-src-name\"><span class=\"listing-number\">Listing %td: "
@@ -1761,7 +1952,6 @@ static void write_caption_close(struct OrgRender* render) {
       break;
     case ORG_BLOCK_SRC:
       buf_append(render->output, S("</label>"));
-      flush_pending_source(render);
       break;
     case ORG_BLOCK_P:
       render->output = body_output(render);
@@ -2076,10 +2266,12 @@ static void write_footnote_close(struct OrgRender* render,
   body_html_footnote_close(render->output);
 }
 
-static void release_held_source(struct OrgRender* render) {
-  render->is_source_held = false;
-  flush_pending_source(render);
-  html_escape_append(render->output, buf_str(&render->code));
+static bool is_exports_hidden(const ORG_ATTRIBUTE* params) {
+  // Org Babel's `:exports`. Code is never evaluated, so `results` exports nothing either.
+  struct Str exports = {0};
+  // Emacs reads the value as written, so `NONE` is no value it knows, and the code is exported.
+  return find_header_argument(params, S(":exports"), &exports) &&
+         (str_eq(exports, S("none")) || str_eq(exports, S("results")));
 }
 
 static bool find_admonition_type(const ORG_BLOCK_SPECIAL_DETAIL* special, struct Str* type_out) {

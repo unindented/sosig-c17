@@ -20,9 +20,10 @@ enum { ORG_INPUT_LEN_MAX = 256 * 1024 * 1024 };
 /**
  * @brief Converts Org to HTML using the configured org4c flags and the file's `#+OPTIONS:` lines.
  *
- * org4c parses the Org, and this module's callbacks write the HTML, which is built in `perm`,
- * growing in place while nothing else allocates there. org4c's own working memory comes from
- * `malloc`, and a failed allocation there ends in `os_oom`, like one from `perm`.
+ * org4c parses the Org, and this module's callbacks write the HTML, because org4c's own HTML
+ * renderer offers no way to change how an element is written. The HTML is built in `perm`, growing
+ * in place while nothing else allocates there. org4c's own working memory comes from `malloc`, and
+ * a failed allocation there ends in `os_oom`, like one from `perm`.
  *
  * This is reentrant, so content jobs may render in parallel across the worker pool. org4c holds no
  * writable global state, the highlighter's grammars are immutable once loaded under its lock, and
@@ -32,8 +33,8 @@ enum { ORG_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  * @param org     Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
  * @param perm    Arena that owns the HTML. Must not be `NULL`.
  * @param scratch Arena for what is held until its element ends: a figure's caption, a footnote's
- *                body, and a plain source block's code; and for highlighting a source block, in a
- *                region split off when the conversion starts.
+ *                body, a source block's code and code references, and an inline source's code; and
+ *                for highlighting them, in a region split off when the conversion starts.
  * @return The HTML, owned by `perm`.
  */
 struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)

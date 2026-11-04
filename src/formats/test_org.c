@@ -7,6 +7,154 @@
 #include "shared/str.h"
 #include "test_support.h"
 
+/** A source block in C, which has a grammar, and in `zz`, which has none, with the HTML of each. */
+struct SourceCase {
+  const char* name;
+  const char* org;
+  const char* html;
+  const char* org_without_grammar;
+  const char* html_without_grammar;
+};
+
+/**
+ * Each path a source block can take: named, captioned, with line numbers, with code references,
+ * with both, with its label removed, and in a footnote. A caption holds emphasis, a link and an
+ * inline source, which stay the caption's.
+ */
+static const struct SourceCase source_cases[] = {
+    {"named",
+     "#+NAME: n\n"
+     "#+BEGIN_SRC c\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre id=\"n\"><code class=\"language-c\"><span class=\"tok-variable\">x</span>\n"
+     "</code></pre>\n",
+     "#+NAME: n\n"
+     "#+BEGIN_SRC zz\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre id=\"n\"><code class=\"language-zz\">x\n"
+     "</code></pre>\n"},
+    {"captioned",
+     "#+CAPTION: A /b/ [[https://x.org][c]] src_c{x}\n"
+     "#+BEGIN_SRC c\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<label class=\"org-src-name\"><span class=\"listing-number\">Listing 1: </span>A <em>b</em> "
+     "<a href=\"https://x.org\">c</a> <code class=\"src src-c\"><span "
+     "class=\"tok-variable\">x</span></code></label><pre><code class=\"language-c\"><span "
+     "class=\"tok-variable\">x</span>\n"
+     "</code></pre>\n",
+     "#+CAPTION: A /b/ [[https://x.org][c]] src_zz{x}\n"
+     "#+BEGIN_SRC zz\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<label class=\"org-src-name\"><span class=\"listing-number\">Listing 1: </span>A <em>b</em> "
+     "<a href=\"https://x.org\">c</a> <code class=\"src src-zz\">x</code></label><pre><code "
+     "class=\"language-zz\">x\n"
+     "</code></pre>\n"},
+    {"numbered",
+     "#+BEGIN_SRC c -n\n"
+     "x\n"
+     "\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-c\"><span class=\"linenr\">1: </span><span "
+     "class=\"tok-type\">x</span>\n"
+     "<span class=\"linenr\">2: </span>\n"
+     "<span class=\"linenr\">3: </span><span class=\"tok-variable\">x</span>\n"
+     "</code></pre>\n",
+     "#+BEGIN_SRC zz -n\n"
+     "x\n"
+     "\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-zz\"><span class=\"linenr\">1: </span>x\n"
+     "<span class=\"linenr\">2: </span>\n"
+     "<span class=\"linenr\">3: </span>x\n"
+     "</code></pre>\n"},
+    {"coderef",
+     "#+BEGIN_SRC c\n"
+     "x (ref:r)\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-c\"><span id=\"coderef-r\" class=\"coderef-off\"><span "
+     "class=\"tok-type\">x</span> (r)</span>\n"
+     "<span class=\"tok-variable\">x</span>\n"
+     "</code></pre>\n",
+     "#+BEGIN_SRC zz\n"
+     "x (ref:r)\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-zz\"><span id=\"coderef-r\" class=\"coderef-off\">x (r)</span>\n"
+     "x\n"
+     "</code></pre>\n"},
+    {"numbered-coderef",
+     "#+BEGIN_SRC c -n 9\n"
+     "x\n"
+     "x (ref:r)\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-c\"><span class=\"linenr\"> 9: </span><span "
+     "class=\"tok-type\">x</span>\n"
+     "<span id=\"coderef-r\" class=\"coderef-off\"><span class=\"linenr\">10: </span><span "
+     "class=\"tok-variable\">x</span> (r)</span>\n"
+     "</code></pre>\n",
+     "#+BEGIN_SRC zz -n 9\n"
+     "x\n"
+     "x (ref:r)\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-zz\"><span class=\"linenr\"> 9: </span>x\n"
+     "<span id=\"coderef-r\" class=\"coderef-off\"><span class=\"linenr\">10: </span>x (r)</span>\n"
+     "</code></pre>\n"},
+    {"label-removed",
+     "#+BEGIN_SRC c -r\n"
+     "x (ref:r)\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-c\"><span id=\"coderef-r\" class=\"coderef-off\"><span "
+     "class=\"tok-variable\">x</span></span>\n"
+     "</code></pre>\n",
+     "#+BEGIN_SRC zz -r\n"
+     "x (ref:r)\n"
+     "#+END_SRC\n",
+     "<pre><code class=\"language-zz\"><span id=\"coderef-r\" class=\"coderef-off\">x</span>\n"
+     "</code></pre>\n"},
+    {"footnote",
+     "A.[fn:1]\n"
+     "\n"
+     "[fn:1] B\n"
+     "#+BEGIN_SRC c\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<p>A.<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup></p>\n"
+     "<section class=\"footnotes\" role=\"doc-endnotes\">\n"
+     "<ol>\n"
+     "<li id=\"fn-1\">\n"
+     "<p>B</p>\n"
+     "<pre><code class=\"language-c\"><span class=\"tok-variable\">x</span>\n"
+     "</code></pre>\n"
+     "<a href=\"#fnref-1-1\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a>\n"
+     "</li>\n"
+     "</ol>\n"
+     "</section>\n",
+     "A.[fn:1]\n"
+     "\n"
+     "[fn:1] B\n"
+     "#+BEGIN_SRC zz\n"
+     "x\n"
+     "#+END_SRC\n",
+     "<p>A.<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup></p>\n"
+     "<section class=\"footnotes\" role=\"doc-endnotes\">\n"
+     "<ol>\n"
+     "<li id=\"fn-1\">\n"
+     "<p>B</p>\n"
+     "<pre><code class=\"language-zz\">x\n"
+     "</code></pre>\n"
+     "<a href=\"#fnref-1-1\" class=\"footnote-backref\" role=\"doc-backlink\">&#8617;</a>\n"
+     "</li>\n"
+     "</ol>\n"
+     "</section>\n"},
+};
+
 /**
  * @brief Converts Org to HTML, in arenas of its own.
  *
@@ -77,13 +225,43 @@ static void test_renders_math(void) {
       S("<p><x-equation>a</x-equation> and <x-equation type=\"display\">b</x-equation></p>\n")));
 }
 
-// A plain source block gives the same highlighted HTML as in Markdown, which `test_markdown.c`
-// checks with the same expected HTML.
+// A source block gives the same highlighted HTML as in Markdown, which `test_markdown.c` checks
+// with the same expected HTML.
 static void test_renders_code_block(void) {
   TEST_CHECK(str_eq(render_org("#+BEGIN_SRC c\nint x;\n#+END_SRC\n"),
                     S("<pre><code class=\"language-c\"><span class=\"tok-type\">int</span> <span "
                       "class=\"tok-variable\">x</span><span "
                       "class=\"tok-delimiter\">;</span>\n</code></pre>\n")));
+}
+
+// Every path of a source block highlights its code as Emacs does, with its line numbers and code
+// references around the highlighted lines.
+static void test_highlights_every_source_block_path(void) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(source_cases) / sizeof(source_cases[0])); i++) {
+    TEST_CASE(source_cases[i].name);
+    TEST_CHECK(str_eq(render_org(source_cases[i].org), str_from_cstr(source_cases[i].html)));
+  }
+}
+
+// An inline source is highlighted, and its `:exports` leaves it out when it says `none` or
+// `results`, as Emacs and a source block do. It keeps it for `code`, and for a value in another
+// case, such as `NONE`, which Emacs reads as no value it knows.
+static void test_follows_inline_source_exports(void) {
+  TEST_CHECK(
+      str_eq(render_org("A src_c[:exports none]{x} src_c[:exports results]{y} B "
+                        "src_c[:exports code]{z} C src_c[:exports NONE]{w} D\n"),
+             S("<p>A   B <code class=\"src src-c\"><span class=\"tok-variable\">z</span></code> "
+               "C <code class=\"src src-c\"><span class=\"tok-variable\">w</span></code> "
+               "D</p>\n")));
+}
+
+// Code in the caption of a line-numbered block is the caption's, so it takes no line number, and
+// the block's first line keeps its own.
+static void test_numbers_no_caption_code(void) {
+  TEST_CHECK(str_eq(render_org("#+CAPTION: a =v= b\n#+BEGIN_SRC zz -n\nx\n#+END_SRC\n"),
+                    S("<label class=\"org-src-name\"><span class=\"listing-number\">Listing 1: "
+                      "</span>a <code>v</code> b</label><pre><code class=\"language-zz\"><span "
+                      "class=\"linenr\">1: </span>x\n</code></pre>\n")));
 }
 
 // Headings at the first two levels give the same HTML as in Markdown, which `test_markdown.c`
@@ -143,18 +321,34 @@ static void test_renders_footnote_of_several_paragraphs(void) {
                "</li>\n</ol>\n</section>\n")));
 }
 
+// A source block whose language has no grammar keeps the output of every path as it was before
+// highlighting, byte for byte.
+static void test_keeps_source_block_paths_without_grammar(void) {
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(source_cases) / sizeof(source_cases[0])); i++) {
+    TEST_CASE(source_cases[i].name);
+    TEST_CHECK(str_eq(render_org(source_cases[i].org_without_grammar),
+                      str_from_cstr(source_cases[i].html_without_grammar)));
+  }
+}
+
+// An example block and fixed-width lines stay plain whatever they hold, and an example block keeps
+// its line numbers and code references, as in Emacs.
+static void test_leaves_example_blocks_plain(void) {
+  TEST_CHECK(str_eq(render_org("#+BEGIN_EXAMPLE -n\n"
+                               "int x; (ref:e)\n"
+                               "#+END_EXAMPLE\n"
+                               ": int x;\n"),
+                    S("<pre class=\"example\"><span id=\"coderef-e\" class=\"coderef-off\"><span "
+                      "class=\"linenr\">1: </span>int x; (e)</span>\n"
+                      "</pre>\n"
+                      "<pre class=\"example\">int x;\n"
+                      "</pre>\n")));
+}
+
 // A special block whose name is not an admonition type keeps its name as its class, as in Emacs.
 static void test_keeps_other_special_blocks(void) {
   TEST_CHECK(str_eq(render_org("#+BEGIN_aside\nA\n#+END_aside\n"),
                     S("<div class=\"aside\">\n<p>A</p>\n</div>\n")));
-}
-
-// A source block with a code reference keeps Org's own markup for it, which the shared code block
-// has no place for.
-static void test_keeps_code_references(void) {
-  TEST_CHECK(str_eq(render_org("#+BEGIN_SRC c\nint y; (ref:here)\n#+END_SRC\n"),
-                    S("<pre><code class=\"language-c\"><span id=\"coderef-here\" "
-                      "class=\"coderef-off\">int y; (here)</span>\n</code></pre>\n")));
 }
 
 // A special block names an admonition whatever its case, as Emacs reads a block's name.
@@ -228,14 +422,18 @@ TEST_LIST = {
     {"renders note admonition", test_renders_note_admonition},
     {"renders math", test_renders_math},
     {"renders code block", test_renders_code_block},
+    {"highlights every source block path", test_highlights_every_source_block_path},
+    {"follows inline source exports", test_follows_inline_source_exports},
+    {"numbers no caption code", test_numbers_no_caption_code},
     {"renders heading levels", test_renders_heading_levels},
     {"renders entities", test_renders_entities},
     {"renders braced subscripts only", test_renders_braced_subscripts_only},
     {"honors in-buffer options", test_honors_in_buffer_options},
     {"passes through export blocks", test_passes_through_export_blocks},
     {"renders footnote of several paragraphs", test_renders_footnote_of_several_paragraphs},
+    {"keeps source block paths without grammar", test_keeps_source_block_paths_without_grammar},
+    {"leaves example blocks plain", test_leaves_example_blocks_plain},
     {"keeps other special blocks", test_keeps_other_special_blocks},
-    {"keeps code references", test_keeps_code_references},
     {"matches admonition names in any case", test_matches_admonition_names_in_any_case},
     {"keeps admonition names", test_keeps_admonition_names},
     {"renders dollar math", test_renders_dollar_math},

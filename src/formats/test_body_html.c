@@ -99,7 +99,7 @@ static void test_math_marks_display_formulas(void) {
 static void test_code_block_names_language(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_code_block_write(&buf, S("c"), S("a < b;\n"), test_arena());
+  body_html_code_block_write(&buf, S("c"), S(""), S("a < b;\n"), test_arena());
   TEST_CHECK(str_eq(buf_str(&buf),
                     S("<pre><code class=\"language-c\"><span class=\"tok-variable\">a</span> "
                       "<span class=\"tok-operator\">&lt;</span> <span "
@@ -136,22 +136,23 @@ static void test_footnote_without_references_has_no_backrefs(void) {
   TEST_CHECK(buf.len == 0);
 }
 
-// A code block without a language has no class, and a language that already starts with `language-`
-// does not get the prefix twice.
+// A code block without a language has no class, a language that already starts with `language-`
+// does not get the prefix twice, and an id goes on the `<pre>`.
 static void test_code_block_class_variants(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_code_block_write(&buf, S(""), S("x\n"), test_arena());
-  body_html_code_block_write(&buf, S("language-unknown"), S("y\n"), test_arena());
-  TEST_CHECK(str_eq(buf_str(&buf), S("<pre><code>x\n</code></pre>\n"
-                                     "<pre><code class=\"language-unknown\">y\n</code></pre>\n")));
+  body_html_code_block_write(&buf, S(""), S(""), S("x\n"), test_arena());
+  body_html_code_block_write(&buf, S("language-unknown"), S("x1"), S("y\n"), test_arena());
+  TEST_CHECK(str_eq(buf_str(&buf),
+                    S("<pre><code>x\n</code></pre>\n"
+                      "<pre id=\"x1\"><code class=\"language-unknown\">y\n</code></pre>\n")));
 }
 
 // A language with no grammar keeps its class, and its code is only escaped.
 static void test_code_block_unknown_language_is_escaped(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_code_block_write(&buf, S("unknown"), S("a < b;\n"), test_arena());
+  body_html_code_block_write(&buf, S("unknown"), S(""), S("a < b;\n"), test_arena());
   TEST_CHECK(
       str_eq(buf_str(&buf), S("<pre><code class=\"language-unknown\">a &lt; b;\n</code></pre>\n")));
 }

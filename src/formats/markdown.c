@@ -268,7 +268,7 @@ static int markdown_to_html_enter_block(MD_BLOCKTYPE type, void* detail, void* u
       body_html_heading_open(html, (ptrdiff_t)((const MD_BLOCK_H_DETAIL*)detail)->level);
       break;
     case MD_BLOCK_CODE:
-      // The block is written whole when it ends, through the writer Org's plain blocks share.
+      // The block is written whole when it ends, through the writer Org's source blocks share.
       render->code.len = 0;
       render->is_in_code_block = true;
       break;
@@ -308,7 +308,7 @@ static int markdown_to_html_leave_block(MD_BLOCKTYPE type, void* detail, void* u
     case MD_BLOCK_CODE: {
       const MD_ATTRIBUTE* language = &((const MD_BLOCK_CODE_DETAIL*)detail)->lang;
       body_html_code_block_write(html, (struct Str){language->text, (ptrdiff_t)language->size},
-                                 buf_str(&render->code), render->code_scratch);
+                                 S(""), buf_str(&render->code), render->code_scratch);
       render->is_in_code_block = false;
       break;
     }
