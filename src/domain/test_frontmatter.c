@@ -512,32 +512,32 @@ static void test_parse_rejects_raw_nul_in_frontmatter(void) {
 }
 
 // An org-roam note reads as it stands: its keywords follow the top property drawer, the tags come
-// from `#+filetags:`, and a keyword for another tool, such as ox-hugo's, is ignored rather than
+// from `#+filetags:`, and a keyword for another tool, such as `#+startup:`, is ignored rather than
 // rejected.
 static void test_org_fills_note_after_property_drawer(void) {
   const struct Str org =
       S(":PROPERTIES:\n"
         ":ID:       dece65d2-55e4-46fb-a2ad-5c21eca78842\n"
         ":END:\n"
-        "#+title: Auto-export Org files to Hugo when modified\n"
+        "#+title: Sync notes between machines\n"
         "#+date: [2024-07-12 Fri]\n"
-        "#+filetags: :Emacs:Hugo:\n"
-        "#+hugo_bundle: auto-export\n"
+        "#+filetags: :Emacs:Org:\n"
+        "#+startup: overview\n"
         "\n"
-        "* Using =org-hugo-auto-export-mode=\n");
+        "* Using =org-roam-db-sync=\n");
   struct ContentEntry entry = {0};
   struct Log log = test_log();
-  TEST_CHECK(parse_frontmatter_org(&entry, org, "content/auto-export.org", &log) == 0);
+  TEST_CHECK(parse_frontmatter_org(&entry, org, "content/sync-notes.org", &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  TEST_CHECK(str_eq(entry.source_path, S("content/auto-export.org")));
-  TEST_CHECK(str_eq(entry.title, S("Auto-export Org files to Hugo when modified")));
+  TEST_CHECK(str_eq(entry.source_path, S("content/sync-notes.org")));
+  TEST_CHECK(str_eq(entry.title, S("Sync notes between machines")));
   TEST_CHECK(str_eq(entry.date, S("2024-07-12T00:00:00Z")));
   TEST_CHECK(entry.date_epoch == 1720742400);
   TEST_CHECK(str_eq(entry.description, S("")));
-  TEST_CHECK(str_eq(entry.slug, S("auto-export")));
+  TEST_CHECK(str_eq(entry.slug, S("sync-notes")));
   TEST_CHECK(entry.tag_count == 2);
   TEST_CHECK(str_eq(entry.tags[0], S("Emacs")));
-  TEST_CHECK(str_eq(entry.tags[1], S("Hugo")));
+  TEST_CHECK(str_eq(entry.tags[1], S("Org")));
   TEST_CHECK(entry.template.len == 0);
   TEST_CHECK(!entry.is_draft);
 }

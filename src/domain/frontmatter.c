@@ -338,8 +338,8 @@ static void frontmatter_parse_org_slug(struct ContentEntry* entry,
 /**
  * @brief Copies the tags of the optional `#+filetags:` lines into `perm`.
  *
- * The tags are separated by `:` or blanks, so `:Emacs:Hugo:` gives `Emacs` and `Hugo`. Each line
- * adds its tags after the ones before it, and a repeated tag stays, as in Emacs.
+ * The tags are separated by `:` or blanks, so `:Emacs:Org:` gives `Emacs` and `Org`. Each line adds
+ * its tags after the ones before it, and a repeated tag stays, as in Emacs.
  *
  * @param entry   Entry that receives `tags` and `tag_count`. Must not be `NULL`.
  * @param org     Full Org file bytes.

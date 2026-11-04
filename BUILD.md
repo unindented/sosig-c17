@@ -1,45 +1,54 @@
 # Build system
 
-`sosig` requires CMake 3.25 or later. This document explains the build targets and their relationships.
+This document describes the targets of the `sosig` CMake build, how the targets link to each other, and the reasons for its settings. The CMake build needs CMake 3.25 or later. The [Development](README.md#development) section of the README lists the commands that compile, test and package `sosig`.
 
 ## Layout
 
-The top-level CMake file controls the build. It sets project policy, finds the thread dependency, loads build settings, and adds each source directory.
+The top-level [CMakeLists.txt](CMakeLists.txt) sets the project policy, finds the thread library, includes its CMake modules, and adds each source directory. These are the other CMake files:
 
 | Path | Responsibility |
 | --- | --- |
-| `src/CMakeLists.txt` | Build the private application library and the `sosig` executable |
-| `src/*/CMakeLists.txt` | Add sources, header file sets, and local unit tests; `src/runtime/CMakeLists.txt` also defines the POSIX host library `sosig_os_posix` |
-| `tests/CMakeLists.txt` | Add the golden test suite, the shared unit-test support library, and the in-memory host |
-| `vendor/CMakeLists.txt` | Build each vendored dependency and the tree-sitter grammars `SOSIG_GRAMMARS` selects, each with its highlight queries embedded, and generate the header that declares them |
-| `cmake/sosig_build_profiles.cmake` | Set warnings, optimization, fortification, and sanitizers |
-| `cmake/sosig_quality.cmake` | Configure formatting and static analysis |
-| `cmake/sosig_testing.cmake` | Register a unit test and choose the host it links |
-| `cmake/sosig_packaging.cmake` | Configure installation and CPack archives |
-| `cmake/sosig_run_golden.cmake` | Run one golden test |
-| `cmake/sosig_restyle_graphviz_svg.cmake` | Add light and dark styles to the target graph |
-| `cmake/toolchains/` | Configure Zig for Linux `musl` targets |
-| `CMakeGraphVizOptions.cmake` | Set filters and layout for the target graph |
+| [src/CMakeLists.txt](src/CMakeLists.txt) | Defines the application library `sosig_app` and the `sosig` executable |
+| `src/*/CMakeLists.txt` | Add the sources, the header file sets and the unit tests of their directory. [src/runtime/CMakeLists.txt](src/runtime/CMakeLists.txt) also defines the POSIX host `sosig_os_posix` |
+| [tests/CMakeLists.txt](tests/CMakeLists.txt) | Adds the golden tests, the unit-test support library and the in-memory host |
+| [vendor/CMakeLists.txt](vendor/CMakeLists.txt) | Defines a target for each vendored dependency and for each tree-sitter grammar that `SOSIG_GRAMMARS` selects, and generates the header that declares these grammars |
+| [cmake/sosig_build_profiles.cmake](cmake/sosig_build_profiles.cmake) | Sets warnings, optimization, fortification and sanitizers |
+| [cmake/sosig_quality.cmake](cmake/sosig_quality.cmake) | Configures formatting and static analysis |
+| [cmake/sosig_testing.cmake](cmake/sosig_testing.cmake) | Defines `sosig_add_unit_test`, which registers a unit test and selects the host that the test links |
+| [cmake/sosig_run_golden.cmake](cmake/sosig_run_golden.cmake) | Runs one golden test |
+| [cmake/sosig_packaging.cmake](cmake/sosig_packaging.cmake) | Configures installation and CPack archives |
+| [cmake/sosig_restyle_graphviz_svg.cmake](cmake/sosig_restyle_graphviz_svg.cmake) | Adds light and dark styles to the target graph |
+| [cmake/toolchains/](cmake/toolchains/) | Configures Zig to cross-compile for the Linux `musl` release targets |
+| [CMakeGraphVizOptions.cmake](CMakeGraphVizOptions.cmake) | Sets the filters and the layout of the target graph |
+| [CMakePresets.json](CMakePresets.json) | Defines the configure, build, test, package and workflow presets |
 
-## Target graph
+## Targets
 
-`sosig_app` is a private static library. It contains all application source files except `main.c` and `runtime/fs.c`. The `sosig` executable and unit tests link to it. `runtime/fs.c`, the POSIX implementation of `runtime/os.h`, is the object library `sosig_os_posix`, so each executable chooses its host when it is linked: `sosig` and the tests registered with the default `OS posix` link it, and the tests registered with `sosig_add_unit_test(<module> OS memory)` link `sosig_os_memory` (`tests/os_memory.c`) instead. Both are object libraries because `sosig_app` refers to them, and a static archive listed before its user would be skipped by a single-pass linker. `sosig_app` links to `sosig_vendor_sharedstuff` for the arena, counted string, output buffer, and diagnostic log implementations. The arena calls `os_oom` when an allocation does not fit, and `sharedstuff` leaves that function to the application: `main.c` defines the production one, which prints the log collected so far and `sosig: out of memory` with the file the thread was working on, and exits with `EXIT_CODE_FAILURE`. `sosig_test_support` defines the unit-test one.
-
-The library is static because it supports one product. It does not provide a public ABI.
-
-Each vendored project has a separate target. Header-only dependencies use interface libraries. So does `sosig_vendor_tree_sitter_grammars`, which links the grammars `SOSIG_GRAMMARS` selects and carries the header that declares them, so `sosig_app` links it alone.
-
-`sosig_app` links to `sosig_vendor_tomlc17` and `sosig_vendor_sharedstuff` as public dependencies because application headers expose their types. The other vendored dependencies are private.
-
-`Threads::Threads` is a private dependency of `sosig_app`. CMake adds this link requirement to each executable that links to the static library.
-
-Source directories group code by function. Apart from the host implementation, they do not define separate libraries. Each local `CMakeLists.txt` adds files to `sosig_app` and links the private vendored dependency that only its code uses. More libraries would add link boundaries without independent APIs.
-
-### Generated dependency graph
-
-CMake generates this graph from the `release` preset. The graph shows CMake targets and link relationships. It does not show dependencies between source modules. Graph options remove test-only targets, such as the in-memory host `sosig_os_memory`.
+The CMake build has one application library, two hosts, one target for each vendored dependency, and the interface targets of [Build profiles](#build-profiles). Each executable links the application library and one of the two hosts. CMake generates this graph of the targets and their links from the `release` preset. The graph does not show the dependencies between source modules, and it does not show test-only targets such as the in-memory host `sosig_os_memory`.
 
 ![CMake target dependency graph](media/dependencies.svg)
+
+### Application library
+
+`sosig_app` is a private static library that holds every application source except [src/app/main.c](src/app/main.c) and `src/runtime/fs.c`. The `sosig` executable and every unit test link it. It is static because it supports one product and has no public ABI.
+
+Each source directory holds the code for one purpose. Except for the host in `src/runtime/`, the source directories add their files to `sosig_app` and do not define libraries of their own, because more libraries would add link boundaries without independent APIs. `src/build/` and `src/formats/` link the vendored dependencies that only their own code uses, and `src/CMakeLists.txt` links the other vendored dependencies.
+
+`sosig_app` links `sosig_vendor_tomlc17` and `sosig_vendor_sharedstuff` as `PUBLIC` dependencies, because the application headers expose the types of these libraries. The other dependencies are `PRIVATE`. `Threads::Threads` is one of the `PRIVATE` dependencies, but CMake still adds it to each executable that links the static library.
+
+`sosig_vendor_sharedstuff` supplies the arena, the counted string, the output buffer and the diagnostic log. When an allocation does not fit, the arena calls `os_oom`, and each program defines its own `os_oom`. `src/app/main.c` defines the `os_oom` of `sosig`, which [ARCHITECTURE.md](ARCHITECTURE.md#out-of-memory-exits-the-process) describes. `sosig_test_support` defines the `os_oom` of the unit tests.
+
+### Hosts
+
+`src/runtime/fs.c` is the POSIX implementation of [src/runtime/os.h](src/runtime/os.h). CMake compiles this file into the object library `sosig_os_posix`, outside `sosig_app`, so each executable selects its host when it links. `sosig` links `sosig_os_posix`. The unit tests that use the default, `OS posix`, also link it (see [Unit tests](#unit-tests)). The tests registered with `OS memory` link `sosig_os_memory`, the in-memory host in [tests/os_memory.c](tests/os_memory.c), instead.
+
+Both hosts are object libraries, because `sosig_app` refers to them and a single-pass linker skips a static archive when the archive comes before the code that uses it on the link line.
+
+### Vendored dependencies
+
+Each vendored project has its own target: the header-only projects, acutest and copt, are interface libraries, and the other vendored projects are static libraries. `sosig_vendor_tree_sitter_grammars` is also an interface library. It links the grammars that `SOSIG_GRAMMARS` selects and carries the header that declares these grammars, so `sosig_app` links this one target and not each grammar.
+
+### Regenerating the graph
 
 > [!tip]
 > Use these commands to update the graph:
@@ -59,95 +68,135 @@ CMake generates this graph from the `release` preset. The graph shows CMake targ
 
 ## Build profiles
 
-The build uses three interface targets:
+Three interface targets carry the compile and link options:
 
-- `sosig_build_project` sets strict first-party warnings and sanitizer options.
-- `sosig_build_tests` sets the common warning group and sanitizer options.
-- `sosig_build_vendor` sets optimization and supported sanitizer options for vendored code.
+- `sosig_build_project` sets the strict warnings for first-party code and the sanitizer options.
+- `sosig_build_tests` sets the common warning group and the sanitizer options.
+- `sosig_build_vendor` sets optimization and the sanitizer options that vendored code supports.
 
-All three targets require C17 or later. A parent project can select a newer standard. It cannot select an older standard.
+All three targets require C17 or later. A parent project can select a newer standard, but not an older one.
 
-Presets use `CMAKE_COMPILE_WARNING_AS_ERROR` to treat warnings as errors. The project does not force this setting on a parent build.
+Generator expressions select the options separately for each configuration, so the same rules work with single-config generators and with multi-config generators.
 
-Generator expressions select configuration options at build time. The same rules work with single-config and multi-config generators.
+The presets set `CMAKE_COMPILE_WARNING_AS_ERROR`, so the compiler treats warnings as errors. The CMake build does not force this setting on a parent project.
 
-`SOSIG_SANITIZER` accepts `none`, `address`, or `thread`. The `address` option enables AddressSanitizer and UndefinedBehaviorSanitizer. The `thread` option enables ThreadSanitizer. It adds sanitizer options to standard CMake configurations. It does not create custom build types.
+### Sanitizers
 
-The address-sanitizer profile instruments first-party and vendored code. Vendored code disables the unsupported `null` and `object-size` checks. First-party sources retain the full sanitizer set.
+`SOSIG_SANITIZER` accepts `none`, `address` or `thread`. `address` enables AddressSanitizer and UndefinedBehaviorSanitizer, and `thread` enables ThreadSanitizer. The option adds flags to the standard CMake configurations and does not create custom build types.
+
+With `address`, the CMake build instruments first-party code and vendored code. For vendored code, it turns off the `null` and `object-size` checks, because vendored code does not support these checks. For the tree-sitter runtime, it also turns off the `function` check, because the runtime calls the `create` function of each grammar scanner, and this function has no prototype. First-party code keeps every check.
 
 ## Grammars
 
-`SOSIG_GRAMMARS` chooses the tree-sitter grammars the build links. Empty, its default, it links every grammar, as the release builds do. A list links only the grammars it names, each the name of one `sosig_add_tree_sitter_grammar` call in `vendor/CMakeLists.txt`: `c`, `bash`, `html`, `css`, `javascript`, `typescript`, `tsx` and `json`. A code block in a language whose grammar the build leaves out is only escaped, as one in a language sosig has no grammar for.
+`SOSIG_GRAMMARS` selects the tree-sitter grammars that the `sosig` binary links. The default is an empty value, which links every grammar, as in the release archives. A list links only the grammars that it names, and each name in the list must be the name of one `sosig_add_tree_sitter_grammar` call in `vendor/CMakeLists.txt`. These names are `c`, `bash`, `html`, `css`, `javascript`, `typescript`, `tsx` and `json`. If the binary does not link the grammar for the language of a code block, `sosig` only escapes the block, as it does for a language that has no grammar.
 
 ```sh
 cmake --preset release -B build/release-small -DSOSIG_GRAMMARS="c;bash"
 cmake --build build/release-small -j 8
 ```
 
-TypeScript and TSX are separate grammars. Either builds without `javascript`, because their queries read JavaScript's query files from `vendor/` whichever grammars the build selects.
+TypeScript and TSX are separate grammars. You can select either of them without `javascript`. Their queries include query files of the JavaScript grammar, and the CMake build reads these files from `vendor/` for every value of `SOSIG_GRAMMARS`.
 
-A name of no grammar stops the configure. So does any list while `SOSIG_BUILD_TESTING` is on, because the tests need every grammar.
+The configure step stops with an error when a name matches no grammar. It also stops with an error when `SOSIG_GRAMMARS` is not empty and `SOSIG_BUILD_TESTING` is on, because the tests need every grammar.
 
-`sosig --version` lists the grammars a binary links. The build cache records them too, so the first build of a site by a binary of another set makes every page again.
+Each selected grammar is a static library, `sosig_vendor_tree_sitter_<name>`. This library holds the highlight queries of the grammar as an embedded byte array. `vendor/CMakeLists.txt` generates `tree_sitter_grammars.h`, which declares the language, the queries and the names of each selected grammar. [src/formats/highlight.c](src/formats/highlight.c) defines its table of grammars from this header.
 
-`vendor/CMakeLists.txt` generates `tree_sitter_grammars.h`, which declares the selected grammars' languages, queries and names, and `src/formats/highlight.c` builds its table of grammars from it.
+`sosig --version` lists the grammars that the binary links. The build cache also records these grammars. When a binary with a different set of grammars builds a site, the first build renders every page again.
 
 ## Linting and formatting
 
-CMake sets `clang-tidy` and `cppcheck` as properties of first-party targets. Neither tool checks vendored sources. cppcheck reads the vendored `sharedstuff` headers to expand `STR_FMT`. It also analyzes the inline functions those headers define.
+When this repository is the top-level CMake project, the `C_CLANG_TIDY` and `C_CPPCHECK` properties of the first-party targets make CMake run `clang-tidy` and `cppcheck` while it compiles these targets. Neither tool checks vendored code. The include path of `cppcheck` contains the vendored `sharedstuff` headers, because `cppcheck` needs these headers to expand `STR_FMT`. Thus `cppcheck` also analyzes the inline functions that these headers define.
 
-Tests run `cppcheck`. Tests do not run `clang-tidy` because deliberate failure cases cause analyzer errors.
-
-Cross builds do not run either host analyzer. Zig supplies target headers that the host analyzers cannot find when they repeat the compile command.
+Test targets run `cppcheck` but not `clang-tidy`, because their intentional failure cases cause analyzer errors. When CMake cross-compiles, neither tool runs. Zig supplies the headers for the target platform, and the analyzers on the host cannot find these headers when they repeat the compile command. When the compiler is not Clang, the CMake build turns off `clang-tidy`, because `clang-tidy` reads the compile command and rejects GCC-only warning options such as `-Wlogical-op`. `cppcheck` runs with any compiler.
 
 The `sosig_format` and `sosig_lint` targets run `clang-format` and then `cwrap`, which refills comment prose to 100 columns, the `.clang-format` column limit. Either tool is skipped when it is not installed. CI and the Linux image install a pinned `cwrap` release.
 
-Both targets use an explicit list of first-party files. Add each new source or test to its target and this list.
-
-This duplication is deliberate. A configure-time glob can omit a new file until CMake configures the project again.
+Both targets run both tools on the first-party files in an explicit list, `sosig_owned_sources` in `cmake/sosig_quality.cmake`. They also run both tools on the template [src/core/sosig_version.c.in](src/core/sosig_version.c.in), which `clang-format` reads as `sosig_version.c` because of `--assume-filename`. When you add a source file or a test file, add it to this list and to its target. A glob at configure time would not find a new file until CMake configures the project again.
 
 ## Tests
 
-`SOSIG_BUILD_TESTING` controls test creation. It is true by default for a top-level build. It is false by default for a child build. The tests need every tree-sitter grammar, as [Grammars](#grammars) describes.
+`SOSIG_BUILD_TESTING` controls whether CMake defines the tests. It is on by default when this repository is the top-level CMake project, and off by default when a parent project adds this repository as a subproject. The tests need every tree-sitter grammar, as [Grammars](#grammars) describes.
 
-Each source directory adds its local unit tests. The top-level `tests/` directory adds the golden test suite, `sosig_test_support`, and the in-memory host `sosig_os_memory`. Each CTest case has a `sosig` label. It also has a `unit` or `golden` label.
+Each source directory adds its own unit tests. `tests/` adds the golden tests, `sosig_test_support` and `sosig_os_memory`. Every CTest case has the label `sosig`, and also the label `unit` or `golden`.
 
-`sosig_add_unit_test` takes `OS memory` to link the in-memory host, and then compiles the test with `SOSIG_TEST_OS_MEMORY` set to 1. Every unit test registered without `OS memory` links the POSIX host: the POSIX layer's own tests and the test-support test, which need a real filesystem; the suites that build their fixtures in a real temporary directory; and the tests that reach no host. New tests use the in-memory host. `sosig_add_unit_test` also takes `NAME` when one source builds more than one test. `src/runtime/test_os.c` uses both: it builds `sosig.os_posix`, which works in a real temporary directory, and `sosig.os_memory`. These are the contract tests of `runtime/os.h`. Both must pass. Each unit test has a CTest timeout of 60 seconds, so a test that hangs fails instead of stopping the run.
+### Unit tests
 
-`sharedstuff` has its own compile-fail tests for `buf_printf` and `log_error`. They check that a call whose arguments disagree with its format does not compile: a raw `struct Str` for `%.*s`, a missing argument, a `ptrdiff_t` for `%d`, a format that is not a literal, a non-string given to `STR_FMT`, and a disagreement through a forwarding wrapper. They run in the `sharedstuff` repository. The vendored copy holds no tests.
+`sosig_add_unit_test(<module>)` compiles `test_<module>.c` into the executable `sosig_unit_<module>`, and registers this executable as the CTest case `sosig.<module>`. The executable links `sosig_build_tests`, acutest, `sosig_test_support`, `sosig_app` and one host.
 
-`sosig_test_support` holds the unit-test plumbing that several `test_*.c` files need: a fixture-root creator, a recursive fixture-tree remover, a fixture-file writer, a working-directory switch, standard-stream capture and restore, an arena over a fresh reservation, a log over a fresh reservation and exact-text log checks, and an out-of-memory check. It also defines the unit-test `os_oom`, which exits with a status of its own, so `test_is_oom` can run code in a child process and tell running out of memory apart from a crash. It is an object library, so that definition is linked into every test executable whatever the link order. Its own unit test is `tests/test_test_support.c`. `test_support.c` defines `TEST_NO_MAIN`, so acutest's `main` and run state stay in each test executable's own translation unit and the link resolves acutest's declarations, such as `acutest_check_`, `acutest_message_` and `acutest_abort_`, against it. A failure raised inside the support library is reported against `test_support.c` and fails the test that reached it.
+With the `OS memory` option, `sosig_add_unit_test` links the in-memory host and compiles the test with `SOSIG_TEST_OS_MEMORY` set to 1. New tests use this option. The tests registered without `OS memory` link the POSIX host. These tests are:
 
-A parent that enables `sosig` tests must call `enable_testing()` in its top-level `CMakeLists.txt`. CTest starts discovery at the build root. A child call cannot create the root test file. CMake prints this requirement when a child enables tests.
+- the tests that need a real filesystem: `fs` and `os_posix`, which test the POSIX layer; `test_support`, which tests the test-support library; and `output_pruner_case`, which tests the prune on a case-insensitive `/tmp` and skips on a case-sensitive `/tmp`
+- the suites that are not yet converted to the in-memory host, which create their fixtures in a real temporary directory: `cli`, `cli_dispatch`, `cmd_config`, `entry_renderer`, `site_config` and `template`
+- the tests that use no host
 
-Each unit test links the same `sosig_app` as the executable. No test target compiles an application source a second time with different definitions. The production render limit is 256 MiB, and a failure test at this limit uses too much memory. The template test passes a 64 KiB limit to `template_render_file_limited` instead.
+When one source file compiles into more than one executable, the `NAME` option sets the name of each executable and its test. [src/runtime/test_os.c](src/runtime/test_os.c) uses both options. It compiles into two tests: `sosig.os_posix`, which works in a real temporary directory, and `sosig.os_memory`. These tests are the contract tests of `src/runtime/os.h`, and both tests must pass.
 
-Each golden test uses a separate scratch tree. It builds the site twice and verifies that the second build leaves every generated file unchanged. The CMake script then compares the output inventory with `tests/expected/<name>` and compares every file byte for byte.
+Each unit test has a CTest timeout of 60 seconds, so a test that hangs fails and does not block the test run.
 
-The CMake script collects expected and actual files after `sosig` runs. These runtime globs are not build inputs. Fixture site changes do not require CMake to configure the project again.
+No test target compiles an application source file a second time with different definitions. The production render limit is 256 MiB, and a failure test at that limit uses too much memory. Thus the template test passes a 64 KiB limit to `template_render_file_limited`, and does not compile the template code again with a smaller limit.
 
-## Version
+### Test-support library
 
-CMake stores the numeric release version once in `project(VERSION)`. It generates one source file that defines `sosig_version_string()` and `sosig_generator_string()`. A version change rebuilds this source file and relinks its targets.
+`sosig_test_support` holds the helpers that several `test_*.c` files need:
 
-Release versions use `MAJOR.MINOR.PATCH`. The `project(VERSION)` command accepts only numeric components. A prerelease suffix requires a second version value.
+- functions that create a fixture root, write a fixture file and remove a fixture tree recursively
+- functions that enter a working directory and go back to the previous one
+- functions that capture and restore the standard streams
+- functions that make an arena or a log over a fresh reservation, and checks that compare the text of a log exactly
+- an out-of-memory check, `test_is_oom`
 
-## Install
+The library also defines the `os_oom` of the unit tests. This `os_oom` exits with its own exit status, so `test_is_oom` can run code in a child process and tell an out-of-memory exit apart from a crash. The library is an object library, so that this definition links into every test executable in any link order. The unit test of the library is [tests/test_test_support.c](tests/test_test_support.c).
 
-The install contains the executable and its documentation. Both use the `sosig_runtime` component.
+[tests/test_support.c](tests/test_support.c) defines `TEST_NO_MAIN`, so the `main` function and the run state of acutest stay in the translation unit of each test executable. The library uses acutest declarations such as `acutest_check_`, `acutest_message_` and `acutest_abort_`, and the linker resolves these declarations against that translation unit. When a check in the library fails, acutest reports the failure against `test_support.c`, and the test that called the library fails.
 
-The project has no export set or development component because it does not install a library or header. `GNUInstallDirs` selects the install paths.
+### Golden tests
 
-## Packaging
+`sosig_fixture_sites` in `tests/CMakeLists.txt` lists the fixture sites in `tests/fixtures/`. Each fixture site is the golden test `sosig.golden.<site>`. `cmake/sosig_run_golden.cmake` does these steps:
 
-### Release packages
+1. It copies the site into a scratch tree of its own.
+2. It puts stale files in the output. The first build must remove these files.
+3. It builds the site three times. The second build reuses the build cache, and the third build passes `--force`. These two builds must not change a generated file.
+4. It compares the list of output files with `tests/expected/<site>`, and it compares every file byte for byte.
 
-CPack creates packages for the different targets `sosig-<version>-<target>.tar.gz`.
+The comparison leaves out the build cache, `_sosig/v1-build-cache.tsv`, which holds the modification times of the copied sources and has no expected copy.
 
-The macOS deployment target is `13.0` by default. A builder can select a newer target through the cache.
+The script finds the expected files and the actual files with globs after `sosig` runs. These globs run in the test and are not inputs of the CMake build, so a change to a fixture does not require CMake to configure the project again.
 
-Linux `musl` builds use the two Zig toolchain files. These files select `llvm-strip` because a host strip tool cannot read the cross-built ELF files.
+### Format checks in sharedstuff
 
-### Source package
+`sharedstuff` has its own compile-fail tests for `buf_printf` and `log_error`. These tests check that a call does not compile when its arguments do not match its format. The test cases are:
 
-CPack can also create a source package `sosig-<version>-source.tar.gz`. The ignore list keeps CPack's repository and temporary-file exclusions. It also omits build products.
+- a raw `struct Str` for `%.*s`
+- a missing argument
+- a `ptrdiff_t` for `%d`
+- a format that is not a literal
+- a value that is not a string, given to `STR_FMT`
+- a mismatch through a forwarding wrapper
+
+These tests run in the `sharedstuff` repository. The vendored copy holds no tests.
+
+### Tests in a parent build
+
+A parent project that turns on the `sosig` tests must call `enable_testing()` in its top-level `CMakeLists.txt`. CTest starts to find tests at the root of the build directory, and a call to `enable_testing()` in a subproject cannot create the test file at that root. When a subproject turns on its tests, CMake prints this requirement.
+
+## Releases
+
+### Version
+
+`project(VERSION)` in `CMakeLists.txt` holds the only copy of the numeric release version. CMake generates one source file from `src/core/sosig_version.c.in`, and this file defines `sosig_version_string()` and `sosig_generator_string()`. When the version changes, CMake compiles this file again and links the targets that use it again.
+
+Release versions have the form `MAJOR.MINOR.PATCH`. `project(VERSION)` accepts only numeric components, so a prerelease suffix needs a second version value.
+
+### Install
+
+The installation contains the executable and its documentation files, `README.md`, `LICENSE.txt` and `THIRD_PARTY_NOTICES.md`. All of these files are in the `sosig_runtime` component. `GNUInstallDirs` selects the install paths. The project installs no library and no header, so it has no export set and no development component.
+
+### Packages
+
+CPack creates one stripped archive for each release target, `sosig-<version>-<target>.tar.gz`. The cache variable `SOSIG_RELEASE_TARGET` names the release target, for example `x86_64-linux-musl` in a Linux preset.
+
+The macOS deployment target, `CMAKE_OSX_DEPLOYMENT_TARGET`, is `13.0` by default. You can set a higher value in the CMake cache.
+
+The Linux `musl` presets cross-compile with the Zig toolchain files in `cmake/toolchains/`. These files select `llvm-strip`, because the strip tool of the host cannot read the cross-compiled ELF files.
+
+The source archive, `sosig-<version>-source.tar.gz`, keeps the default CPack exclusions for version-control directories and temporary files. It also leaves out `build/` and `CMakeUserPresets.json`.
