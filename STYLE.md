@@ -82,7 +82,7 @@ This guide takes its ideas and conventions from these sources:
   - Test code is the exception where its arguments are literals. The fixture APIs in `tests/os_memory.h` and `tests/test_support.h`, the `contract_*` helpers in `src/runtime/test_os.c`, and the helpers of a test file take and return paths, expected text, and messages as C strings, so that a test can write its tree and its expectations as literals.
     - A fixture whose contents can hold any byte takes the contents as a `struct Str`: `contract_write` and `contract_is_file`.
     - The capture helpers in `tests/test_support.h` fill a terminated `char` buffer that the caller supplies. That buffer's `ptrdiff_t` length converts to `size_t` one time, at `fread`.
-- Make every length, count, index, and offset `ptrdiff_t`. Convert a value to a C string or to `size_t` only at the call into libc, POSIX, or a vendored API, with one explicit conversion there, such as `copy_cstr` in `runtime/fs.c` or `(size_t)s.len`. Assert that the value is non-negative where its construction does not already guarantee that.
+- Make every length, count, index, and offset `ptrdiff_t`. Convert a value to a C string or to `size_t` only at the call into libc, POSIX, or a vendored API, with one explicit conversion there, such as `copy_cstr` in `runtime/fs.c` or `(size_t)s.len`. Assert that the value is non-negative where its construction does not already guarantee that. `argc` stays the `int` that `main` receives and `copt` takes.
 - Order struct fields to make ownership and invariants obvious:
   - Put lifecycle-owned backing storage first.
   - Keep pointer/count/capacity fields and value/presence-flag pairs adjacent, in that order.
@@ -169,7 +169,7 @@ This guide takes its ideas and conventions from these sources:
 
 ### Wording
 
-- Keep diagnostics lowercase and without trailing periods. A proper noun keeps its capital letter in every position, including at the start (see the naming rule in [Comments](#comments)).
+- Keep diagnostics lowercase and without trailing periods. A proper noun keeps its capital letter in every position, including at the start, as in `Org keyword 'draft' must be 'true' or 'false'` (see the naming rule in [Comments](#comments)).
 - Relay a message that comes from the operating system or a vendored library exactly as that source spells it, so that the text that a user reports can be found in the source that produced it.
 - Quote literal names and user-visible values with single quotes, including paths, template names, config keys, frontmatter keys, and environment variables.
 - Lead with the failed operation, then the relevant key, then the cause, such as `config key 'feed_count' must be an integer` or `frontmatter key 'title' must be a string`. A content path, an output path, a template name, or a raw argument goes last instead, after the cause. Name the subject in words and put the value at the end, as in `failed to read config: No such file or directory ('sosig.toml')`. A filesystem action receives the operation that starts the message and writes the rest of the message itself, because only the action knows which path failed.

@@ -155,6 +155,7 @@ Each item below links to the module's header, which documents its interface. The
 - [os](src/runtime/os.h): The host interface. Every read, write, directory creation, removal, listing, `stat` and print that the program does goes through `os_read`, `os_write`, `os_mkdirs`, `os_remove`, `os_remove_dir`, `os_list`, `os_stat` and `os_print`. Each function that accesses the host takes a `struct Os*`.
   - `os_read` takes a size limit from each caller, and checks it before any read or allocation. It rejects a file that is not a regular file, a file that contains a `NUL`, and a file that changes size during the read.
   - `os_write` writes either bytes or the contents of a file that it streams, and it creates parent directories. It overwrites its destination in place, through a symlink or a hard link, and the write is neither atomic nor synced, as [The `os` interface](#the-os-interface) explains. A new file gets mode `0666` reduced by the process umask.
+  - `os_stat` reports identity, type, size, and modification time.
   - `os_list` closes a directory before it returns. It classifies each directory entry, and for a symlink it classifies the target. It skips dangling links, and directory entries that were removed after it read them.
   - `os_print` carries every byte that the program prints: the log at the end of a command, a rejected command line, `--help` and `--version`, the resolved config, the verbose status lines, and the workers' progress lines, so a test on the in-memory host sees all of it. One call writes its text as a whole. A caller that prints from more than one thread holds its own lock around the call.
   - `os_oom` is the one other member. `sharedstuff` declares it, and each program defines it.
@@ -371,19 +372,18 @@ log_error(log, "failed to read template: %s ('%.*s')", reason, STR_FMT(template_
 
 ### The `os` interface
 
-**Decision.** All host access goes through `src/runtime/os.h`. `fs.c` is the POSIX implementation. [tests/os_memory.c](tests/os_memory.c) is an in-memory implementation for unit tests: an in-memory tree with symlinks, hard links, injected failures, and captured output. The link step selects one implementation for each executable. A function that accesses the host takes `struct Os*` just before its arenas, and an `os_*` function takes it first.
+**Decision.** All host access goes through `src/runtime/os.h`. `fs.c` is the POSIX implementation. [tests/os_memory.c](tests/os_memory.c) is an in-memory implementation for unit tests: an in-memory tree with symlinks, hard links, a modification-time counter, injected failures, and captured output. The link step selects one implementation for each executable. A function that accesses the host takes `struct Os*` just before its arenas, and an `os_*` function takes it first.
 
 **Reasons.**
 
-- Tests of the walk, the manifest, and the writes need no temporary directories.
-- A fuzzing harness can drive the manifest logic without disk access.
+- Tests of the walk, the manifest, the pages, the writes, and the prune need no temporary directories.
 - A link-time choice needs no table of function pointers, because no executable needs two hosts.
 
 **Linking.** `sosig` and every unit test registered without `OS memory` link `runtime/fs.c`. The tests registered with `OS memory` link `tests/os_memory.c`, as [BUILD.md](BUILD.md#unit-tests) lists.
 
 **Condition.** Each property that a test checks against the in-memory host must have a contract test. `src/runtime/test_os.c` compiles once against each host and runs the same cases, and both executables must pass, so every property that a test relies on in the in-memory host is also true on POSIX. Without the contract tests, the in-memory host can accept what POSIX rejects. For example, an in-memory host could accept `file/` as a file where POSIX returns `ENOTDIR`, and a contract test checks this case.
 
-**Writes.** `os_write` writes either bytes or a file that it streams in 64 KiB pieces. `os_write`, `os_mkdirs`, `os_remove` and `os_remove_dir` are the only operations that change the host. A copy is an `os_write` from a file, and has no operation of its own. `os_write` writes every output in place, through a symlink or a hard link at the destination, and the write is neither atomic nor synced, so an interrupted build can leave a truncated file. Because the output directory is reproducible, deleting `output_dir` and building again is a cheaper recovery than a temporary-file protocol.
+**Writes.** `os_write` writes either bytes or a file that it streams in 64 KiB pieces. `os_write`, `os_mkdirs`, `os_remove` and `os_remove_dir` are the only operations that change the host. A copy is an `os_write` from a file, and has no operation of its own. `os_write` writes every output in place, through a symlink or a hard link at the destination, and the write is neither atomic nor synced, so an interrupted build can leave a truncated file. Because the output directory is reproducible, deleting `output_dir` and building again is a cheaper recovery than a temporary-file protocol. `os_stat` reports the size and modification time that the build cache reads.
 
 ### Where the shared code lives
 

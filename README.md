@@ -128,14 +128,17 @@ These checks compare the directories themselves, not the text of the paths, so t
 
 ### Dry run
 
-`sosig build --dry-run` runs every phase of a build and renders every template. But it changes nothing in `output_dir`, and it does not create `output_dir`. For each path that the build would change, it prints one line to `stdout`. Each line has a mark, a tab, and the path:
+`sosig build --dry-run` runs every phase of a build and renders every template. But it changes nothing in `output_dir`, and it does not create `output_dir`. For each path that the build would change or keep, it prints one line to `stdout`. Each line has a mark, a tab, and the path. This is a shortened listing:
 
 ```
-write	public/about/index.html
+write	public/new-post.html
+keep	public/about.html
 write	public/index.html
-write	public/feed.xml
-remove	public/old-post
-remove	public/old-post/index.html
+write	public/atom.xml
+write	public/robots.txt
+write	public/_sosig/v1-build-cache.tsv
+remove	public/notes
+remove	public/notes/old-post.html
 ```
 
 | Mark | Meaning |
@@ -172,7 +175,7 @@ The next build keeps a content page, and does not render it again, if its conten
 
 Every build still converts the Markdown or Org of every content file.
 
-Some tools, such as `exiftool -P`, change a file but keep its size and modification time. After such a change, the build can keep a page that no longer matches its content file. To correct this, run `sosig build --force` once. That build renders every page again and writes a new build cache.
+Some tools change a file but keep its size and modification time. After such a change, the build can keep a page that no longer matches its content file. To correct this, run `sosig build --force` once. That build renders every page again and writes a new build cache.
 
 When you publish `output_dir`, you also publish the build cache. Its output paths are already public, but it also contains the names of the template files, and the size and modification time of each content file and template. If you do not want to publish this information, exclude `_sosig/v1-build-cache.tsv` when you deploy.
 
