@@ -15,12 +15,20 @@
     <article>
       <h1>Code Block</h1>
       <p class="meta">2026-07-28T09:00:00-07:00 · code</p>
-      <pre><code class="language-c">#include &lt;stdio.h&gt;
+      <pre><code class="language-c"><span class="tok-keyword">#include</span> <span class="tok-string">&lt;stdio.h&gt;</span>
 
-int main(void) {
-    puts(&quot;hello&quot;);
-    return 0;
+<span class="tok-type">int</span> <span class="tok-function">main</span>(<span class="tok-type">void</span>) {
+    <span class="tok-function">puts</span>(<span class="tok-string">&quot;hello&quot;</span>)<span class="tok-delimiter">;</span>
+    <span class="tok-keyword">return</span> <span class="tok-number">0</span><span class="tok-delimiter">;</span>
 }
+</code></pre>
+<pre><code class="language-sh"><span class="tok-function">cc</span> <span class="tok-constant">-o</span> hello hello.c <span class="tok-operator">&amp;&amp;</span> <span class="tok-function">./hello</span> <span class="tok-constant">--verbose</span> <span class="tok-string">&quot;</span><span class="tok-operator">$</span><span class="tok-property">USER</span><span class="tok-string">&quot;</span>
+</code></pre>
+<pre><code class="language-jsx"><span class="tok-keyword">const</span> <span class="tok-constructor">Greeting</span> <span class="tok-operator">=</span> <span class="tok-punctuation-bracket">({</span> <span class="tok-variable-parameter">name</span> <span class="tok-punctuation-bracket">})</span> <span class="tok-operator">=&gt;</span> <span class="tok-punctuation-bracket">&lt;</span><span class="tok-tag">p</span> <span class="tok-attribute">className</span><span class="tok-operator">=</span><span class="tok-string">&quot;hi&quot;</span><span class="tok-punctuation-bracket">&gt;{</span><span class="tok-variable">name</span><span class="tok-punctuation-bracket">}&lt;/</span><span class="tok-tag">p</span><span class="tok-punctuation-bracket">&gt;</span><span class="tok-punctuation-delimiter">;</span>
+</code></pre>
+<pre><code class="language-tsx"><span class="tok-keyword">function</span> <span class="tok-function">greet</span><span class="tok-punctuation-bracket">(</span><span class="tok-variable-parameter">name</span>: <span class="tok-type-builtin">string</span><span class="tok-punctuation-bracket">)</span>: <span class="tok-type">JSX</span><span class="tok-punctuation-delimiter">.</span><span class="tok-type">Element</span> <span class="tok-punctuation-bracket">{</span> <span class="tok-keyword">return</span> <span class="tok-punctuation-bracket">&lt;</span><span class="tok-tag">b</span><span class="tok-punctuation-bracket">&gt;{</span><span class="tok-variable">name</span><span class="tok-punctuation-bracket">}&lt;/</span><span class="tok-tag">b</span><span class="tok-punctuation-bracket">&gt;</span><span class="tok-punctuation-delimiter">;</span> <span class="tok-punctuation-bracket">}</span>
+</code></pre>
+<pre><code class="language-text">A block in a &lt;language&gt; with no grammar is only escaped.
 </code></pre>
 
     </article>

@@ -10,8 +10,9 @@ target_include_directories(
   sosig_vendor_copt SYSTEM INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/copt>"
 )
 
-# md4c, org4c, mustache4c and tomlc17 shape every page, so a change to the pinned version of one of
-# them bumps `PAGE_RECIPE_VERSION` in `src/domain/build_cache.h`, which makes every page again.
+# md4c, org4c, mustache4c, tomlc17, and tree-sitter and its grammars shape every page, so a change
+# to the pinned version of one of them bumps `PAGE_RECIPE_VERSION` in `src/domain/build_cache.h`,
+# which makes every page again.
 add_library(sosig_vendor_md4c STATIC md4c/md4c.c)
 target_include_directories(
   sosig_vendor_md4c SYSTEM PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/md4c>"

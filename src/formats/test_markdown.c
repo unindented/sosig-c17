@@ -76,11 +76,13 @@ static void test_renders_math(void) {
       S("<p><x-equation>a</x-equation> and <x-equation type=\"display\">b</x-equation></p>\n")));
 }
 
-// A plain code block gives the same HTML as in Org, which `test_org.c` checks with the same
+// A code block gives the same highlighted HTML as in Org, which `test_org.c` checks with the same
 // expected HTML.
 static void test_renders_code_block(void) {
   TEST_CHECK(str_eq(render_markdown("```c\nint x;\n```\n"),
-                    S("<pre><code class=\"language-c\">int x;\n</code></pre>\n")));
+                    S("<pre><code class=\"language-c\"><span class=\"tok-type\">int</span> <span "
+                      "class=\"tok-variable\">x</span><span "
+                      "class=\"tok-delimiter\">;</span>\n</code></pre>\n")));
 }
 
 // Headings at the first two levels give the same HTML as in Org, which `test_org.c` checks with the

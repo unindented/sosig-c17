@@ -94,13 +94,17 @@ static void test_math_marks_display_formulas(void) {
                     S("<x-equation>a</x-equation><x-equation type=\"display\">b</x-equation>")));
 }
 
-// A code block names its language in a `language-` class, and its code is escaped.
+// A code block names its language in a `language-` class, and a language with a grammar has its
+// code highlighted. `test_highlight.c` checks each grammar's spans.
 static void test_code_block_names_language(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_code_block_write(&buf, S("c"), S("a < b;\n"));
-  TEST_CHECK(
-      str_eq(buf_str(&buf), S("<pre><code class=\"language-c\">a &lt; b;\n</code></pre>\n")));
+  body_html_code_block_write(&buf, S("c"), S("a < b;\n"), test_arena());
+  TEST_CHECK(str_eq(buf_str(&buf),
+                    S("<pre><code class=\"language-c\"><span class=\"tok-variable\">a</span> "
+                      "<span class=\"tok-operator\">&lt;</span> <span "
+                      "class=\"tok-variable\">b</span><span "
+                      "class=\"tok-delimiter\">;</span>\n</code></pre>\n")));
 }
 
 // A heading at level 5 or deeper stays at `<h6>`, HTML's last level.
@@ -137,10 +141,29 @@ static void test_footnote_without_references_has_no_backrefs(void) {
 static void test_code_block_class_variants(void) {
   struct Arena arena = test_arena();
   struct Buf buf = {.arena = &arena};
-  body_html_code_block_write(&buf, S(""), S("x\n"));
-  body_html_code_block_write(&buf, S("language-c"), S("y\n"));
+  body_html_code_block_write(&buf, S(""), S("x\n"), test_arena());
+  body_html_code_block_write(&buf, S("language-unknown"), S("y\n"), test_arena());
   TEST_CHECK(str_eq(buf_str(&buf), S("<pre><code>x\n</code></pre>\n"
-                                     "<pre><code class=\"language-c\">y\n</code></pre>\n")));
+                                     "<pre><code class=\"language-unknown\">y\n</code></pre>\n")));
+}
+
+// A language with no grammar keeps its class, and its code is only escaped.
+static void test_code_block_unknown_language_is_escaped(void) {
+  struct Arena arena = test_arena();
+  struct Buf buf = {.arena = &arena};
+  body_html_code_block_write(&buf, S("unknown"), S("a < b;\n"), test_arena());
+  TEST_CHECK(
+      str_eq(buf_str(&buf), S("<pre><code class=\"language-unknown\">a &lt; b;\n</code></pre>\n")));
+}
+
+// The region a converter highlights in is twice the highlighter's limit, or half its scratch's free
+// space when that is smaller, and the scratch keeps the rest.
+static void test_code_block_scratch_halves_small_arena(void) {
+  struct Arena scratch = test_arena();
+  const ptrdiff_t free_len = scratch.limit - scratch.beg;
+  const struct Arena region = body_html_code_block_scratch(&scratch);
+  TEST_CHECK(region.limit - region.beg == free_len / 2);
+  TEST_CHECK(scratch.limit - scratch.beg == free_len - free_len / 2);
 }
 
 // `&` becomes a character reference, so the attribute stays valid HTML, and every other byte a URL
@@ -166,6 +189,8 @@ TEST_LIST = {
     {"footnote without references has no backrefs",
      test_footnote_without_references_has_no_backrefs},
     {"code block class variants", test_code_block_class_variants},
+    {"code block unknown language is escaped", test_code_block_unknown_language_is_escaped},
+    {"code block scratch halves small arena", test_code_block_scratch_halves_small_arena},
     {"url escape encodes other bytes", test_url_escape_encodes_other_bytes},
     {NULL, NULL},
 };

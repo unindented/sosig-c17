@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "shared/arena.h"
 #include "shared/str.h"
 
 struct Buf;
@@ -148,15 +149,33 @@ void body_html_math_open(struct Buf* buffer, bool is_display) __attribute__((non
 void body_html_math_close(struct Buf* buffer) __attribute__((nonnull(1)));
 
 /**
- * @brief Writes a code block, HTML-escaped, with a `language-` class when it names its language.
+ * @brief Splits off a converter's scratch the region its code blocks are highlighted in.
  *
- * A language that already starts with `language-` does not get the prefix twice.
+ * The region is twice `HIGHLIGHT_MEMORY_LEN_MAX`, the most one block's highlighting may take, or
+ * half the free space of `scratch` when that is smaller, as in a unit test or a halved reservation.
+ * None of the converter's own buffers grows in it, so a block can be highlighted while one of them,
+ * such as a footnote's, receives the HTML.
+ *
+ * @param scratch Converter's scratch, which keeps the rest of its free space. Must not be `NULL`.
+ * @return An arena over the region, which `body_html_code_block_write` takes by value.
+ */
+struct Arena body_html_code_block_scratch(struct Arena* scratch) __attribute__((nonnull(1)));
+
+/**
+ * @brief Writes a code block, with a `language-` class when it names its language, and its code
+ *        highlighted when the language has a grammar.
+ *
+ * A language that already starts with `language-` does not get the prefix twice. The code of a
+ * block whose language has no grammar, or names none, is only HTML-escaped.
  *
  * @param buffer   Destination buffer. Must not be `NULL`.
  * @param language Language, such as `c`, or empty when the block names none.
  * @param code     Code, every line ending in `\n`.
+ * @param scratch  Region from `body_html_code_block_scratch`, for highlighting the code.
  */
-void body_html_code_block_write(struct Buf* buffer, struct Str language, struct Str code)
-    __attribute__((nonnull(1)));
+void body_html_code_block_write(struct Buf* buffer,
+                                struct Str language,
+                                struct Str code,
+                                struct Arena scratch) __attribute__((nonnull(1)));
 
 #endif

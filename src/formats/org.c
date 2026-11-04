@@ -14,6 +14,8 @@
 #include "shared/buf.h"
 #include "shared/str.h"
 
+_Static_assert((uintmax_t)ORG_INPUT_LEN_MAX <= UINT32_MAX,
+               "a code block must fit tree-sitter's 32-bit lengths");
 _Static_assert((uintmax_t)ORG_INPUT_LEN_MAX <= (uintmax_t)(ORG_SIZE)-1,
                "the product cap must stay inside org4c's addressable input range");
 
@@ -127,6 +129,9 @@ struct OrgRender {
 
   /** Text of a plain source block, held in scratch and written whole when the block ends. */
   struct Buf code;
+
+  /** Region of scratch a code block is highlighted in, in which no buffer of the render grows. */
+  struct Arena code_scratch;
 
   /** Buffer every write goes to: `html`, `footnote` while one is held, or `caption`. */
   struct Buf* output;
@@ -878,6 +883,7 @@ struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
       .export_flags = export_flags,
   };
   render.output = &render.html;
+  render.code_scratch = body_html_code_block_scratch(&scratch);
   // This is the one boundary where org4c's error convention becomes this project's. `org_parse`
   // fails only when its own allocation fails or a callback aborts, and these callbacks never abort,
   // so a failure here is the same condition as `perm` running out.
@@ -1131,7 +1137,8 @@ static int org_to_html_leave_block(ORG_BLOCKTYPE type, void* detail, void* userd
       break;
     case ORG_BLOCK_SRC:
       if (render->is_source_held) {
-        body_html_code_block_write(render->output, render->source_language, buf_str(&render->code));
+        body_html_code_block_write(render->output, render->source_language, buf_str(&render->code),
+                                   render->code_scratch);
         render->is_source_held = false;
         render->is_source_pending = false;
       } else {

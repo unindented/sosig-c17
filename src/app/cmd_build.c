@@ -23,6 +23,7 @@
 #include "domain/content_entry.h"
 #include "domain/manifest.h"
 #include "domain/site_config.h"
+#include "formats/highlight.h"
 #include "runtime/memory.h"
 #include "runtime/os.h"
 #include "runtime/pool.h"
@@ -54,10 +55,17 @@ _Static_assert(PTRDIFF_MAX > 0xffffffff, "the arenas below need a 64-bit address
 
 /**
  * Bytes of each thread's scratch, which holds one job's temporaries, at most a source of
- * `CONTENT_FILE_LEN_MAX` and its frontmatter copy, or a render in which a partial that includes
- * itself reaches the expansion limit long before the arena is full.
+ * `CONTENT_FILE_LEN_MAX` and its frontmatter copy, then its converter's held code, which grows by
+ * doubling to at most twice the source, and the region its code blocks are highlighted in, twice
+ * `HIGHLIGHT_MEMORY_LEN_MAX`: 1.25 GiB together. Or it holds a render in which a partial that
+ * includes itself reaches the expansion limit long before the arena is full.
  */
 #define BUILD_SCRATCH_LEN (3 * 1024 * BUILD_MIB)
+
+_Static_assert(4 * (ptrdiff_t)CONTENT_FILE_LEN_MAX + 2 * (ptrdiff_t)HIGHLIGHT_MEMORY_LEN_MAX <=
+                   BUILD_SCRATCH_LEN,
+               "a worker's scratch must hold a source, its frontmatter, its held code and the "
+               "region its code blocks are highlighted in");
 
 /** Most workers the build starts for each online CPU, however many are requested. */
 enum { BUILD_WORKER_PER_CPU_MAX = 4 };

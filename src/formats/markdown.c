@@ -14,6 +14,8 @@
 
 _Static_assert((uintmax_t)MARKDOWN_INPUT_LEN_MAX <= (uintmax_t)(MD_SIZE)-1,
                "the product cap must stay inside md4c's addressable input range");
+_Static_assert((uintmax_t)MARKDOWN_INPUT_LEN_MAX <= UINT32_MAX,
+               "a code block must fit tree-sitter's 32-bit lengths");
 
 /** UTF-8 byte order mark, skipped at the start of a body. */
 #define UTF8_BOM S("\xEF\xBB\xBF")
@@ -36,6 +38,9 @@ struct MarkdownRender {
 
   /** Text of the code block being read, in scratch, written whole when the block ends. */
   struct Buf code;
+
+  /** Region of scratch a code block is highlighted in, in which no buffer of the render grows. */
+  struct Arena code_scratch;
 
   /**
    * Count of images whose label is being written, zero outside one. An image's label becomes its
@@ -203,6 +208,7 @@ struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Aren
       .html = {.arena = perm},
       .code = {.arena = &scratch},
   };
+  render.code_scratch = body_html_code_block_scratch(&scratch);
 
   // This names extensions one at a time rather than through an `MD_DIALECT_*` constant, because
   // md4c documents that a dialect constant's meaning changes as it implements more of that dialect.
@@ -302,7 +308,7 @@ static int markdown_to_html_leave_block(MD_BLOCKTYPE type, void* detail, void* u
     case MD_BLOCK_CODE: {
       const MD_ATTRIBUTE* language = &((const MD_BLOCK_CODE_DETAIL*)detail)->lang;
       body_html_code_block_write(html, (struct Str){language->text, (ptrdiff_t)language->size},
-                                 buf_str(&render->code));
+                                 buf_str(&render->code), render->code_scratch);
       render->is_in_code_block = false;
       break;
     }

@@ -33,12 +33,14 @@ enum { MARKDOWN_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  * `malloc`, and a failed allocation there ends in `os_oom`, like one from `perm`.
  *
  * This is reentrant, so content jobs may render in parallel across the worker pool. md4c holds no
- * writable global state, and all per-render state lives in this function's frame. A vendor bump
- * that introduced a global would invalidate that without any call site changing.
+ * writable global state, the highlighter's grammars are immutable once loaded under its lock, and
+ * all per-render state lives in this function's frame. A vendor bump that introduced a global would
+ * invalidate that without any call site changing.
  *
  * @param markdown Input bytes of Markdown, at most `MARKDOWN_INPUT_LEN_MAX`.
  * @param perm     Arena that owns the HTML. Must not be `NULL`.
- * @param scratch  Arena for a code block's text, held until the block ends.
+ * @param scratch  Arena for a code block's text, held until the block ends, and for highlighting
+ *                 it, in a region split off when the conversion starts.
  * @return The HTML, owned by `perm`.
  */
 struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch)

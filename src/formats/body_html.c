@@ -4,7 +4,9 @@
 #include <stddef.h>
 
 #include "core/ascii.h"
+#include "formats/highlight.h"
 #include "formats/html.h"
+#include "shared/arena.h"
 #include "shared/buf.h"
 #include "shared/str.h"
 
@@ -122,7 +124,17 @@ void body_html_math_close(struct Buf* buffer) {
   buf_append(buffer, S("</x-equation>"));
 }
 
-void body_html_code_block_write(struct Buf* buffer, struct Str language, struct Str code) {
+struct Arena body_html_code_block_scratch(struct Arena* scratch) {
+  const char* scratch_end = scratch->limit != NULL ? scratch->limit : scratch->end;
+  const ptrdiff_t free_len = scratch_end - scratch->beg;
+  const ptrdiff_t region_len = 2 * (ptrdiff_t)HIGHLIGHT_MEMORY_LEN_MAX;
+  return arena_split(scratch, region_len < free_len / 2 ? region_len : free_len / 2);
+}
+
+void body_html_code_block_write(struct Buf* buffer,
+                                struct Str language,
+                                struct Str code,
+                                struct Arena scratch) {
   buf_append(buffer, S("<pre><code"));
   if (language.len > 0) {
     buf_append(buffer, S(" class=\""));
@@ -133,7 +145,7 @@ void body_html_code_block_write(struct Buf* buffer, struct Str language, struct 
     buf_append(buffer, S("\""));
   }
   buf_append(buffer, S(">"));
-  html_escape_append(buffer, code);
+  highlight_write(buffer, highlight_grammar_find(language), code, NULL, scratch);
   buf_append(buffer, S("</code></pre>\n"));
 }
 
