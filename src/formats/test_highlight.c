@@ -48,6 +48,8 @@ struct Snippet {
  *
  * - C's `^[A-Z][A-Z\d_]*$` makes `MAX_LEN` a constant and leaves `Max` a variable.
  * - bash's `^-` makes `-n` a constant and leaves `n` plain.
+ * - HTML has no `#match?` pattern.
+ * - CSS's `^--` makes `--gap` a variable and leaves `auto` plain.
  * - JavaScript's `^[A-Z_][A-Z\d_]+$` makes `CONST_A` a constant, `^[A-Z]` makes `Foo` a
  *   constructor, `^(arguments|…|document)$` makes `console` a builtin and leaves `consoles` a
  *   variable, `#eq? "require"` makes `require` a builtin function, and JSX's `^[a-z][^.]*$` makes
@@ -55,6 +57,7 @@ struct Snippet {
  * - TypeScript's `^[A-Z]` makes `X` a type, and leaves each capitalized parameter a parameter:
  *   `Foo`, `C` in an object pattern, and `D` in the array pattern of an optional parameter.
  * - TSX takes JSX's and TypeScript's patterns together.
+ * - JSON has no `#match?` pattern.
  *
  * Between them, TypeScript's and TSX's snippets hold each kind of parameter in an array or object
  * pattern, in a required parameter and in an optional one.
@@ -71,6 +74,21 @@ static const struct Snippet snippets[] = {
      "class=\"tok-operator\">$</span><span class=\"tok-property\">HOME</span><span "
      "class=\"tok-string\">&quot;</span> <span class=\"tok-constant\">-n</span> n <span "
      "class=\"tok-comment\"># c</span>\n"},
+    {"html", "<!DOCTYPE html>\n<p class=\"x\">Hi<!-- c --></p>\n",
+     "<span class=\"tok-constant\">&lt;!DOCTYPE html</span><span "
+     "class=\"tok-punctuation-bracket\">&gt;</span>\n<span "
+     "class=\"tok-punctuation-bracket\">&lt;</span><span class=\"tok-tag\">p</span> <span "
+     "class=\"tok-attribute\">class</span>=&quot;<span class=\"tok-string\">x</span>&quot;<span "
+     "class=\"tok-punctuation-bracket\">&gt;</span>Hi<span class=\"tok-comment\">&lt;!-- c "
+     "--&gt;</span><span class=\"tok-punctuation-bracket\">&lt;/</span><span "
+     "class=\"tok-tag\">p</span><span class=\"tok-punctuation-bracket\">&gt;</span>\n"},
+    {"css", "a { margin: var(--gap) auto; }\n",
+     "<span class=\"tok-tag\">a</span> <span class=\"tok-punctuation-bracket\">{</span> <span "
+     "class=\"tok-property\">margin</span><span class=\"tok-punctuation-delimiter\">:</span> <span "
+     "class=\"tok-function\">var</span><span class=\"tok-punctuation-bracket\">(</span><span "
+     "class=\"tok-variable\">--gap</span><span class=\"tok-punctuation-bracket\">)</span> "
+     "auto<span class=\"tok-punctuation-delimiter\">;</span> <span "
+     "class=\"tok-punctuation-bracket\">}</span>\n"},
     {"js",
      "const CONST_A = Foo(console, consoles);\nrequire(\"x\");\nconst e = <div><Foo /></div>;\n",
      "<span class=\"tok-keyword\">const</span> <span class=\"tok-constant\">CONST_A</span> <span "
@@ -130,6 +148,11 @@ static const struct Snippet snippets[] = {
      "class=\"tok-punctuation-bracket\">/&gt;&lt;/</span><span class=\"tok-tag\">div</span><span "
      "class=\"tok-punctuation-bracket\">&gt;</span><span "
      "class=\"tok-punctuation-delimiter\">;</span>\n"},
+    {"json", "{\"a\": [\"b\\n\", 1, null]}\n",
+     "{<span class=\"tok-string\">&quot;a&quot;</span>: [<span "
+     "class=\"tok-string\">&quot;b</span><span class=\"tok-escape\">\\n</span><span "
+     "class=\"tok-string\">&quot;</span>, <span class=\"tok-number\">1</span>, <span "
+     "class=\"tok-constant-builtin\">null</span>]}\n"},
 };
 
 /**
@@ -316,10 +339,18 @@ static void test_find_every_name(void) {
   TEST_CHECK(typescript != NULL);
   TEST_CHECK(highlight_grammar_find(S("ts")) == typescript);
   const struct HighlightGrammar* c = highlight_grammar_find(S("c"));
+  const struct HighlightGrammar* html = highlight_grammar_find(S("html"));
+  const struct HighlightGrammar* css = highlight_grammar_find(S("css"));
   const struct HighlightGrammar* tsx = highlight_grammar_find(S("tsx"));
-  TEST_CHECK(c != NULL && tsx != NULL);
-  TEST_CHECK(c != shell && c != javascript && c != typescript && c != tsx);
-  TEST_CHECK(javascript != typescript && typescript != tsx && shell != javascript);
+  const struct HighlightGrammar* json = highlight_grammar_find(S("json"));
+  TEST_CHECK(c != NULL && html != NULL && css != NULL && tsx != NULL && json != NULL);
+  const struct HighlightGrammar* const found[] = {c,          shell,      html, css,
+                                                  javascript, typescript, tsx,  json};
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(found) / sizeof(found[0])); i++) {
+    for (ptrdiff_t j = i + 1; j < (ptrdiff_t)(sizeof(found) / sizeof(found[0])); j++) {
+      TEST_CHECK(found[i] != found[j]);
+    }
+  }
 }
 
 // A name finds its grammar whatever its ASCII case, as Org's `C` does, and after a `language-`

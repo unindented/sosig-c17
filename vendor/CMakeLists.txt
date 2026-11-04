@@ -82,13 +82,49 @@ if(SOSIG_SANITIZER STREQUAL "address")
   endif()
 endif()
 
-# Adds a static library for one tree-sitter grammar from `SOURCES`, with the highlight query that
-# `QUERIES` make, concatenated in order. The query is embedded as the byte array
-# `tree_sitter_<name>_highlights`, `tree_sitter_<name>_highlights_len` bytes long, in a source
-# generated at configure time. Reading each file as hexadecimal keeps every byte as it is, so
-# neither CMake nor the C compiler expands anything in a query.
+# The grammars the releases link, every call below in its order: systems languages, then the web's,
+# a page's document, style and script, then data. The tests need them all. An empty
+# `SOSIG_GRAMMARS` stands for them, rather than a copy of the list in the cache, so a build
+# directory links a grammar that joins the default without being configured afresh.
+set(sosig_tree_sitter_grammars_default c bash html css javascript typescript tsx json)
+set(SOSIG_GRAMMARS
+    ""
+    CACHE STRING
+          "Tree-sitter grammars to link, a list of the names in vendor/CMakeLists.txt, or empty for all"
+)
+if(SOSIG_GRAMMARS STREQUAL "")
+  set(sosig_tree_sitter_grammars ${sosig_tree_sitter_grammars_default})
+else()
+  set(sosig_tree_sitter_grammars ${SOSIG_GRAMMARS})
+endif()
+
+# Links the selected grammars' libraries, and carries the header that declares them to the
+# highlighter.
+add_library(sosig_vendor_tree_sitter_grammars INTERFACE)
+set(sosig_tree_sitter_grammars_known "")
+set(sosig_tree_sitter_grammar_declarations "")
+set(sosig_tree_sitter_grammar_rows "")
+
+# Registers one tree-sitter grammar, `name`, which a code block's language finds by any of `NAMES`,
+# all lowercase. When the build selects it, adds a static library for it from `SOURCES`, with
+# the highlight query that `QUERIES` make, concatenated in order, and appends its declarations and
+# its row of the highlighter's table to the text of `tree_sitter_grammars.h`. The query is embedded
+# as the byte array `tree_sitter_<name>_highlights`, `tree_sitter_<name>_highlights_len` bytes long,
+# in a source generated at configure time. Reading each file as hexadecimal keeps every byte as it
+# is, so neither CMake nor the C compiler expands anything in a query. The C is kept in strings
+# rather than lists, because its `;` would split a list.
 function(sosig_add_tree_sitter_grammar name)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;QUERIES")
+  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "NAMES;SOURCES;QUERIES")
+  list(LENGTH arg_NAMES name_count)
+  if(name_count EQUAL 0)
+    message(FATAL_ERROR "sosig_add_tree_sitter_grammar(${name}) needs NAMES")
+  endif()
+  list(APPEND sosig_tree_sitter_grammars_known ${name})
+  set(sosig_tree_sitter_grammars_known "${sosig_tree_sitter_grammars_known}" PARENT_SCOPE)
+  if(NOT name IN_LIST sosig_tree_sitter_grammars)
+    return()
+  endif()
+
   set(bytes "")
   foreach(query IN LISTS arg_QUERIES)
     set(path "${CMAKE_CURRENT_LIST_DIR}/${query}")
@@ -120,26 +156,66 @@ function(sosig_add_tree_sitter_grammar name)
   )
   target_compile_options(${target} PRIVATE $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-w>)
   target_link_libraries(${target} PRIVATE sosig_build_vendor sosig_vendor_tree_sitter)
+  target_link_libraries(sosig_vendor_tree_sitter_grammars INTERFACE ${target})
+
+  set(names "${arg_NAMES}")
+  list(TRANSFORM names REPLACE "(.+)" "STR_INIT(\"\\1\")")
+  list(JOIN names ", " names)
+  string(
+    APPEND
+    sosig_tree_sitter_grammar_declarations
+    "const TSLanguage* tree_sitter_${name}(void);\n"
+    "extern const char tree_sitter_${name}_highlights[];\n"
+    "extern const uint32_t tree_sitter_${name}_highlights_len;\n"
+    "static const struct Str tree_sitter_${name}_names[] = {${names}};\n\n"
+  )
+  string(
+    APPEND
+    sosig_tree_sitter_grammar_rows
+    "  {.names = tree_sitter_${name}_names, "
+    ".name_count = (ptrdiff_t)(sizeof(tree_sitter_${name}_names) / sizeof(tree_sitter_${name}_names[0])), "
+    ".language = tree_sitter_${name}, "
+    ".query_source = tree_sitter_${name}_highlights, "
+    ".query_source_len = &tree_sitter_${name}_highlights_len}, \\\n"
+  )
+  set(sosig_tree_sitter_grammar_declarations "${sosig_tree_sitter_grammar_declarations}" PARENT_SCOPE)
+  set(sosig_tree_sitter_grammar_rows "${sosig_tree_sitter_grammar_rows}" PARENT_SCOPE)
 endfunction()
 
 # Each query list is in last-wins order, the precedence tree-sitter's highlighter has used since
-# 2024: on one node, the later pattern wins. C, bash and JavaScript take their queries in the order
-# their `tree-sitter.json` lists. TypeScript's `tree-sitter.json` still lists its own query before
-# JavaScript's, for the first-wins precedence it was written for, so TypeScript and TSX take the
-# reverse, which lets TypeScript's patterns win over JavaScript's as upstream meant.
-# `highlights-params.scm` does not compile against either TypeScript grammar, so TypeScript and TSX
-# end with sosig's `src/formats/highlight_typescript_params.scm`, which captures the same parameters
-# in their grammars.
+# 2024: on one node, the later pattern wins. C, bash, HTML, CSS, JavaScript and JSON take their
+# queries in the order their `tree-sitter.json` lists. TypeScript's `tree-sitter.json` still lists
+# its own query before JavaScript's, for the first-wins precedence it was written for, so TypeScript
+# and TSX take the reverse, which lets TypeScript's patterns win over JavaScript's as upstream
+# meant. `highlights-params.scm` does not compile against either TypeScript grammar, so TypeScript
+# and TSX end with sosig's `src/formats/highlight_typescript_params.scm`, which captures the same
+# parameters in their grammars.
 sosig_add_tree_sitter_grammar(
-  c SOURCES tree-sitter-c/src/parser.c QUERIES tree-sitter-c/queries/highlights.scm
+  c NAMES c SOURCES tree-sitter-c/src/parser.c QUERIES tree-sitter-c/queries/highlights.scm
 )
+# The shell names are the Bourne-family names Emacs gives `sh-mode`; its csh, rc, `es` and `rpm`
+# names are left out, because their syntax is not Bourne's.
 sosig_add_tree_sitter_grammar(
   bash
+  NAMES sh shell bash bash2 ash dash jsh ksh ksh88 pdksh mksh dtksh oash wksh wsh posix zsh
   SOURCES tree-sitter-bash/src/parser.c tree-sitter-bash/src/scanner.c
   QUERIES tree-sitter-bash/queries/highlights.scm
 )
 sosig_add_tree_sitter_grammar(
+  html
+  NAMES html
+  SOURCES tree-sitter-html/src/parser.c tree-sitter-html/src/scanner.c
+  QUERIES tree-sitter-html/queries/highlights.scm
+)
+sosig_add_tree_sitter_grammar(
+  css
+  NAMES css
+  SOURCES tree-sitter-css/src/parser.c tree-sitter-css/src/scanner.c
+  QUERIES tree-sitter-css/queries/highlights.scm
+)
+sosig_add_tree_sitter_grammar(
   javascript
+  NAMES javascript js jsx
   SOURCES tree-sitter-javascript/src/parser.c tree-sitter-javascript/src/scanner.c
   QUERIES tree-sitter-javascript/queries/highlights.scm
           tree-sitter-javascript/queries/highlights-jsx.scm
@@ -147,6 +223,7 @@ sosig_add_tree_sitter_grammar(
 )
 sosig_add_tree_sitter_grammar(
   typescript
+  NAMES typescript ts
   SOURCES tree-sitter-typescript/typescript/src/parser.c
           tree-sitter-typescript/typescript/src/scanner.c
   QUERIES tree-sitter-javascript/queries/highlights.scm tree-sitter-typescript/queries/highlights.scm
@@ -154,9 +231,53 @@ sosig_add_tree_sitter_grammar(
 )
 sosig_add_tree_sitter_grammar(
   tsx
+  NAMES tsx
   SOURCES tree-sitter-typescript/tsx/src/parser.c tree-sitter-typescript/tsx/src/scanner.c
   QUERIES tree-sitter-javascript/queries/highlights.scm
           tree-sitter-javascript/queries/highlights-jsx.scm
           tree-sitter-typescript/queries/highlights.scm
           ../src/formats/highlight_typescript_params.scm
+)
+sosig_add_tree_sitter_grammar(
+  json
+  NAMES json
+  SOURCES tree-sitter-json/src/parser.c
+  QUERIES tree-sitter-json/queries/highlights.scm
+)
+
+# A name no call registers, or a list of no names, such as `;`, stops the configure. The count,
+# rather than `if()` on the list, decides, because `if()` takes a list such as `no` as false.
+set(sosig_tree_sitter_grammars_unknown ${sosig_tree_sitter_grammars})
+list(REMOVE_ITEM sosig_tree_sitter_grammars_unknown ${sosig_tree_sitter_grammars_known})
+list(LENGTH sosig_tree_sitter_grammars sosig_tree_sitter_grammars_count)
+list(LENGTH sosig_tree_sitter_grammars_unknown sosig_tree_sitter_grammars_unknown_count)
+if(sosig_tree_sitter_grammars_count EQUAL 0 OR sosig_tree_sitter_grammars_unknown_count GREATER 0)
+  list(JOIN sosig_tree_sitter_grammars_known ", " sosig_tree_sitter_grammars_valid)
+  list(JOIN sosig_tree_sitter_grammars_unknown "', '" sosig_tree_sitter_grammars_got)
+  message(
+    FATAL_ERROR
+      "SOSIG_GRAMMARS must name grammars among ${sosig_tree_sitter_grammars_valid}; got '${sosig_tree_sitter_grammars_got}'"
+  )
+endif()
+
+if(SOSIG_BUILD_TESTING AND NOT SOSIG_GRAMMARS STREQUAL "")
+  message(
+    FATAL_ERROR
+      "the tests need every grammar, which an empty SOSIG_GRAMMARS selects; got '${SOSIG_GRAMMARS}', so set SOSIG_BUILD_TESTING=OFF to build it"
+  )
+endif()
+
+# `src/formats/highlight.c` alone includes the header, and defines its table of grammars from it.
+# Its directory is a system one, as every vendored include directory is, so no analyzer checks it.
+set(sosig_tree_sitter_grammars_include "${CMAKE_CURRENT_BINARY_DIR}/include")
+file(
+  CONFIGURE
+  OUTPUT "${sosig_tree_sitter_grammars_include}/tree_sitter_grammars.h"
+  CONTENT
+    "// Generated by `vendor/CMakeLists.txt` from `SOSIG_GRAMMARS`. `src/formats/highlight.c` defines\n// its table of grammars from `TREE_SITTER_GRAMMARS`.\n\n#ifndef SOSIG_TREE_SITTER_GRAMMARS_H\n#define SOSIG_TREE_SITTER_GRAMMARS_H\n\n#include <stddef.h>\n#include <stdint.h>\n#include <tree_sitter/api.h>\n\n#include \"shared/str.h\"\n\n${sosig_tree_sitter_grammar_declarations}#define TREE_SITTER_GRAMMARS \\\n${sosig_tree_sitter_grammar_rows}\n#endif\n"
+  @ONLY
+)
+target_include_directories(
+  sosig_vendor_tree_sitter_grammars SYSTEM
+  INTERFACE "$<BUILD_INTERFACE:${sosig_tree_sitter_grammars_include}>"
 )

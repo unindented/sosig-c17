@@ -10,11 +10,7 @@ target_link_libraries(
   sosig_app
   PRIVATE sosig_vendor_md4c
           sosig_vendor_org4c
-          sosig_vendor_tree_sitter_c
-          sosig_vendor_tree_sitter_bash
-          sosig_vendor_tree_sitter_javascript
-          sosig_vendor_tree_sitter_typescript
-          sosig_vendor_tree_sitter_tsx
+          sosig_vendor_tree_sitter_grammars
           sosig_vendor_tree_sitter
 )
 

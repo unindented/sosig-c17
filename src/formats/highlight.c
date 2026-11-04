@@ -8,30 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tree_sitter/api.h>
+#include <tree_sitter_grammars.h>
 
 #include "core/ascii.h"
 #include "formats/html.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
 #include "shared/str.h"
-
-// Each grammar's library defines its language and the highlight query `vendor/CMakeLists.txt`
-// embeds in it.
-const TSLanguage* tree_sitter_c(void);
-const TSLanguage* tree_sitter_bash(void);
-const TSLanguage* tree_sitter_javascript(void);
-const TSLanguage* tree_sitter_typescript(void);
-const TSLanguage* tree_sitter_tsx(void);
-extern const char tree_sitter_c_highlights[];
-extern const uint32_t tree_sitter_c_highlights_len;
-extern const char tree_sitter_bash_highlights[];
-extern const uint32_t tree_sitter_bash_highlights_len;
-extern const char tree_sitter_javascript_highlights[];
-extern const uint32_t tree_sitter_javascript_highlights_len;
-extern const char tree_sitter_typescript_highlights[];
-extern const uint32_t tree_sitter_typescript_highlights_len;
-extern const char tree_sitter_tsx_highlights[];
-extern const uint32_t tree_sitter_tsx_highlights_len;
 
 /** Prefix a Markdown fence's language may carry, which names the same language without it. */
 #define LANGUAGE_PREFIX S("language-")
@@ -182,38 +165,11 @@ struct Writer {
   struct Arena* arena;
 };
 
-/** Lowercase names of each grammar. */
-static const struct Str C_NAMES[] = {STR_INIT("c")};
-static const struct Str BASH_NAMES[] = {
-    STR_INIT("sh"),    STR_INIT("shell"), STR_INIT("bash"), STR_INIT("bash2"), STR_INIT("ash"),
-    STR_INIT("dash"),  STR_INIT("jsh"),   STR_INIT("ksh"),  STR_INIT("ksh88"), STR_INIT("pdksh"),
-    STR_INIT("mksh"),  STR_INIT("dtksh"), STR_INIT("oash"), STR_INIT("wksh"),  STR_INIT("wsh"),
-    STR_INIT("posix"), STR_INIT("zsh"),
-};
-static const struct Str JAVASCRIPT_NAMES[] = {STR_INIT("javascript"), STR_INIT("js"),
-                                              STR_INIT("jsx")};
-static const struct Str TYPESCRIPT_NAMES[] = {STR_INIT("typescript"), STR_INIT("ts")};
-static const struct Str TSX_NAMES[] = {STR_INIT("tsx")};
-
 /**
- * The grammars, by the names a code block gives its language. The shell names are the Bourne-family
- * names Emacs gives `sh-mode`; its csh, rc, `es` and `rpm` names are left out, because their syntax
- * is not Bourne's.
+ * The grammars, by the names a code block gives its language: those `SOSIG_GRAMMARS` selects, which
+ * `vendor/CMakeLists.txt` declares in `tree_sitter_grammars.h`, with their names.
  */
-static struct HighlightGrammar grammars[] = {
-    {C_NAMES, (ptrdiff_t)(sizeof(C_NAMES) / sizeof(C_NAMES[0])), tree_sitter_c,
-     tree_sitter_c_highlights, &tree_sitter_c_highlights_len, NULL, false},
-    {BASH_NAMES, (ptrdiff_t)(sizeof(BASH_NAMES) / sizeof(BASH_NAMES[0])), tree_sitter_bash,
-     tree_sitter_bash_highlights, &tree_sitter_bash_highlights_len, NULL, false},
-    {JAVASCRIPT_NAMES, (ptrdiff_t)(sizeof(JAVASCRIPT_NAMES) / sizeof(JAVASCRIPT_NAMES[0])),
-     tree_sitter_javascript, tree_sitter_javascript_highlights,
-     &tree_sitter_javascript_highlights_len, NULL, false},
-    {TYPESCRIPT_NAMES, (ptrdiff_t)(sizeof(TYPESCRIPT_NAMES) / sizeof(TYPESCRIPT_NAMES[0])),
-     tree_sitter_typescript, tree_sitter_typescript_highlights,
-     &tree_sitter_typescript_highlights_len, NULL, false},
-    {TSX_NAMES, (ptrdiff_t)(sizeof(TSX_NAMES) / sizeof(TSX_NAMES[0])), tree_sitter_tsx,
-     tree_sitter_tsx_highlights, &tree_sitter_tsx_highlights_len, NULL, false},
-};
+static struct HighlightGrammar grammars[] = {TREE_SITTER_GRAMMARS};
 
 /**
  * Guards loading the grammars and installing the allocator. A grammar's query is compiled at its
@@ -250,6 +206,14 @@ static bool is_upper_identifier(struct Str text);
  * @return `true` when it does, `false` otherwise.
  */
 static bool is_dash_led(struct Str text);
+
+/**
+ * @brief Reports whether text starts with `--`: `^--`.
+ *
+ * @param text Node text.
+ * @return `true` when it does, `false` otherwise.
+ */
+static bool is_double_dash_led(struct Str text);
 
 /**
  * @brief Reports whether text starts with an uppercase letter: `^[A-Z]`.
@@ -294,6 +258,7 @@ static bool is_lowercase_tag(struct Str text);
 static const struct Pattern patterns[] = {
     {STR_INIT("^[A-Z][A-Z\\d_]*$"), is_upper_identifier},
     {STR_INIT("^-"), is_dash_led},
+    {STR_INIT("^--"), is_double_dash_led},
     {STR_INIT("^[A-Z]"), is_upper_led},
     {STR_INIT("^[A-Z_][A-Z\\d_]+$"), is_upper_constant},
     {STR_INIT("^(arguments|module|console|window|document)$"), is_javascript_builtin},
@@ -1198,6 +1163,10 @@ static bool is_upper_identifier(struct Str text) {
 
 static bool is_dash_led(struct Str text) {
   return text.len > 0 && text.data[0] == '-';
+}
+
+static bool is_double_dash_led(struct Str text) {
+  return str_startswith(text, S("--"));
 }
 
 static bool is_upper_led(struct Str text) {

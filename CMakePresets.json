@@ -64,6 +64,14 @@
       "cacheVariables": {
         "SOSIG_RELEASE_TARGET": "aarch64-linux-musl"
       }
+    },
+    {
+      "name": "grammars",
+      "inherits": "release",
+      "displayName": "Release with only the TypeScript grammar",
+      "cacheVariables": {
+        "SOSIG_GRAMMARS": "typescript"
+      }
     }
   ],
   "buildPresets": [
@@ -96,6 +104,10 @@
     {
       "name": "release-linux-aarch64",
       "configurePreset": "release-linux-aarch64"
+    },
+    {
+      "name": "grammars",
+      "configurePreset": "grammars"
     },
     {
       "name": "lint",
@@ -173,6 +185,13 @@
       "steps": [
         { "type": "configure", "name": "release" },
         { "type": "build", "name": "release" }
+      ]
+    },
+    {
+      "name": "ci-grammars",
+      "steps": [
+        { "type": "configure", "name": "grammars" },
+        { "type": "build", "name": "grammars" }
       ]
     },
     {

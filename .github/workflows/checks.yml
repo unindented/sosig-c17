@@ -91,6 +91,10 @@ jobs:
       - name: Build the release configuration
         run: cmake --workflow --preset ci-release
 
+      - name: Build with one grammar
+        if: runner.os == 'Linux'
+        run: cmake --workflow --preset ci-grammars
+
       - name: Build and test two configurations with a second generator
         run: cmake --workflow --preset ci-multi
 

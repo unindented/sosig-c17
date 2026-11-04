@@ -11,7 +11,7 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 | `src/CMakeLists.txt` | Build the private application library and the `sosig` executable |
 | `src/*/CMakeLists.txt` | Add sources, header file sets, and local unit tests; `src/runtime/CMakeLists.txt` also defines the POSIX host library `sosig_os_posix` |
 | `tests/CMakeLists.txt` | Add the golden test suite, the shared unit-test support library, and the in-memory host |
-| `vendor/CMakeLists.txt` | Build each vendored dependency, and embed each tree-sitter grammar's highlight queries in its library |
+| `vendor/CMakeLists.txt` | Build each vendored dependency and the tree-sitter grammars `SOSIG_GRAMMARS` selects, each with its highlight queries embedded, and generate the header that declares them |
 | `cmake/sosig_build_profiles.cmake` | Set warnings, optimization, fortification, and sanitizers |
 | `cmake/sosig_quality.cmake` | Configure formatting and static analysis |
 | `cmake/sosig_testing.cmake` | Register a unit test and choose the host it links |
@@ -27,7 +27,7 @@ The top-level CMake file controls the build. It sets project policy, finds the t
 
 The library is static because it supports one product. It does not provide a public ABI.
 
-Each vendored project has a separate target. Header-only dependencies use interface libraries.
+Each vendored project has a separate target. Header-only dependencies use interface libraries. So does `sosig_vendor_tree_sitter_grammars`, which links the grammars `SOSIG_GRAMMARS` selects and carries the header that declares them, so `sosig_app` links it alone.
 
 `sosig_app` links to `sosig_vendor_tomlc17` and `sosig_vendor_sharedstuff` as public dependencies because application headers expose their types. The other vendored dependencies are private.
 
@@ -75,6 +75,23 @@ Generator expressions select configuration options at build time. The same rules
 
 The address-sanitizer profile instruments first-party and vendored code. Vendored code disables the unsupported `null` and `object-size` checks. First-party sources retain the full sanitizer set.
 
+## Grammars
+
+`SOSIG_GRAMMARS` chooses the tree-sitter grammars the build links. Empty, its default, it links every grammar, as the release builds do. A list links only the grammars it names, each the name of one `sosig_add_tree_sitter_grammar` call in `vendor/CMakeLists.txt`: `c`, `bash`, `html`, `css`, `javascript`, `typescript`, `tsx` and `json`. A code block in a language whose grammar the build leaves out is only escaped, as one in a language sosig has no grammar for.
+
+```sh
+cmake --preset release -B build/release-small -DSOSIG_GRAMMARS="c;bash"
+cmake --build build/release-small -j 8
+```
+
+TypeScript and TSX are separate grammars. Either builds without `javascript`, because their queries read JavaScript's query files from `vendor/` whichever grammars the build selects.
+
+A name of no grammar stops the configure. So does any list while `SOSIG_BUILD_TESTING` is on, because the tests need every grammar.
+
+The build cache does not record the grammar set. After a change to it, run `sosig build --force` once on a site, so that every page is highlighted with the new set.
+
+`vendor/CMakeLists.txt` generates `tree_sitter_grammars.h`, which declares the selected grammars' languages, queries and names, and `src/formats/highlight.c` builds its table of grammars from it.
+
 ## Linting and formatting
 
 CMake sets `clang-tidy` and `cppcheck` as properties of first-party targets. Neither tool checks vendored sources. cppcheck reads the vendored `sharedstuff` headers to expand `STR_FMT`. It also analyzes the inline functions those headers define.
@@ -91,7 +108,7 @@ This duplication is deliberate. A configure-time glob can omit a new file until 
 
 ## Tests
 
-`SOSIG_BUILD_TESTING` controls test creation. It is true by default for a top-level build. It is false by default for a child build.
+`SOSIG_BUILD_TESTING` controls test creation. It is true by default for a top-level build. It is false by default for a child build. The tests need every tree-sitter grammar, as [Grammars](#grammars) describes.
 
 Each source directory adds its local unit tests. The top-level `tests/` directory adds the golden test suite, `sosig_test_support`, and the in-memory host `sosig_os_memory`. Each CTest case has a `sosig` label. It also has a `unit` or `golden` label.
 

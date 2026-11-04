@@ -254,7 +254,7 @@ Markdown and Org write the features they share as the same HTML, so one styleshe
 - A note, tip, important note, warning or caution is a `<div class="admonition-note">`, or `admonition-tip` and so on, that starts with a `<p class="admonition-title">`. In Markdown it is a `> [!NOTE]` block, and in Org a `#+BEGIN_NOTE` block, in any case.
 - Math is `<x-equation>`, or `<x-equation type="display">` for a displayed formula, holding the LaTeX for a script such as MathJax or KaTeX. Org's `$y$` and `\(y\)` are inline, and `$$y$$`, `\[y\]` and a LaTeX environment are displayed.
 - A code block is `<pre><code class="language-c">`. An Org block with a `#+NAME:`, a `#+CAPTION:`, line numbers or code references keeps Org's own markup for them, an `id`, a `Listing` label, and `linenr` and `coderef` spans around each line, and is highlighted as any other block is. So is an inline `src_c{…}`, inside Org's own `<code class="src src-c">`.
-- In a code block whose language sosig has a grammar for, each token is a `<span>` whose class names what it is: `tok-attribute`, `tok-comment`, `tok-constant`, `tok-constant-builtin`, `tok-constructor`, `tok-delimiter`, `tok-embedded`, `tok-function`, `tok-function-builtin`, `tok-function-method`, `tok-function-special`, `tok-keyword`, `tok-label`, `tok-number`, `tok-operator`, `tok-property`, `tok-punctuation-bracket`, `tok-punctuation-delimiter`, `tok-punctuation-special`, `tok-string`, `tok-string-special`, `tok-tag`, `tok-type`, `tok-type-builtin`, `tok-variable`, `tok-variable-builtin`, `tok-variable-parameter`. The languages are C (`c`), the Bourne shells (`sh`, `shell`, `bash` and the other Bourne-family names Emacs gives `sh-mode`, such as `ksh`, `dash` and `zsh`), JavaScript with JSX (`javascript`, `js`, `jsx`), TypeScript (`typescript`, `ts`) and TSX (`tsx`), in any case, where Emacs leaves `Bash` plain. A block of another language, or of none, is only escaped, as is one too large or too tangled to highlight: one that would take tree-sitter more than 128 MiB, or that holds tens of thousands of nested or unclosed brackets. sosig ships no stylesheet: a site gives the classes their colors.
+- In a code block whose language sosig has a grammar for, each token is a `<span>` whose class names what it is: `tok-attribute`, `tok-comment`, `tok-constant`, `tok-constant-builtin`, `tok-constructor`, `tok-delimiter`, `tok-embedded`, `tok-escape`, `tok-function`, `tok-function-builtin`, `tok-function-method`, `tok-function-special`, `tok-keyword`, `tok-label`, `tok-number`, `tok-operator`, `tok-property`, `tok-punctuation-bracket`, `tok-punctuation-delimiter`, `tok-punctuation-special`, `tok-string`, `tok-string-special`, `tok-tag`, `tok-tag-error`, `tok-type`, `tok-type-builtin`, `tok-variable`, `tok-variable-builtin`, `tok-variable-parameter`. The release builds' languages are C (`c`), the Bourne shells (`sh`, `shell`, `bash` and the other Bourne-family names Emacs gives `sh-mode`, such as `ksh`, `dash` and `zsh`), HTML (`html`), CSS (`css`), JavaScript with JSX (`javascript`, `js`, `jsx`), TypeScript (`typescript`, `ts`), TSX (`tsx`) and JSON (`json`), in any case, where Emacs leaves `Bash` plain. A block is highlighted in its one language, so the contents of an HTML block's `<script>` and `<style>` elements are only escaped. A build of its own chooses them with `SOSIG_GRAMMARS`, as [BUILD.md](BUILD.md#grammars) describes. A block of another language, of one the build leaves out, or of none, is only escaped, as is one too large or too tangled to highlight: one that would take tree-sitter more than 128 MiB, or that holds tens of thousands of nested or unclosed brackets. sosig ships no stylesheet: a site gives the classes their colors.
 - A heading starts at `<h2>`, below the page title's `<h1>` in a content template: Markdown's `#` and Org's `*` are `<h2>`, and each level below adds one, up to `<h6>`.
 
 ### Templates
@@ -304,7 +304,7 @@ Vendored dependencies are included under `vendor/`:
 - [`md4c`](https://github.com/mity/md4c): Markdown parsing.
 - [`org4c`](https://github.com/unindented/org4c): Org parsing.
 - [`mustache4c`](https://github.com/mity/mustache4c): Mustache template rendering.
-- [`tree-sitter`](https://github.com/tree-sitter/tree-sitter), with the grammars [`tree-sitter-c`](https://github.com/tree-sitter/tree-sitter-c), [`tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash), [`tree-sitter-javascript`](https://github.com/tree-sitter/tree-sitter-javascript) and [`tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript): Parsing code for syntax highlighting.
+- [`tree-sitter`](https://github.com/tree-sitter/tree-sitter), with the grammars [`tree-sitter-c`](https://github.com/tree-sitter/tree-sitter-c), [`tree-sitter-bash`](https://github.com/tree-sitter/tree-sitter-bash), [`tree-sitter-html`](https://github.com/tree-sitter/tree-sitter-html), [`tree-sitter-css`](https://github.com/tree-sitter/tree-sitter-css), [`tree-sitter-javascript`](https://github.com/tree-sitter/tree-sitter-javascript), [`tree-sitter-typescript`](https://github.com/tree-sitter/tree-sitter-typescript) and [`tree-sitter-json`](https://github.com/tree-sitter/tree-sitter-json): Parsing code for syntax highlighting.
 - [`acutest`](https://github.com/mity/acutest): Tests.
 
 ### Building
@@ -413,6 +413,7 @@ Workflow presets run the complete configure, build, and test sequences used by C
 - `cmake --workflow --preset ci-debug`: `Debug` build, linting, and all ASan/UBSan tests.
 - `cmake --workflow --preset ci-tsan`: TSan build and all TSan tests.
 - `cmake --workflow --preset ci-release`: `RelWithDebInfo` build.
+- `cmake --workflow --preset ci-grammars`: `RelWithDebInfo` build with only the TypeScript grammar, which CI runs on Linux only.
 - `cmake --workflow --preset ci-multi`: `Debug` and `RelWithDebInfo` builds and tests under the `Ninja Multi-Config` generator.
 
 To run the same Linux workflows from a machine with Podman, build the pinned Ubuntu image:
@@ -427,6 +428,7 @@ Docker accepts the same command with `docker` in place of `podman`. The image co
 podman run --rm sosig-linux-ci ci-debug
 podman run --rm sosig-linux-ci ci-tsan
 podman run --rm sosig-linux-ci ci-release
+podman run --rm sosig-linux-ci ci-grammars
 podman run --rm sosig-linux-ci ci-multi
 podman run --rm -e CC=gcc-14 sosig-linux-ci ci-multi
 ```
