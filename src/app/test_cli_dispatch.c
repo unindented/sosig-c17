@@ -12,6 +12,7 @@
 #include "app/cli_dispatch.h"
 #include "app/exit_code.h"
 #include "core/sosig_version.h"
+#include "formats/highlight.h"
 #include "runtime/fs.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
@@ -111,14 +112,16 @@ static void leave_site_fixture(const char* root_dir, int saved_dir_fd) {
   remove_fixture_tree(root_dir);
 }
 
-// `--version` writes the version to `stdout` and reports success.
+// `--version` writes the version and the grammars to `stdout` and reports success.
 static void test_version_action_reports_ok(void) {
   char* argv[] = {"sosig", "--version", NULL};
   struct DispatchOutput dispatch_out;
   TEST_CHECK(dispatch_capturing(2, argv, &dispatch_out) == EXIT_CODE_OK);
   const struct Str version = sosig_version_string();
-  char expected[64];
-  const int expected_len = snprintf(expected, sizeof(expected), "sosig %.*s\n", STR_FMT(version));
+  const struct Str grammars = highlight_grammar_list();
+  char expected[sizeof(dispatch_out.stdout_out)];
+  const int expected_len = snprintf(expected, sizeof(expected), "sosig %.*s\ngrammars: %.*s\n",
+                                    STR_FMT(version), STR_FMT(grammars));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(dispatch_out.stdout_out, expected) == 0);
   TEST_CHECK(dispatch_out.stderr_out[0] == '\0');

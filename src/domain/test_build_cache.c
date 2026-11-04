@@ -4,6 +4,7 @@
 
 #include "domain/build_cache.h"
 #include "domain/site_config.h"
+#include "formats/highlight.h"
 #include "runtime/os.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
@@ -106,6 +107,19 @@ static void test_leaves_out_name_with_tab_or_newline(void) {
   TEST_CHECK(str_eq(text, recipe_of(&site_config, &arena)));
 }
 
+// The page recipe records the grammars the binary links, just before `PAGE_RECIPE_VERSION`, so a
+// build cache that a binary of another set wrote is another page recipe's.
+static void test_recipe_records_grammars(void) {
+  struct Arena arena = test_arena();
+  struct SiteConfig site_config;
+  site_config_init(&site_config);
+  const struct Str grammars = highlight_grammar_list();
+  struct Buf tail = {.arena = &arena};
+  buf_printf(&tail, "\tgrammars=%.*s\tpage_recipe_version=%d\n", STR_FMT(grammars),
+             PAGE_RECIPE_VERSION);
+  TEST_CHECK(str_endswith(recipe_of(&site_config, &arena), buf_str(&tail)));
+}
+
 // A build cache written under another page recipe is not used: another value of a config field a
 // render reads changes the first line, and so does another generator or `PAGE_RECIPE_VERSION`.
 static void test_rejects_another_page_recipe(void) {
@@ -164,6 +178,7 @@ static void test_rejects_rows_that_do_not_parse(void) {
 TEST_LIST = {
     {"round trips sorted rows", test_round_trips_sorted_rows},
     {"leaves out name with tab or newline", test_leaves_out_name_with_tab_or_newline},
+    {"recipe records grammars", test_recipe_records_grammars},
     {"rejects another page recipe", test_rejects_another_page_recipe},
     {"rejects rows that do not parse", test_rejects_rows_that_do_not_parse},
     {NULL, NULL},

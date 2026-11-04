@@ -12,6 +12,7 @@
 
 #include "core/parse.h"
 #include "core/sosig_version.h"
+#include "formats/highlight.h"
 #include "runtime/os.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
@@ -252,7 +253,8 @@ void cli_parse(struct CliOptions* options, int argc, char** argv, struct Arena* 
 int cli_print_version(struct Os* os, struct Arena scratch) {
   struct Buf text = {.arena = &scratch};
   const struct Str generator = sosig_generator_string();
-  buf_printf(&text, "%.*s\n", STR_FMT(generator));
+  const struct Str grammars = highlight_grammar_list();
+  buf_printf(&text, "%.*s\ngrammars: %.*s\n", STR_FMT(generator), STR_FMT(grammars));
   return os_print(os, 1, buf_str(&text));
 }
 

@@ -7,6 +7,7 @@
 
 #include "app/cli.h"
 #include "core/sosig_version.h"
+#include "formats/highlight.h"
 #include "runtime/fs.h"
 #include "shared/str.h"
 #include "test_support.h"
@@ -504,10 +505,10 @@ static void test_version_accessor_present(void) {
   TEST_CHECK(sosig_version_string().len > 0);
 }
 
-// `cli_print_version` writes exactly one `sosig <version>` line to standard output and nothing
-// else.
-static void test_print_version_writes_version_line(void) {
-  char text[64];
+// `cli_print_version` writes a `sosig <version>` line and a `grammars: <list>` line, naming the
+// grammars the build links, to standard output and nothing else.
+static void test_print_version_writes_version_and_grammars(void) {
+  char text[256];
   struct StreamCapture capture;
   if (capture_begin(stdout, &capture) != 0) {
     return;
@@ -520,8 +521,10 @@ static void test_print_version_writes_version_line(void) {
   }
 
   const struct Str version = sosig_version_string();
-  char expected[64];
-  const int expected_len = snprintf(expected, sizeof(expected), "sosig %.*s\n", STR_FMT(version));
+  const struct Str grammars = highlight_grammar_list();
+  char expected[sizeof(text)];
+  const int expected_len = snprintf(expected, sizeof(expected), "sosig %.*s\ngrammars: %.*s\n",
+                                    STR_FMT(version), STR_FMT(grammars));
   TEST_ASSERT(expected_len > 0 && (size_t)expected_len < sizeof(expected));
   TEST_CHECK(strcmp(text, expected) == 0);
 }
@@ -652,7 +655,7 @@ TEST_LIST = {
     {"unknown command", test_unknown_command},
     {"extra positional argument", test_extra_positional_argument},
     {"version accessor present", test_version_accessor_present},
-    {"print version writes version line", test_print_version_writes_version_line},
+    {"print version writes version and grammars", test_print_version_writes_version_and_grammars},
     {"print version reports write failure", test_print_version_reports_write_failure},
     {"print usage names program and command", test_print_usage_names_program_and_command},
     {"print usage reports write failure", test_print_usage_reports_write_failure},

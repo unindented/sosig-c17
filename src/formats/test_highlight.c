@@ -319,6 +319,14 @@ static void test_write_snippets(void) {
   }
 }
 
+// The list of grammars names every grammar the tests link, in the order `vendor/CMakeLists.txt`
+// gives them, as `sosig --version` prints it and the build cache records it. Adding a grammar must
+// update the literal.
+static void test_grammar_list_names_every_grammar(void) {
+  TEST_CHECK(
+      str_eq(highlight_grammar_list(), S("c, bash, html, css, javascript, typescript, tsx, json")));
+}
+
 // Every name of a grammar finds the same grammar, and two grammars' names find different ones.
 static void test_find_every_name(void) {
   static const char* const shell_names[] = {
@@ -691,6 +699,7 @@ static void test_write_out_of_memory(void) {
 
 TEST_LIST = {
     {"write snippets", test_write_snippets},
+    {"grammar list names every grammar", test_grammar_list_names_every_grammar},
     {"find every name", test_find_every_name},
     {"find folds case and prefix", test_find_folds_case_and_prefix},
     {"write escapes", test_write_escapes},

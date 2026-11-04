@@ -560,6 +560,10 @@ static void writer_span(struct Writer* writer, uint32_t capture) __attribute__((
  */
 static bool is_upper_word_byte(char c);
 
+struct Str highlight_grammar_list(void) {
+  return S(TREE_SITTER_GRAMMAR_LIST);
+}
+
 const struct HighlightGrammar* highlight_grammar_find(struct Str language) {
   if (str_startswith(language, LANGUAGE_PREFIX)) {
     language = str_tail(language, LANGUAGE_PREFIX.len);

@@ -10,6 +10,7 @@
 #include "core/path.h"
 #include "core/sosig_version.h"
 #include "domain/site_config.h"
+#include "formats/highlight.h"
 #include "runtime/os.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
@@ -161,6 +162,7 @@ void build_cache_format(struct Buf* buffer,
 
 static void format_recipe(struct Buf* buffer, const struct SiteConfig* site_config) {
   const struct Str generator = sosig_generator_string();
+  const struct Str grammars = highlight_grammar_list();
   buf_printf(buffer,
              "base_url=%.*s\ttitle=%.*s\tauthor=%.*s\tpermalink=%.*s\tcontent_template=%.*s\t"
              "aggregate_templates=",
@@ -171,8 +173,8 @@ static void format_recipe(struct Buf* buffer, const struct SiteConfig* site_conf
                      site_config->aggregate_template_count);
   buf_append(buffer, S("\tfeed_templates="));
   format_recipe_list(buffer, site_config->feed_templates, site_config->feed_template_count);
-  buf_printf(buffer, "\tfeed_count=%td\tgenerator=%.*s\tpage_recipe_version=%d\n",
-             site_config->feed_count, STR_FMT(generator), PAGE_RECIPE_VERSION);
+  buf_printf(buffer, "\tfeed_count=%td\tgenerator=%.*s\tgrammars=%.*s\tpage_recipe_version=%d\n",
+             site_config->feed_count, STR_FMT(generator), STR_FMT(grammars), PAGE_RECIPE_VERSION);
 }
 
 static void format_recipe_list(struct Buf* buffer, const struct Str* names, ptrdiff_t count) {

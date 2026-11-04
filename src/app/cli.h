@@ -91,12 +91,13 @@ void cli_parse(struct CliOptions* options, int argc, char** argv, struct Arena* 
     __attribute__((nonnull(1, 3, 4)));
 
 /**
- * @brief Writes the `sosig <version>` line to standard output.
+ * @brief Writes the `sosig <version>` line and the `grammars: <list>` line, which names the
+ *        grammars the binary links, to standard output.
  *
- * The line is formatted whole and printed in one `os_print` call.
+ * The lines are formatted whole and printed in one `os_print` call.
  *
  * @param os      Host to print on. Must not be `NULL`.
- * @param scratch Arena the line is formatted in.
+ * @param scratch Arena the lines are formatted in.
  * @return `0` on success, or `-1` when the write fails.
  */
 int cli_print_version(struct Os* os, struct Arena scratch) __attribute__((nonnull(1)));

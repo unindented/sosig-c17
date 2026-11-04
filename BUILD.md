@@ -88,7 +88,7 @@ TypeScript and TSX are separate grammars. Either builds without `javascript`, be
 
 A name of no grammar stops the configure. So does any list while `SOSIG_BUILD_TESTING` is on, because the tests need every grammar.
 
-The build cache does not record the grammar set. After a change to it, run `sosig build --force` once on a site, so that every page is highlighted with the new set.
+`sosig --version` lists the grammars a binary links. The build cache records them too, so the first build of a site by a binary of another set makes every page again.
 
 `vendor/CMakeLists.txt` generates `tree_sitter_grammars.h`, which declares the selected grammars' languages, queries and names, and `src/formats/highlight.c` builds its table of grammars from it.
 

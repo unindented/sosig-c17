@@ -24,7 +24,7 @@ Download a prebuilt binary from the [Releases](https://github.com/unindented/sos
 
 Run these commands for help:
 
-- `sosig --version` (or `-V`): Print the version.
+- `sosig --version` (or `-V`): Print the version, and the grammars the binary links for [highlighting](#html-shared-by-both-formats).
 - `sosig --help` (or `-h`): Print the list of available commands.
 - `sosig <command> --help`: Print the help for one command.
 
@@ -55,7 +55,7 @@ A dry run that passes does not promise that the build will. It writes nothing, s
 
 ### Build cache
 
-A build records in `_sosig/v1-build-cache.tsv` below `output_dir` the size and modification time of every input the pages depend on: each content source and each file below `templates_dir`. Its first line records the config fields a render reads and the `sosig` version. The next build keeps a content page whose source, templates, and config are unchanged, without rendering it, and keeps the aggregates and feeds when no source changed. A page whose template reads `content_entries` or `site.updated` is made again when any entry changes. Any change below `templates_dir`, such as to a partial, makes every page again. Markdown and Org are still converted for every source on every build.
+A build records in `_sosig/v1-build-cache.tsv` below `output_dir` the size and modification time of every input the pages depend on: each content source and each file below `templates_dir`. Its first line records the config fields a render reads, the `sosig` version, and the grammars it links. The next build keeps a content page whose source, templates, and config are unchanged, without rendering it, and keeps the aggregates and feeds when no source changed. A page whose template reads `content_entries` or `site.updated` is made again when any entry changes. Any change below `templates_dir`, such as to a partial, makes every page again. Markdown and Org are still converted for every source on every build.
 
 A tool that changes a file but keeps its size and modification time, such as `exiftool -P`, can leave a page that no longer matches its source. Run `sosig build --force` once to make every page again and write the build cache afresh.
 

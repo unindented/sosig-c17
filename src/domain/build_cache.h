@@ -88,7 +88,8 @@ struct Str build_cache_path(struct Str output_dir, struct Arena* arena) __attrib
  * @brief Parses a build cache, rejecting a first line other than the page recipe of `site_config`.
  *
  * The page recipe is what an output depends on besides its input files: the configuration a render
- * reads, the generator string, and `PAGE_RECIPE_VERSION`, each as `name=value`, joined by tabs.
+ * reads, the generator string, the grammars the build links, and `PAGE_RECIPE_VERSION`, each as
+ * `name=value`, joined by tabs.
  *
  * Every row, the last included, ends in a newline, and the rows are sorted by kind and then by
  * name, with none twice. An empty file, which a build leaves until it has written every page, is
