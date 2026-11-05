@@ -96,10 +96,12 @@ static void test_prints_loaded_config(void) {
   }
   char stdout_out[8192];
   char stderr_out[8192];
-  if (!TEST_CHECK(write_fixture_file(root_dir, "sosig.toml",
-                                     "base_url = \"https://example.com\"\n"
-                                     "title = \"Test Site\"\n"
-                                     "author = \"Author Name\"\n") == 0)) {
+  if (!TEST_CHECK(write_fixture_file(
+                      root_dir, "sosig.toml",
+                      "base_url = \"https://example.com\"\n"
+                      "title = \"Test Site\"\n"
+                      "author = \"Author Name\"\n"
+                      "frontmatter_ignored_keys = [\"identifier\", \"signature\"]\n") == 0)) {
     goto cleanup;
   }
 
@@ -122,7 +124,7 @@ static void test_prints_loaded_config(void) {
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
                     "feed_count = 10\n"
-                    "frontmatter_ignored_keys = []\n") == 0);
+                    "frontmatter_ignored_keys = [\"identifier\", \"signature\"]\n") == 0);
 
 cleanup:
   remove_fixture_tree(root_dir);

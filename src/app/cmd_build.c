@@ -1023,13 +1023,14 @@ static int convert_content_bodies(struct BuildState* state, struct Log* log) {
       state->source_entries, state->draft_flags, &state->site_config, &state->source_paths,
       &state->asset_paths, state->worker_count, state->worker_arenas, state->is_verbose, state->os,
       state->scratch, log);
-  // No row tracks an asset, so a body that links one can change with no row changing, and its page,
-  // and every aggregate and feed that may show the body, are made again.
+  // No row tracks an asset, so a body that links one can change with no row changing, and its page
+  // is made again. An aggregate or a feed that shows the body is not: it follows the entry rows as
+  // before, and remaking every aggregate in every build for a renamed asset costs more than it is
+  // worth.
   for (ptrdiff_t i = 0; i < state->source_paths.count; i++) {
     const struct ContentEntry* entry = state->source_entries[i];
     if (entry != NULL && entry->has_asset_link) {
       state->fresh_rows[i] = NULL;
-      state->is_aggregates_fresh = false;
     }
   }
   return rc;

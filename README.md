@@ -176,7 +176,7 @@ A build writes the build cache to `_sosig/v1-build-cache.tsv` below `output_dir`
 The next build keeps a content page, and does not render it again, if its content file, its templates, and the configuration did not change. The build keeps the aggregates and feeds if no content file changed. Some changes make the build render pages again:
 
 - If any entry changes, the build renders again each page whose template reads `content_entries` or `site.modified`, and each page whose body [links another content file](#links-between-content-files).
-- If a page has a denote link to an asset in its body, the build renders that page, every aggregate, and every feed in every build, because the build cache does not record assets.
+- If a page has a denote link to an asset in its body, the build renders that page in every build, because the build cache does not record assets. An aggregate or a feed that shows the body is made again only when an entry changes, so after you rename the asset, it keeps the old link until then.
 - If any file below `templates_dir` changes, such as a partial, the build renders every page again.
 
 Every build still converts the Markdown or Org of every content file.
@@ -291,7 +291,7 @@ A link in a content file can point to another content file. `sosig` writes the l
 | By path              | `[[file:other.org][Other]]`         | `[Other](other.md)`               |
 | By denote identifier | `[[denote:20240819T110654][Other]]` | `[Other](denote:20240819T110654)` |
 
-A path link names a file whose path ends in `.md` or `.org`, in any letter case, in either format. The path is relative to the directory of the linking file, and it can contain `.` and `..` segments. In Markdown, the link has no scheme such as `https:`. `sosig` does not change a link to any other file, such as an image, or a path that starts with `/`.
+A path link names a file whose path ends in `.md` or `.org`, in any letter case, in either format. The path is relative to the directory of the linking file, and it can contain `.` and `..` segments. In Markdown, the link has no scheme such as `https:`. `sosig` compares the path as written, so write a space in a Markdown path as a space inside angle brackets, such as `[Other](<Field Notes/other.md>)`, and not as `%20`. `sosig` does not change a link to any other file, such as an image, or a path that starts with `/`.
 
 A denote link names the file whose name contains the identifier, in one of the two forms that denote writes: the `YYYYMMDDTHHMMSS` timestamp at the start of the name, or the text after `@@` up to the next `==`, `--`, `__`, `@@`, or `.`. These forms cover every identifier format and every order of the parts of a file name. The file can be a content file or an asset, such as a PDF that denote renamed. A link to an asset points to the copy of the asset in `output_dir`. If two files have the same identifier, the link names a content file before an asset, and then the first path in sorted order. `sosig` does not read the `#+identifier:` keyword, the `identifier` key, or the exclusion settings of denote. In Markdown, `<denote:20240819T110654>` is also a denote link.
 

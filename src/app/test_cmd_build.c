@@ -567,6 +567,40 @@ static void test_links_denote_identifiers_of_each_form(void) {
                                "<a href=\"files/20240105T000000--paper.pdf\">p</a></p>\n\n"));
 }
 
+// Two sources that share an identifier: the link goes to the first in sorted path order, and the
+// build reports nothing.
+static void test_links_the_first_source_of_a_shared_identifier(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md",
+                  "+++\ntitle = \"A\"\ndate = 2024-01-01\n+++\n[n](denote:20240101T000000)\n");
+  os_memory_write(os, "content/one/20240101T000000--first.org",
+                  "#+title: One\n#+date: 2024-01-01\n\nOne\n");
+  os_memory_write(os, "content/two/20240101T000000--second.md",
+                  "+++\ntitle = \"Two\"\ndate = 2024-01-01\n+++\nTwo\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/a.html",
+                               "<p><a href=\"one/20240101t000000-first.html\">n</a></p>\n\n"));
+}
+
+// A draft's body is not converted, so its links are not checked: a draft that links a missing file
+// does not fail the build.
+static void test_skips_links_in_drafts(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md", HELLO_ENTRY);
+  os_memory_write(os, "content/d.md",
+                  "+++\ntitle = \"D\"\ndate = 2024-01-01\ndraft = true\n+++\n"
+                  "[gone](denote:19990101T000000) [also](gone.md)\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/a.html", HELLO_PAGE));
+  TEST_CHECK(!os_memory_has_path(os, "public/d.html"));
+}
+
 // A second build over a finished output tree succeeds and produces the same set of outputs.
 static void test_rebuild_succeeds_and_repeats_its_outputs(void) {
   struct Os* os = site_fixture(NULL);
@@ -849,9 +883,10 @@ static void test_page_linking_an_entry_follows_it(void) {
   TEST_CHECK(test_log_is(&log, "link 'b.org' names draft 'content/b.org' (in 'content/a.md')\n"));
 }
 
-// A page whose denote link names an asset is made again by every build, and so are the aggregate
-// and the feed, which may show its body, because no row of the build cache tracks the asset. Every
-// other page is kept. A page with no link to another entry is kept when an unrelated entry changes.
+// A page whose denote link names an asset is made again by every build, because no row of the build
+// cache tracks the asset. Every other page, the aggregate and the feed are kept, and they follow
+// the entry rows as before: a changed entry makes them again. A page with no link to another entry
+// is kept when an unrelated entry changes.
 static void test_page_linking_an_asset_is_made_every_build(void) {
   struct Os* os = every_output_kind_fixture();
   struct Arena arena = test_arena();
@@ -869,8 +904,8 @@ static void test_page_linking_an_asset_is_made_every_build(void) {
                         "keep\tpublic/alpha.html\n"
                         "keep\tpublic/beta.html\n"
                         "write\tpublic/gamma.html\n"
-                        "write\tpublic/index.html\n"
-                        "write\tpublic/feed.xml\n"
+                        "keep\tpublic/index.html\n"
+                        "keep\tpublic/feed.xml\n"
                         "write\tpublic/sosig.css\n"
                         "write\tpublic/20240105T000000--paper.pdf\n"
                         "write\tpublic/_sosig/v1-build-cache.tsv\n"));
@@ -1747,6 +1782,9 @@ TEST_LIST = {
     {"links notes to each others pages", test_links_notes_to_each_others_pages},
     {"resolves each form of link", test_resolves_each_form_of_link},
     {"links denote identifiers of each form", test_links_denote_identifiers_of_each_form},
+    {"links the first source of a shared identifier",
+     test_links_the_first_source_of_a_shared_identifier},
+    {"skips links in drafts", test_skips_links_in_drafts},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
     {"rebuild removes stale outputs", test_rebuild_removes_stale_outputs},
     {"rebuild removes deleted asset", test_rebuild_removes_deleted_asset},
