@@ -94,18 +94,22 @@ static int frontmatter_parse_document(struct Str frontmatter,
  *
  * Checks every field even after one fails, so a file with several mistakes reports all of them.
  *
- * @param entry       Entry that receives the metadata. Must not be `NULL`.
- * @param table       Parsed frontmatter top-level table.
- * @param source_path Source file path, used for slug fallback and named in every error.
- * @param perm        Arena that owns every value copied onto the entry. Must not be `NULL`.
- * @param log         Log that receives every error. Must not be `NULL`.
+ * @param entry           Entry that receives the metadata. Must not be `NULL`.
+ * @param table           Parsed frontmatter top-level table.
+ * @param known_keys      Array of `known_key_count` keys the table may hold. Must not be `NULL`.
+ * @param known_key_count Number of keys in `known_keys`.
+ * @param source_path     Source file path, used for slug fallback and named in every error.
+ * @param perm            Arena that owns every value copied onto the entry. Must not be `NULL`.
+ * @param log             Log that receives every error. Must not be `NULL`.
  * @return `0` on success, or `-1` when any key is unknown or any field fails validation.
  */
 static int frontmatter_parse_metadata(struct ContentEntry* entry,
                                       toml_datum_t table,
+                                      const struct Str* known_keys,
+                                      ptrdiff_t known_key_count,
                                       struct Str source_path,
                                       struct Arena* perm,
-                                      struct Log* log) __attribute__((nonnull(1, 4, 5)));
+                                      struct Log* log) __attribute__((nonnull(1, 3, 6, 7)));
 
 /**
  * @brief Copies the required title.
@@ -604,6 +608,8 @@ int frontmatter_split(struct Str markdown,
 int frontmatter_parse(struct ContentEntry* entry,
                       struct Str frontmatter,
                       struct Str source_path,
+                      const struct Str* ignored_keys,
+                      ptrdiff_t ignored_key_count,
                       struct Arena* perm,
                       struct Arena scratch,
                       struct Log* log) {
@@ -615,7 +621,18 @@ int frontmatter_parse(struct ContentEntry* entry,
     return -1;
   }
 
-  const int rc = frontmatter_parse_metadata(entry, parsed.toptab, source_path, perm, log);
+  // The known keys are the schema's, then the ones the site accepts without reading them.
+  const ptrdiff_t schema_key_count = sizeof(frontmatter_keys) / sizeof(frontmatter_keys[0]);
+  struct Str* known_keys = arena_new(&scratch, schema_key_count + ignored_key_count, struct Str);
+  for (ptrdiff_t i = 0; i < schema_key_count; i++) {
+    known_keys[i] = frontmatter_keys[i];
+  }
+  for (ptrdiff_t i = 0; i < ignored_key_count; i++) {
+    known_keys[schema_key_count + i] = ignored_keys[i];
+  }
+  const int rc =
+      frontmatter_parse_metadata(entry, parsed.toptab, known_keys,
+                                 schema_key_count + ignored_key_count, source_path, perm, log);
   // The populate step copies every value it keeps into `perm`, so `frontmatter_parse` can release
   // the parse result here and the entry holds no pointer into it.
   toml_free(parsed);
@@ -686,12 +703,13 @@ static int frontmatter_parse_document(struct Str frontmatter,
 // The key order matches the frontmatter documented in `README.md`.
 static int frontmatter_parse_metadata(struct ContentEntry* entry,
                                       toml_datum_t table,
+                                      const struct Str* known_keys,
+                                      ptrdiff_t known_key_count,
                                       struct Str source_path,
                                       struct Arena* perm,
                                       struct Log* log) {
-  int rc = toml_require_known_keys(table, frontmatter_keys,
-                                   sizeof(frontmatter_keys) / sizeof(frontmatter_keys[0]),
-                                   S("frontmatter"), S(""), source_path, log);
+  int rc = toml_require_known_keys(table, known_keys, known_key_count, S("frontmatter"), S(""),
+                                   source_path, log);
   entry->source_path = str_clone(source_path, perm);
   if (frontmatter_parse_metadata_title(entry, table, source_path, perm, log) != 0) {
     rc = -1;
@@ -822,8 +840,8 @@ static int frontmatter_parse_metadata_tags(struct ContentEntry* entry,
   }
 
   // This publishes both fields only once it validates every element, so the entry never claims a
-  // count backed by a partially filled array. `copy_template_names` publishes on the same
-  // discipline.
+  // count backed by a partially filled array. `copy_strings` in `site_config.c` publishes on the
+  // same discipline.
   entry->tags = items;
   entry->tag_count = tag_count;
   return 0;

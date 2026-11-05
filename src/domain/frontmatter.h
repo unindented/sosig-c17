@@ -43,26 +43,34 @@ int frontmatter_split(struct Str markdown,
  * @brief Parses TOML frontmatter and applies it to a zeroed content entry.
  *
  * Populates required and optional metadata, copying every value it keeps into `perm`. It rejects a
- * key outside the schema and validates value types and the template name.
+ * key outside the schema and `ignored_keys`, and validates value types and the template name. A key
+ * in `ignored_keys` may hold any value, which the parse does not read.
  *
- * @param entry       Zeroed entry that receives the parsed metadata. On failure the parse may leave
- *                    it partially populated, and the values it already copied stay in `perm`. Must
- *                    not be `NULL`.
- * @param frontmatter Frontmatter TOML bytes, shorter than `INT_MAX` bytes, which the content file
- *                    limit guarantees.
- * @param source_path Source file path, used for slug fallback and named in every error.
- * @param perm        Arena that owns the values copied onto the entry. Must not be `NULL`.
- * @param scratch     Arena for the parse's temporaries.
- * @param log         Log that receives every error. Every key is checked even after one fails, so
- *                    all of a file's mistakes are reported at once. Must not be `NULL`.
+ * @param entry             Zeroed entry that receives the parsed metadata. On failure the parse may
+ *                          leave it partially populated, and the values it already copied stay in
+ *                          `perm`. Must not be `NULL`.
+ * @param frontmatter       Frontmatter TOML bytes, shorter than `INT_MAX` bytes, which the content
+ *                          file limit guarantees.
+ * @param source_path       Source file path, used for slug fallback and named in every error.
+ * @param ignored_keys      Array of `ignored_key_count` keys accepted outside the schema, such as
+ *                          `frontmatter_ignored_keys`. May be `NULL` only when `ignored_key_count`
+ *                          is 0.
+ * @param ignored_key_count Number of keys in `ignored_keys`.
+ * @param perm              Arena that owns the values copied onto the entry. Must not be `NULL`.
+ * @param scratch           Arena for the parse's temporaries.
+ * @param log               Log that receives every error. Every key is checked even after one
+ *                          fails, so all of a file's mistakes are reported at once. Must not be
+ *                          `NULL`.
  * @return `0` on success, or `-1` on a parse or any validation error.
  */
 int frontmatter_parse(struct ContentEntry* entry,
                       struct Str frontmatter,
                       struct Str source_path,
+                      const struct Str* ignored_keys,
+                      ptrdiff_t ignored_key_count,
                       struct Arena* perm,
                       struct Arena scratch,
-                      struct Log* log) __attribute__((nonnull(1, 4, 6)));
+                      struct Log* log) __attribute__((nonnull(1, 6, 8)));
 
 /**
  * @brief Reads the keywords at the top of an Org file and applies them to a zeroed content entry.

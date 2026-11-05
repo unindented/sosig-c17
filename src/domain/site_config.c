@@ -81,6 +81,7 @@ static const struct Str config_keys[] = {
     STR_INIT("aggregate_templates"),
     STR_INIT("feed_templates"),
     STR_INIT("feed_count"),
+    STR_INIT("frontmatter_ignored_keys"),
     // clang-format on
 };
 
@@ -187,27 +188,31 @@ static int copy_string(toml_datum_t table,
                        struct Log* log) __attribute__((nonnull(2, 4, 5, 6)));
 
 /**
- * @brief Copies one optional template-name array key and validates each name.
+ * @brief Copies one optional array-of-strings key, and validates each string as a template name
+ *        when it names templates.
  *
  * When the key is absent, this leaves the outputs untouched and keeps the defaults from
  * `site_config_init`.
  *
- * @param table                   Parsed TOML table.
- * @param key                     Array key to read. Must not be `NULL`.
- * @param arena                   Arena that owns the copied names. Must not be `NULL`.
- * @param template_names_out      Receives the copied name array when the key is present. Must not
- *                                be `NULL`.
- * @param template_name_count_out Receives the number of names when the key is present. Must not be
- *                                `NULL`.
- * @param log                     Log that receives every error. Must not be `NULL`.
- * @return `0` on success or when absent, or `-1` on a wrong type, a `NUL` byte, or an unsafe name.
+ * @param table             Parsed TOML table.
+ * @param key               Array key to read. Must not be `NULL`.
+ * @param is_template_names Whether each string must be a safe relative template name.
+ * @param arena             Arena that owns the copied strings. Must not be `NULL`.
+ * @param items_out         Receives the copied string array when the key is present. Must not be
+ *                          `NULL`.
+ * @param item_count_out    Receives the number of strings when the key is present. Must not be
+ *                          `NULL`.
+ * @param log               Log that receives every error. Must not be `NULL`.
+ * @return `0` on success or when absent, or `-1` on a wrong type, a `NUL` byte, or an unsafe
+ *         template name.
  */
-static int copy_template_names(toml_datum_t table,
-                               const char* key,
-                               struct Arena* arena,
-                               const struct Str** template_names_out,
-                               ptrdiff_t* template_name_count_out,
-                               struct Log* log) __attribute__((nonnull(2, 3, 4, 5, 6)));
+static int copy_strings(toml_datum_t table,
+                        const char* key,
+                        bool is_template_names,
+                        struct Arena* arena,
+                        const struct Str** items_out,
+                        ptrdiff_t* item_count_out,
+                        struct Log* log) __attribute__((nonnull(2, 4, 5, 6, 7)));
 
 /**
  * @brief Validates and copies one bounded non-negative integer key into `spec->field`.
@@ -355,13 +360,13 @@ static void site_config_print_key_string(struct Buf* buffer, const char* key, st
  *
  * @param buffer     Buffer the line is appended to. Must not be `NULL`.
  * @param key        Terminated key name to write. Must not be `NULL`.
- * @param items      Array of `item_count` strings. Must not be `NULL`.
+ * @param items      Array of `item_count` strings. May be `NULL` only when `item_count` is 0.
  * @param item_count Number of items in `items`.
  */
 static void site_config_print_string_array(struct Buf* buffer,
                                            const char* key,
                                            const struct Str* items,
-                                           ptrdiff_t item_count) __attribute__((nonnull(1, 2, 3)));
+                                           ptrdiff_t item_count) __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Writes `text` as a quoted TOML basic string, escaping delimiters and control bytes.
@@ -429,6 +434,9 @@ int site_config_print(const struct SiteConfig* site_config, struct Os* os, struc
   site_config_print_string_array(&text, "feed_templates", site_config->feed_templates,
                                  site_config->feed_template_count);
   buf_printf(&text, "feed_count = %td\n", site_config->feed_count);
+  site_config_print_string_array(&text, "frontmatter_ignored_keys",
+                                 site_config->frontmatter_ignored_keys,
+                                 site_config->frontmatter_ignored_key_count);
   return os_print(os, 1, buf_str(&text));
 }
 
@@ -496,12 +504,12 @@ static void site_config_load_fields(struct SiteConfig* site_config,
     site_config->permalink = PERMALINK_DEFAULT;
     site_config->is_output_key_rejected = true;
   }
-  if (copy_template_names(table, "aggregate_templates", perm, &site_config->aggregate_templates,
-                          &site_config->aggregate_template_count, log) != 0) {
+  if (copy_strings(table, "aggregate_templates", true, perm, &site_config->aggregate_templates,
+                   &site_config->aggregate_template_count, log) != 0) {
     site_config->is_output_key_rejected = true;
   }
-  if (copy_template_names(table, "feed_templates", perm, &site_config->feed_templates,
-                          &site_config->feed_template_count, log) != 0) {
+  if (copy_strings(table, "feed_templates", true, perm, &site_config->feed_templates,
+                   &site_config->feed_template_count, log) != 0) {
     site_config->is_output_key_rejected = true;
   }
 
@@ -514,6 +522,9 @@ static void site_config_load_fields(struct SiteConfig* site_config,
       .limit_name = "feed count",
   };
   (void)copy_size(table, S(""), &feed_count, log);
+  (void)copy_strings(table, "frontmatter_ignored_keys", false, perm,
+                     &site_config->frontmatter_ignored_keys,
+                     &site_config->frontmatter_ignored_key_count, log);
 }
 
 static int copy_string(toml_datum_t table,
@@ -539,12 +550,13 @@ static int copy_string(toml_datum_t table,
   return 0;
 }
 
-static int copy_template_names(toml_datum_t table,
-                               const char* key,
-                               struct Arena* arena,
-                               const struct Str** template_names_out,
-                               ptrdiff_t* template_name_count_out,
-                               struct Log* log) {
+static int copy_strings(toml_datum_t table,
+                        const char* key,
+                        bool is_template_names,
+                        struct Arena* arena,
+                        const struct Str** items_out,
+                        ptrdiff_t* item_count_out,
+                        struct Log* log) {
   const toml_datum_t value = toml_get(table, key);
   if (value.type == TOML_UNKNOWN) {
     return 0;
@@ -554,15 +566,13 @@ static int copy_template_names(toml_datum_t table,
   }
 
   const ptrdiff_t item_count = value.u.arr.size;
-  // This allocates even for an empty array, rather than leaving it `NULL`. A zero-count allocation
-  // still returns a pointer. Every consumer of the published array is declared `nonnull` on it. If
-  // left `NULL`, `aggregate_templates = []` would reach `site_config_print_string_array` as a null
-  // pointer and abort.
+  // This allocates even for an empty array. A zero-count allocation still returns a pointer, so a
+  // list copied from the file is never `NULL`.
   struct Str* items = arena_new(arena, item_count, struct Str);
 
-  // Every element is checked even after one fails, so each unsafe name is reported. A wrong type or
-  // a `NUL` byte is reported once, since its message names no element and a repeat would add
-  // nothing.
+  // Every element is checked even after one fails, so each unsafe template name is reported. A
+  // wrong type or a `NUL` byte is reported once, since its message names no element and a repeat
+  // would add nothing.
   int rc = 0;
   bool is_type_reported = false;
   bool is_nul_reported = false;
@@ -582,13 +592,13 @@ static int copy_template_names(toml_datum_t table,
       }
       continue;
     }
-    const struct Str name = toml_datum_str(item);
-    if (!path_is_safe_relative(name)) {
+    const struct Str text = toml_datum_str(item);
+    if (is_template_names && !path_is_safe_relative(text)) {
       rc = log_error(log, "config key '%s' must contain only safe relative template names: '%.*s'",
-                     key, STR_FMT(name));
+                     key, STR_FMT(text));
       continue;
     }
-    items[i] = str_clone(name, arena);
+    items[i] = str_clone(text, arena);
   }
   if (rc != 0) {
     return -1;
@@ -597,8 +607,8 @@ static int copy_template_names(toml_datum_t table,
   // The code fills these through a mutable local and publishes them as `const struct Str*`. The
   // elements have to be writable while it builds the arena copy, but must not be once the config
   // shares them with the render workers.
-  *template_names_out = items;
-  *template_name_count_out = item_count;
+  *items_out = items;
+  *item_count_out = item_count;
   return 0;
 }
 

@@ -48,6 +48,25 @@ void body_html_url_escape_append(struct Buf* buffer, struct Str text) {
   buf_append(buffer, str_tail(text, run_start));
 }
 
+int body_html_link_target_write(struct Buf* buffer,
+                                struct Str type,
+                                struct Str target,
+                                bool is_image,
+                                const struct LinkTargets* link_targets) {
+  if (link_targets == NULL) {
+    return -1;
+  }
+  const ptrdiff_t start = buffer->len;
+  bool is_written = false;
+  if (link_targets->write(buffer, type, target, is_image, &is_written, link_targets->userdata) !=
+          0 ||
+      !is_written) {
+    buffer->len = start;
+    return -1;
+  }
+  return 0;
+}
+
 void body_html_heading_open(struct Buf* buffer, ptrdiff_t level) {
   buf_printf(buffer, "<h%td>", heading_html_level(level));
 }

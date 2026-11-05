@@ -11,13 +11,16 @@
 /**
  * Content entry metadata and generated paths for one content source file.
  *
- * The entry and every string it points at live in the long-lived arena of the worker that parsed
- * it, or are string literals, so an entry stays valid for the rest of the build. Nothing borrows
- * from the source buffer, which lives in the parse job's scratch.
+ * The entry, its source and every string it points at live in the long-lived arena of the worker
+ * that parsed it, or are string literals, so an entry stays valid for the rest of the build. The
+ * HTML of its body lives in the long-lived arena of the worker that converted it.
  *
- * The parse phase fills every field. The page, aggregate and feed phases only read. That is a
- * thread-safety invariant. During the page phase every worker holds pointers to every entry, so a
- * write would race. Do not add a field that a later phase fills in place.
+ * The parse phase fills every field except `body_html`, `has_entry_link` and `has_asset_link`,
+ * which the convert phase fills. A convert job writes only those fields of its own entry, and reads
+ * the URL of other entries, so no two jobs write one field, and no job reads a field that another
+ * job writes. The page, aggregate and feed phases only read. That is a thread-safety invariant.
+ * During the page phase every worker holds pointers to every entry, so a write would race. Do not
+ * add a field that a phase after the convert phase fills in place.
  */
 struct ContentEntry {
   /** Content source path, used for diagnostics and output messages. */
@@ -79,8 +82,15 @@ struct ContentEntry {
   struct Str template;
 
   /**
-   * Rendered HTML body. A draft, or an entry that failed any step, never fills its entry slot, so
-   * no half-built entry is ever published.
+   * Markdown or Org body that the convert phase reads: the source after its frontmatter, or the
+   * whole Org source.
+   */
+  struct Str body_source;
+
+  /**
+   * Rendered HTML body. A draft, or an entry that failed to parse, never fills its entry slot, and
+   * a link that fails in the body stops the build before the first write, so no half-built entry is
+   * ever published.
    */
   struct Str body_html;
 
@@ -98,6 +108,18 @@ struct ContentEntry {
    * sits after the data it describes rather than between `tag_count` and `template`.
    */
   bool is_draft;
+
+  /**
+   * Whether the body links another content source, whose URL the page then depends on, so the build
+   * cache treats the page as one that read the entry list.
+   */
+  bool has_entry_link;
+
+  /**
+   * Whether the body links an asset through a denote identifier. The build cache has no row for an
+   * asset, so every build makes the page again.
+   */
+  bool has_asset_link;
 };
 
 /**

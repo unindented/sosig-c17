@@ -50,31 +50,31 @@ _Static_assert(PTRDIFF_MAX > 0xffffffff, "the arenas below need a 64-bit address
 
 /**
  * Bytes of each thread's perm, which holds the main thread's paths, entry arrays and manifest, or a
- * worker's parsed entries, beside one render's buffer of up to twice `RENDER_OUTPUT_LEN_MAX`.
+ * worker's parsed entries with their sources and the bodies it converted, beside one render's
+ * buffer of up to twice `RENDER_OUTPUT_LEN_MAX`.
  */
 #define BUILD_PERM_LEN (16 * (ptrdiff_t)RENDER_OUTPUT_LEN_MAX)
 
 /**
- * Bytes of each thread's scratch, which holds one job's temporaries: at most a source of
- * `CONTENT_FILE_LEN_MAX`, then what its converter holds, and the region its code blocks are
- * highlighted in, twice `HIGHLIGHT_MEMORY_LEN_MAX`. A converter's buffers grow by doubling in an
- * arena they share, so each takes at most four times what it holds. Markdown holds the
- * frontmatter's copy and a code block's text: five bytes for each byte of the source. Org holds a
- * source block's text and an inline source's, four bytes for each byte of them, and a source
- * block's code references, a 16-byte record for the eight bytes a `(ref:name)` and its line end
- * take, of which the held text keeps the line end: nine bytes for each. Org's is the larger, with
- * the source and the region 2.75 GiB together. A block made almost wholly of code references whose
- * `-l` label format is shorter takes up to 32 bytes for each byte, and past about 80 MiB of such
- * lines it ends in `os_oom`: that is the one input the limits accept that this does not hold. Or
- * the scratch holds a render in which a partial that includes itself reaches the expansion limit
- * long before the arena is full.
+ * Bytes of each thread's scratch, which holds one job's temporaries: what a converter holds, and
+ * the region its code blocks are highlighted in, twice `HIGHLIGHT_MEMORY_LEN_MAX`. The source
+ * itself is in the perm. A converter's buffers grow by doubling in an arena they share, so each
+ * takes at most four times what it holds. Markdown holds a code block's text: four bytes for each
+ * byte of the source. Org holds a source block's text and an inline source's, four bytes for each
+ * byte of them, and a source block's code references, a 16-byte record for the eight bytes a
+ * `(ref:name)` and its line end take, of which the held text keeps the line end: nine bytes for
+ * each. Org's is the larger, with the region 2.5 GiB together. A block made almost wholly of code
+ * references whose `-l` label format is shorter takes up to 32 bytes for each byte, and past about
+ * 88 MiB of such lines it ends in `os_oom`: that is the one input the limits accept that this does
+ * not hold. Or the scratch holds a parse's copy of the frontmatter, or a render in which a partial
+ * that includes itself reaches the expansion limit long before the arena is full.
  */
 #define BUILD_SCRATCH_LEN (3 * 1024 * BUILD_MIB)
 
-_Static_assert(10 * (ptrdiff_t)CONTENT_FILE_LEN_MAX + 2 * (ptrdiff_t)HIGHLIGHT_MEMORY_LEN_MAX <=
+_Static_assert(9 * (ptrdiff_t)CONTENT_FILE_LEN_MAX + 2 * (ptrdiff_t)HIGHLIGHT_MEMORY_LEN_MAX <=
                    BUILD_SCRATCH_LEN,
-               "a worker's scratch must hold a source, what its converter holds, and the region "
-               "its code blocks are highlighted in");
+               "a worker's scratch must hold what its converter holds, and the region its code "
+               "blocks are highlighted in");
 
 /** Most workers the build starts for each online CPU, however many are requested. */
 enum { BUILD_WORKER_PER_CPU_MAX = 4 };
@@ -168,6 +168,9 @@ struct BuildState {
    * Each entry lives in the perm of the worker that parsed it.
    */
   struct ContentEntry** source_entries;
+
+  /** One flag per source path, set for a draft, in `perm`. */
+  bool* draft_flags;
 
   /**
    * Rendered non-draft content entries used by templates, sorted newest-first. The pointers are
@@ -330,8 +333,8 @@ static int load_build_inputs_require_read_roots(const struct BuildState* state, 
 /**
  * @brief Runs the phases from parsing to the prune, and in a dry run the report.
  *
- * Parses every source and checks every output path even after an error, then stops before the first
- * write when `log` holds any error, an earlier phase's included.
+ * Parses every source, checks every output path, and converts every body even after an error, then
+ * stops before the first write when `log` holds any error, an earlier phase's included.
  *
  * @param state Build state whose inputs are loaded. Must not be `NULL`.
  * @param log   Log that receives every error. Must not be `NULL`.
@@ -343,16 +346,16 @@ static int run_build_phases(struct BuildState* state, struct Log* log)
 /**
  * @brief Parses every discovered content entry source, dispatching jobs across worker threads.
  *
- * Allocates `source_entries`, one slot per source path, before the parse phase fills it. A site
- * with no sources skips the phase, so it prints no status line and starts no pool. `source_entries`
- * then stays `NULL`.
+ * Allocates `source_entries` and `draft_flags`, one slot per source path, before the parse phase
+ * fills them. A site with no sources skips the phase, so it prints no status line and starts no
+ * pool. Both then stay `NULL`.
  *
  * @param state Build state holding the sources, whose `source_entries` receives the parsed entries.
  *              Must not be `NULL`.
  * @param log   Log that receives the collected parse errors. Must not be `NULL`.
  * @return `0` when every job succeeded or there are no sources, or `-1` when any parse job failed.
  */
-static int render_content_entries(struct BuildState* state, struct Log* log)
+static int parse_content_entries(struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -451,6 +454,23 @@ static bool is_every_entry_unchanged(const struct BuildState* state) __attribute
  * @return `true` when the template rows match the templates one for one.
  */
 static bool is_every_template_unchanged(const struct BuildState* state) __attribute__((nonnull(1)));
+
+/**
+ * @brief Converts the body of every parsed entry, dispatching jobs across worker threads, with each
+ *        link to another content file pointing at its page or copy.
+ *
+ * Runs after the entries have their URLs, and before the first write, so a link that names no file
+ * or a draft stops the build with the other errors. A page whose denote link names an asset loses
+ * its fresh row, and the aggregates and feeds are made again, because no row tracks the asset. A
+ * site with no sources skips the phase, so it prints no status line and starts no pool.
+ *
+ * @param state Build state holding the parsed entries, the asset paths and the fresh rows. Must not
+ *              be `NULL`.
+ * @param log   Log that receives the collected link errors. Must not be `NULL`.
+ * @return `0` when every job succeeded or there are no sources, or `-1` when any link failed.
+ */
+static int convert_content_bodies(struct BuildState* state, struct Log* log)
+    __attribute__((nonnull(1, 2)));
 
 /**
  * @brief Creates the output directory once the manifest has accepted every output path.
@@ -778,18 +798,19 @@ static int load_build_inputs_require_read_roots(const struct BuildState* state, 
 }
 
 static int run_build_phases(struct BuildState* state, struct Log* log) {
-  // The order below follows the data: a content template can read `site.modified` and iterate
-  // `content_entries`. Parsing every source has to finish, and the entries have to be collected and
-  // sorted, before any page is rendered. A source that failed to parse leaves its slot empty, and
-  // the manifest checks the rest.
-  (void)render_content_entries(state, log);
+  // The order below follows the data: a body's link to another content file needs that file's URL,
+  // and a content template can read `site.modified` and iterate `content_entries`. Parsing every
+  // source has to finish before any body is converted, and the entries have to be collected and
+  // sorted before any page is rendered. A source that failed to parse leaves its slot empty, and
+  // the manifest and the conversion check the rest.
+  (void)parse_content_entries(state, log);
   collect_content_entries(state);
   (void)populate_output_manifest(state, log);
-  if (log->errors > 0) {
+  if (load_build_cache(state, log) != 0) {
     return -1;
   }
-
-  if (load_build_cache(state, log) != 0) {
+  (void)convert_content_bodies(state, log);
+  if (log->errors > 0) {
     return -1;
   }
 
@@ -813,16 +834,17 @@ static int run_build_phases(struct BuildState* state, struct Log* log) {
   return 0;
 }
 
-static int render_content_entries(struct BuildState* state, struct Log* log) {
+static int parse_content_entries(struct BuildState* state, struct Log* log) {
   if (state->source_paths.count == 0) {
     return 0;
   }
   build_verbose(state, "parsing content, workers: %td", state->worker_count);
   state->source_entries = arena_new(&state->perm, state->source_paths.count, struct ContentEntry*);
-  return entry_renderer_render_entries(&state->site_config, &state->source_paths,
-                                       CONTENT_FILE_LEN_MAX, state->worker_count,
-                                       state->worker_arenas, state->is_verbose, state->os,
-                                       state->scratch, state->source_entries, log);
+  state->draft_flags = arena_new(&state->perm, state->source_paths.count, bool);
+  return entry_renderer_parse_entries(
+      &state->site_config, &state->source_paths, CONTENT_FILE_LEN_MAX, state->worker_count,
+      state->worker_arenas, state->is_verbose, state->os, state->scratch, state->source_entries,
+      state->draft_flags, log);
 }
 
 static void collect_content_entries(struct BuildState* state) {
@@ -992,6 +1014,27 @@ static bool is_every_template_unchanged(const struct BuildState* state) {
   return true;
 }
 
+static int convert_content_bodies(struct BuildState* state, struct Log* log) {
+  if (state->source_paths.count == 0) {
+    return 0;
+  }
+  build_verbose(state, "converting bodies");
+  const int rc = entry_renderer_convert_bodies(
+      state->source_entries, state->draft_flags, &state->site_config, &state->source_paths,
+      &state->asset_paths, state->worker_count, state->worker_arenas, state->is_verbose, state->os,
+      state->scratch, log);
+  // No row tracks an asset, so a body that links one can change with no row changing, and its page,
+  // and every aggregate and feed that may show the body, are made again.
+  for (ptrdiff_t i = 0; i < state->source_paths.count; i++) {
+    const struct ContentEntry* entry = state->source_entries[i];
+    if (entry != NULL && entry->has_asset_link) {
+      state->fresh_rows[i] = NULL;
+      state->is_aggregates_fresh = false;
+    }
+  }
+  return rc;
+}
+
 static int prepare_output_dir(const struct BuildState* state, struct Log* log) {
   // A failure names the component that failed, which is more precise than the configured root, so
   // the root is not repeated.
@@ -1070,7 +1113,9 @@ static int write_build_cache(struct BuildState* state, struct Log* log) {
         .len = entry->source_stat.len,
         .mtime_s = entry->source_stat.mtime_s,
         .mtime_ns = entry->source_stat.mtime_ns,
-        .is_entry_list_read = state->entry_list_flags[i],
+        // A page that links another entry depends on that entry's URL, as a page that read the
+        // entry list depends on every entry.
+        .is_entry_list_read = state->entry_list_flags[i] || entry->has_entry_link,
     };
   }
   for (ptrdiff_t i = 0; i < state->template_paths.count; i++) {

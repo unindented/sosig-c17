@@ -30,10 +30,9 @@ enum { TREE_MEMORY_HEADER_LEN = 16 };
 enum { TREE_MEMORY_FREE_LIST_COUNT = 256 };
 
 /**
- * Bytes of tree-sitter memory from which a block gives its pages back once it is written, as a
- * worker gives back a source of `JOB_SOURCE_DISCARD_LEN_MIN` once it is converted: parsing a block
- * costs more than faulting the pages in again, and its pages would otherwise stay resident in the
- * worker for the rest of the build.
+ * Bytes of tree-sitter memory from which a block gives its pages back once it is written: parsing a
+ * block costs more than faulting the pages in again, and its pages would otherwise stay resident in
+ * the worker for the rest of the build.
  */
 enum { TREE_MEMORY_DISCARD_LEN_MIN = 16 * 1024 * 1024 };
 

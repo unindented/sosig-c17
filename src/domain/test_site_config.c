@@ -185,6 +185,7 @@ static void test_load_applies_required_and_defaults(void) {
   }
   TEST_CHECK(str_eq(config.feed_templates[0], S("atom.xml")));
   TEST_CHECK(config.feed_count == 10);
+  TEST_CHECK(config.frontmatter_ignored_key_count == 0);
 
 cleanup:
   remove_fixture_tree(temp_config.root_dir);
@@ -204,7 +205,8 @@ static void test_load_overrides_optional_keys(void) {
       "content_template = \"post.html\"\n"
       "aggregate_templates = [\"index.html\", \"archive.html\"]\n"
       "feed_templates = []\n"
-      "feed_count = 5\n";
+      "feed_count = 5\n"
+      "frontmatter_ignored_keys = [\"identifier\", \"signature\"]\n";
   struct TempConfig temp_config;
   if (write_temp_config(&temp_config, toml) != 0) {
     return;
@@ -228,6 +230,11 @@ static void test_load_overrides_optional_keys(void) {
   TEST_CHECK(str_eq(config.aggregate_templates[1], S("archive.html")));
   TEST_CHECK(config.feed_template_count == 0);
   TEST_CHECK(config.feed_count == 5);
+  if (!TEST_CHECK(config.frontmatter_ignored_key_count == 2)) {
+    goto cleanup;
+  }
+  TEST_CHECK(str_eq(config.frontmatter_ignored_keys[0], S("identifier")));
+  TEST_CHECK(str_eq(config.frontmatter_ignored_keys[1], S("signature")));
 
 cleanup:
   remove_fixture_tree(temp_config.root_dir);
@@ -820,6 +827,15 @@ static void test_load_rejects_invalid_template_arrays(void) {
                      "names: '../evil.html'");
 }
 
+// A non-array value and a non-string element of `frontmatter_ignored_keys` are each rejected. Any
+// string is a key, so no string is unsafe.
+static void test_load_rejects_invalid_frontmatter_ignored_keys(void) {
+  check_load_rejects("frontmatter_ignored_keys = \"identifier\"\n",
+                     "config key 'frontmatter_ignored_keys' must be an array");
+  check_load_rejects("frontmatter_ignored_keys = [\"identifier\", 1]\n",
+                     "config key 'frontmatter_ignored_keys' must contain only strings");
+}
+
 // Every element of a template array is checked even after one fails, so each unsafe name is
 // reported in element order. A wrong type or a `NUL` byte is reported once however many elements
 // have it, since its message names no element. The rejected key keeps its default.
@@ -984,7 +1000,8 @@ static void test_print_defaults(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
 }
 
 // Printing escapes quotes, backslashes, and every named control escape (\t \b \n \f \r). It uses
@@ -1013,15 +1030,17 @@ static void test_print_escapes_strings(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
 }
 
 // Printing a config and loading the printed output back yields the same field values, exercising
 // the round-trip invariant documented on `site_config_print` across escaped strings (including a
-// `U+007F` byte), a non-default permalink, and multi-element template arrays.
+// `U+007F` byte), a non-default permalink, and multi-element string arrays.
 static void test_print_load_round_trips(void) {
   static const struct Str aggregates[] = {STR_INIT("index.html"), STR_INIT("archive.html")};
   static const struct Str feeds[] = {STR_INIT("atom.xml")};
+  static const struct Str ignored_keys[] = {STR_INIT("identifier"), STR_INIT("signature")};
 
   struct SiteConfig config;
   site_config_init(&config);
@@ -1040,6 +1059,8 @@ static void test_print_load_round_trips(void) {
   config.feed_templates = feeds;
   config.feed_template_count = 1;
   config.feed_count = 7;
+  config.frontmatter_ignored_keys = ignored_keys;
+  config.frontmatter_ignored_key_count = 2;
 
   char config_out[2048];
   TEST_ASSERT(render(&config, config_out, sizeof(config_out)) == 0);
@@ -1073,15 +1094,19 @@ static void test_print_load_round_trips(void) {
   }
   TEST_CHECK(str_eq(reloaded.feed_templates[0], S("atom.xml")));
   TEST_CHECK(reloaded.feed_count == config.feed_count);
+  if (!TEST_CHECK(reloaded.frontmatter_ignored_key_count == 2)) {
+    goto cleanup;
+  }
+  TEST_CHECK(str_eq(reloaded.frontmatter_ignored_keys[0], S("identifier")));
+  TEST_CHECK(str_eq(reloaded.frontmatter_ignored_keys[1], S("signature")));
 
 cleanup:
   remove_fixture_tree(temp_config.root_dir);
 }
 
 // An empty template array survives a load followed by a print. Neither operation alone tests this
-// sequence. If `copy_template_names` stored `NULL` for `[]`, it would pass that value to the
-// `nonnull` function `site_config_print_string_array`. Then `sosig config` would abort for a config
-// that the loader accepted.
+// sequence. The load stores `[]` as a pointer that is not `NULL`, as it stores every array it
+// copies, so a consumer never has to tell the two apart.
 static void test_print_empty_template_arrays(void) {
   const char toml[] =
       "base_url = \"https://example.com\"\n"
@@ -1105,7 +1130,7 @@ static void test_print_empty_template_arrays(void) {
   if (!TEST_CHECK(config.feed_template_count == 0)) {
     goto cleanup;
   }
-  // The empty array is a distinct non-`NULL` pointer, which the `nonnull` consumers need.
+  // The empty array is a distinct pointer that is not `NULL`.
   TEST_CHECK(config.aggregate_templates != NULL);
   TEST_CHECK(config.feed_templates != NULL);
 
@@ -1126,7 +1151,8 @@ static void test_print_empty_template_arrays(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = []\n"
                     "feed_templates = []\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
 
 cleanup:
   remove_fixture_tree(temp_config.root_dir);
@@ -1182,6 +1208,8 @@ TEST_LIST = {
     {"load rejects relative base url", test_load_rejects_relative_base_url},
     {"load rejects unsafe content template", test_load_rejects_unsafe_content_template},
     {"load rejects invalid template arrays", test_load_rejects_invalid_template_arrays},
+    {"load rejects invalid frontmatter ignored keys",
+     test_load_rejects_invalid_frontmatter_ignored_keys},
     {"load reports every invalid template name", test_load_reports_every_invalid_template_name},
     {"load rejects unsafe permalink", test_load_rejects_unsafe_permalink},
     {"load rejects permalink without slug", test_load_rejects_permalink_without_slug},

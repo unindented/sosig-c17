@@ -81,6 +81,16 @@ struct SiteConfig {
   ptrdiff_t feed_count;
 
   /**
+   * Keys that Markdown frontmatter accepts with any value and does not read, such as the
+   * `identifier` key that denote writes. Defaults to `[]`, as `NULL` with a count of `0`. It is
+   * `const` for the reason `aggregate_templates` gives.
+   */
+  const struct Str* frontmatter_ignored_keys;
+
+  /** Number of keys in `frontmatter_ignored_keys`. */
+  ptrdiff_t frontmatter_ignored_key_count;
+
+  /**
    * Whether the load rejected `content_dir`, which then holds its default rather than a directory
    * the user chose.
    */

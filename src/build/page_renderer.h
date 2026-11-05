@@ -18,11 +18,12 @@ struct SiteConfig;
 /**
  * @brief Renders each parsed content entry through its content template and writes its page.
  *
- * This is the second of the two parallel phases. When `source_entry_count` is 0, it runs no job and
- * returns `0`. It runs only after `entry_renderer_render_entries` succeeds and the entries are
- * collected and sorted. Every entry's template sees the whole sorted entry set and the site's
- * last-modified timestamp, so a content template resolves `site.modified` and
- * `{{#content_entries}}` exactly as an aggregate template does.
+ * This is the third of the three parallel phases. When `source_entry_count` is 0, it runs no job
+ * and returns `0`. It runs only after `entry_renderer_parse_entries` and
+ * `entry_renderer_convert_bodies` succeed and the entries are collected and sorted. Every entry's
+ * template sees the whole sorted entry set and the site's last-modified timestamp, so a content
+ * template resolves `site.modified` and `{{#content_entries}}` exactly as an aggregate template
+ * does.
  *
  * One job runs per slot of `source_entries`. Each job renders its entry's page into a copy of its
  * worker's `perm` and its temporaries into a copy of its worker's scratch, writes the page to the
@@ -41,7 +42,7 @@ struct SiteConfig;
  *                            not be `NULL`.
  * @param site_config         Site configuration supplying `templates_dir` and the default content
  *                            template. Must not be `NULL`.
- * @param source_entries      Slot array filled by `entry_renderer_render_entries`, one slot per
+ * @param source_entries      Slot array filled by `entry_renderer_parse_entries`, one slot per
  *                            source path, where a draft or a failed source left `NULL`. Read-only
  *                            during the run. May be `NULL` only when `source_entry_count` is 0.
  * @param source_entry_count  Number of slots in `source_entries`, and therefore of jobs.

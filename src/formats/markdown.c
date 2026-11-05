@@ -42,6 +42,9 @@ struct MarkdownRender {
   /** Region of scratch a code block is highlighted in, in which no buffer of the render grows. */
   struct Arena code_scratch;
 
+  /** Callback that may write the URL of a link's or an image's target, or `NULL`. */
+  const struct LinkTargets* link_targets;
+
   /**
    * Count of images whose label is being written, zero outside one. An image's label becomes its
    * `alt` attribute, so nothing but its text is written there.
@@ -178,10 +181,10 @@ static void write_table_cell_open(struct Buf* buffer,
 /**
  * @brief Writes the opening tag of a link.
  *
- * @param buffer Destination buffer. Must not be `NULL`.
+ * @param render Render state, whose `html` receives the tag. Must not be `NULL`.
  * @param link   Link detail. Must not be `NULL`.
  */
-static void write_link_open(struct Buf* buffer, const MD_SPAN_A_DETAIL* link)
+static void write_link_open(struct MarkdownRender* render, const MD_SPAN_A_DETAIL* link)
     __attribute__((nonnull(1, 2)));
 
 /**
@@ -203,10 +206,22 @@ static void write_image_close(struct Buf* buffer, const MD_SPAN_IMG_DETAIL* imag
 static void write_attribute(struct Buf* buffer, const MD_ATTRIBUTE* attribute, EscapeFn* escape)
     __attribute__((nonnull(1, 2, 3)));
 
-struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch) {
+/**
+ * @brief Returns an attribute's text as md4c gives it, with its entities as written.
+ *
+ * @param attribute Attribute. Must not be `NULL`.
+ * @return The text, which borrows the document.
+ */
+static struct Str attribute_text(const MD_ATTRIBUTE* attribute) __attribute__((nonnull(1)));
+
+struct Str markdown_to_html(struct Str markdown,
+                            const struct LinkTargets* link_targets,
+                            struct Arena* perm,
+                            struct Arena scratch) {
   struct MarkdownRender render = {
       .html = {.arena = perm},
       .code = {.arena = &scratch},
+      .link_targets = link_targets,
   };
   render.code_scratch = body_html_code_block_scratch(&scratch);
 
@@ -344,13 +359,18 @@ static int markdown_to_html_enter_span(MD_SPANTYPE type, void* detail, void* use
   }
   switch (type) {
     case MD_SPAN_A:
-      write_link_open(html, detail);
+      write_link_open(render, detail);
       break;
-    case MD_SPAN_IMG:
+    case MD_SPAN_IMG: {
+      const MD_ATTRIBUTE* source = &((const MD_SPAN_IMG_DETAIL*)detail)->src;
       buf_append(html, S("<img src=\""));
-      write_attribute(html, &((const MD_SPAN_IMG_DETAIL*)detail)->src, body_html_url_escape_append);
+      if (body_html_link_target_write(html, S(""), attribute_text(source), true,
+                                      render->link_targets) != 0) {
+        write_attribute(html, source, body_html_url_escape_append);
+      }
       buf_append(html, S("\" alt=\""));
       break;
+    }
     case MD_SPAN_LATEXMATH:
       body_html_math_open(html, false);
       break;
@@ -457,9 +477,13 @@ static void write_table_cell_open(struct Buf* buffer,
   }
 }
 
-static void write_link_open(struct Buf* buffer, const MD_SPAN_A_DETAIL* link) {
+static void write_link_open(struct MarkdownRender* render, const MD_SPAN_A_DETAIL* link) {
+  struct Buf* buffer = &render->html;
   buf_append(buffer, S("<a href=\""));
-  write_attribute(buffer, &link->href, body_html_url_escape_append);
+  if (body_html_link_target_write(buffer, S(""), attribute_text(&link->href), false,
+                                  render->link_targets) != 0) {
+    write_attribute(buffer, &link->href, body_html_url_escape_append);
+  }
   if (link->title.text != NULL) {
     buf_append(buffer, S("\" title=\""));
     write_attribute(buffer, &link->title, html_escape_append);
@@ -492,4 +516,8 @@ static void write_attribute(struct Buf* buffer, const MD_ATTRIBUTE* attribute, E
         break;
     }
   }
+}
+
+static struct Str attribute_text(const MD_ATTRIBUTE* attribute) {
+  return (struct Str){attribute->text, (ptrdiff_t)attribute->size};
 }

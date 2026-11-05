@@ -30,8 +30,8 @@ static int parse_frontmatter(struct ContentEntry* entry,
                              const char* source_path,
                              struct Log* log) {
   struct Arena perm = test_arena();
-  return frontmatter_parse(entry, frontmatter, str_from_cstr(source_path), &perm, test_arena(),
-                           log);
+  return frontmatter_parse(entry, frontmatter, str_from_cstr(source_path), NULL, 0, &perm,
+                           test_arena(), log);
 }
 
 /**
@@ -272,6 +272,24 @@ static void test_parse_reads_modified(void) {
   }
 }
 
+// A key in the ignored list is accepted with any value, such as the string `identifier` and the
+// table `signature` here, and the parse does not read it.
+static void test_parse_accepts_ignored_keys(void) {
+  static const struct Str ignored_keys[] = {STR_INIT("identifier"), STR_INIT("signature")};
+  const char fm[] =
+      "title = \"T\"\n"
+      "date = 2026-07-01\n"
+      "identifier = \"20260701T000000\"\n"
+      "signature = {a = 1}\n";
+  struct ContentEntry entry = {0};
+  struct Arena perm = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_parse(&entry, str_from_cstr(fm), S("content/t.md"), ignored_keys, 2, &perm,
+                               test_arena(), &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(str_eq(entry.title, S("T")));
+}
+
 // A TOML syntax error is reported at its line in the *file*, not its line in the frontmatter slice
 // the opening fence was stripped from. Laid out as a whole document, the bad value sits on file
 // line 3:
@@ -346,6 +364,22 @@ static void test_rejects_unknown_keys(void) {
                -1);
     TEST_CHECK(is_one_error_taken(&log, cases[i][1], "content/title.md"));
   }
+}
+
+// A key outside both the schema and the ignored list is still rejected.
+static void test_rejects_unknown_key_beside_ignored_keys(void) {
+  static const struct Str ignored_keys[] = {STR_INIT("identifier")};
+  const char fm[] =
+      "title = \"T\"\n"
+      "date = 2026-07-01\n"
+      "identifier = \"20260701T000000\"\n"
+      "identifer = \"20260701T000000\"\n";
+  struct ContentEntry entry = {0};
+  struct Arena perm = test_arena();
+  struct Log log = test_log();
+  TEST_CHECK(frontmatter_parse(&entry, str_from_cstr(fm), S("content/t.md"), ignored_keys, 1, &perm,
+                               test_arena(), &log) == -1);
+  TEST_CHECK(is_one_error_taken(&log, "unknown frontmatter key 'identifer'", "content/t.md"));
 }
 
 // No key in the schema holds a table, so a table under a known key fails that key's type check.
@@ -916,9 +950,11 @@ TEST_LIST = {
     {"parse fills optional template and draft", test_parse_fills_optional_template_and_draft},
     {"date epoch uses timezone", test_date_epoch_uses_timezone},
     {"parse reads modified", test_parse_reads_modified},
+    {"parse accepts ignored keys", test_parse_accepts_ignored_keys},
     {"rejects invalid toml at file line", test_rejects_invalid_toml_at_file_line},
     {"rejects missing required key", test_rejects_missing_required_key},
     {"rejects unknown keys", test_rejects_unknown_keys},
+    {"rejects unknown key beside ignored keys", test_rejects_unknown_key_beside_ignored_keys},
     {"rejects table values", test_rejects_table_values},
     {"rejects unsafe template", test_rejects_unsafe_template},
     {"rejects invalid metadata", test_rejects_invalid_metadata},

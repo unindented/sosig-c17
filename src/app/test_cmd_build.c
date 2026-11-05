@@ -297,6 +297,36 @@ static const char* const EVERY_OUTPUT_KIND_WRITES =
     "write\tpublic/sosig.css\n"
     "write\tpublic/_sosig/v1-build-cache.tsv\n";
 
+/** Config line that accepts the frontmatter keys of denote's `markdown-toml` notes. */
+static const char* const DENOTE_CONFIG =
+    "frontmatter_ignored_keys = [\"identifier\", \"signature\"]\n";
+
+/**
+ * @brief Writes two notes named as denote names them, which link each other by path and by
+ *        identifier: an Org note below `notes`, and a Markdown note below `other` with the
+ *        frontmatter of denote's `markdown-toml` file type, which `DENOTE_CONFIG` accepts.
+ *
+ * @param os Host to write to. Must not be `NULL`.
+ */
+static void write_linked_notes(struct Os* os) {
+  os_memory_write(
+      os, "content/notes/20240103T000000--a.org",
+      "#+title: A\n"
+      "#+date: [2024-01-03 Wed]\n"
+      "#+identifier: 20240103T000000\n"
+      "\n"
+      "[[file:../other/20240101T000000==1a--b__x.md][B]] [[denote:20240101T000000][D]]\n");
+  os_memory_write(os, "content/other/20240101T000000==1a--b__x.md",
+                  "+++\n"
+                  "title      = \"B\"\n"
+                  "date       = 2024-01-01T00:00:00+00:00\n"
+                  "tags       = [\"x\"]\n"
+                  "identifier = \"20240101T000000\"\n"
+                  "signature  = \"1a\"\n"
+                  "+++\n"
+                  "[A](../notes/20240103T000000--a.org) [D](denote:20240103T000000)\n");
+}
+
 /**
  * @brief Runs a one-worker build in `TINY_ARENA_SIZE` bytes of arenas. Run through `test_is_oom`,
  *        which calls it in a child process.
@@ -439,6 +469,102 @@ static void test_distinguishes_same_name_in_different_dirs(void) {
   static const char* const expected[] = {"public/_sosig/v1-build-cache.tsv", "public/a/post.html",
                                          "public/b/post.html"};
   TEST_CHECK(is_file_list(os, "public", expected, 3));
+}
+
+// An Org note and a Markdown note in two sections link each other by path and by denote identifier,
+// and each `href` reaches the other page from the linking page's directory, under the default
+// permalink and under one that puts each page in a directory of its own. The Markdown note has the
+// frontmatter of denote's `markdown-toml` file type.
+static void test_links_notes_to_each_others_pages(void) {
+  static const struct {
+    const char* permalink;
+    const char* page_a;
+    const char* page_b;
+    const char* href_b;
+    const char* href_a;
+  } cases[] = {
+      {"", "public/notes/20240103t000000-a.html", "public/other/20240101t000000-1a-b-x.html",
+       "../other/20240101t000000-1a-b-x.html", "../notes/20240103t000000-a.html"},
+      {"permalink = \"/{slug}/\"\n", "public/20240103t000000-a/index.html",
+       "public/20240101t000000-1a-b-x/index.html", "../20240101t000000-1a-b-x/index.html",
+       "../20240103t000000-a/index.html"},
+  };
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    char config[256];
+    char page_a[256];
+    char page_b[256];
+    (void)snprintf(config, sizeof(config), "%s%s", DENOTE_CONFIG, cases[i].permalink);
+    (void)snprintf(page_a, sizeof(page_a), "<p><a href=\"%s\">B</a> <a href=\"%s\">D</a></p>\n\n",
+                   cases[i].href_b, cases[i].href_b);
+    (void)snprintf(page_b, sizeof(page_b), "<p><a href=\"%s\">A</a> <a href=\"%s\">D</a></p>\n\n",
+                   cases[i].href_a, cases[i].href_a);
+    struct Os* os = site_fixture(config);
+    write_linked_notes(os);
+
+    struct Log log = test_log();
+    TEST_CHECK(execute_build(os, &log) == 0);
+    TEST_CHECK(test_log_is_empty(&log));
+    TEST_CHECK(os_memory_is_file(os, cases[i].page_a, page_a));
+    TEST_CHECK(os_memory_is_file(os, cases[i].page_b, page_b));
+  }
+}
+
+// A link keeps a Markdown `#fragment` and an Org `::#custom-id` as the fragment of its URL, drops
+// any other Org search option, and resolves `.` and `..` segments and a suffix in any letter case.
+// An Org `file` link without a description shows the URL, and a denote link without one, in Org or
+// as a Markdown autolink, shows the target as typed. A link to a file that is not a source, a path
+// from the root, a URL, an image and a fragment alone keep the output they have without links
+// between content files.
+static void test_resolves_each_form_of_link(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/notes/a.org",
+                  "#+title: A\n#+date: 2024-01-01\n\n"
+                  "[[file:b.org::#cid][1]] [[file:./b.org::*Heading][2]] [[file:b.org]] "
+                  "[[file:../Up.MD][3]] [[denote:20240101T000000::#cid][4]] [[file:c.txt][5]] "
+                  "[[file:/abs.org][6]] [[file:i.png]] [[denote:20240101T000000::*Heading]]\n");
+  os_memory_write(os, "content/notes/m.md",
+                  "+++\ntitle = \"M\"\ndate = 2024-01-01\n+++\n"
+                  "[1](b.org#cid) [2](../notes/../Up.MD) [3](c.txt) [4](/abs.md) "
+                  "[5](https://e.com/x.md) ![i](i.png) [6](#top) <denote:20240101T000000>\n");
+  os_memory_write(os, "content/notes/b.org", "#+title: B\n#+date: 2024-01-01\n\nB\n");
+  os_memory_write(os, "content/Up.MD", HELLO_ENTRY);
+  os_memory_write(os, "content/20240101T000000--d.md", HELLO_ENTRY);
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(
+      os, "public/notes/a.html",
+      "<p><a href=\"b.html#cid\">1</a> <a href=\"b.html\">2</a> <a href=\"b.html\">b.html</a> "
+      "<a href=\"../up.html\">3</a> <a href=\"../20240101t000000-d.html#cid\">4</a> "
+      "<a href=\"c.txt\">5</a> <a href=\"/abs.html\">6</a> <img src=\"i.png\" alt=\"i.png\"> "
+      "<a href=\"../20240101t000000-d.html\">denote:20240101T000000::*Heading</a></p>\n\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/notes/m.html",
+                               "<p><a href=\"b.html#cid\">1</a> <a href=\"../up.html\">2</a> "
+                               "<a href=\"c.txt\">3</a> <a href=\"/abs.md\">4</a> "
+                               "<a href=\"https://e.com/x.md\">5</a> <img src=\"i.png\" alt=\"i\"> "
+                               "<a href=\"#top\">6</a> <a href=\"../20240101t000000-d.html\">"
+                               "denote:20240101T000000</a></p>\n\n"));
+}
+
+// A denote identifier can be the `@@` field of a name, and an asset can hold one, such as a PDF
+// that denote renamed, whose link points to the asset's copy. When a source and an asset share an
+// identifier, the link names the source.
+static void test_links_denote_identifiers_of_each_form(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md",
+                  "+++\ntitle = \"A\"\ndate = 2024-01-01\n+++\n"
+                  "[n](denote:n1) [p](denote:20240105T000000)\n");
+  os_memory_write(os, "content/notes/x@@n1--note.org", "#+title: N\n#+date: 2024-01-01\n\nN\n");
+  os_memory_write(os, "content/files/y@@n1.pdf", "pdf");
+  os_memory_write(os, "content/files/20240105T000000--paper.pdf", "pdf");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/a.html",
+                               "<p><a href=\"notes/x-n1-note.html\">n</a> "
+                               "<a href=\"files/20240105T000000--paper.pdf\">p</a></p>\n\n"));
 }
 
 // A second build over a finished output tree succeeds and produces the same set of outputs.
@@ -695,6 +821,71 @@ static void test_page_reading_the_entry_list_follows_every_entry(void) {
                         "write\tpublic/_sosig/v1-build-cache.tsv\n"));
 }
 
+// A page that links another entry is made again when that entry changes, here when a new `#+slug:`
+// moves the other page, and its link follows the move. The next build fails when the other entry
+// becomes a draft.
+static void test_page_linking_an_entry_follows_it(void) {
+  struct Os* os = site_fixture(NULL);
+  struct Arena arena = test_arena();
+  os_memory_write(os, "content/a.md", "+++\ntitle = \"A\"\ndate = 2024-01-01\n+++\n[B](b.org)\n");
+  os_memory_write(os, "content/b.org", "#+title: B\n#+date: 2024-01-02\n\nB\n");
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(os_memory_is_file(os, "public/a.html", "<p><a href=\"b.html\">B</a></p>\n\n"));
+  os_memory_write(os, "content/b.org", "#+title: B\n#+date: 2024-01-02\n#+slug: bee\n\nB\n");
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "write\tpublic/bee.html\n"
+                        "write\tpublic/a.html\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"
+                        "remove\tpublic/b.html\n"));
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/a.html", "<p><a href=\"bee.html\">B</a></p>\n\n"));
+  os_memory_write(os, "content/b.org",
+                  "#+title: B\n#+date: 2024-01-02\n#+slug: bee\n#+draft: true\n\nB\n");
+
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "link 'b.org' names draft 'content/b.org' (in 'content/a.md')\n"));
+}
+
+// A page whose denote link names an asset is made again by every build, and so are the aggregate
+// and the feed, which may show its body, because no row of the build cache tracks the asset. Every
+// other page is kept. A page with no link to another entry is kept when an unrelated entry changes.
+static void test_page_linking_an_asset_is_made_every_build(void) {
+  struct Os* os = every_output_kind_fixture();
+  struct Arena arena = test_arena();
+  os_memory_write(os, "content/gamma.md",
+                  "+++\ntitle = \"Gamma\"\ndate = 2026-06-30T00:00:00Z\n+++\n"
+                  "[p](denote:20240105T000000)\n");
+  os_memory_write(os, "content/20240105T000000--paper.pdf", "pdf");
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == 0);
+  TEST_CHECK(test_log_is_empty(&log));
+  TEST_CHECK(os_memory_is_file(os, "public/gamma.html",
+                               "<p><a href=\"20240105T000000--paper.pdf\">p</a></p>\n\n"));
+
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "keep\tpublic/alpha.html\n"
+                        "keep\tpublic/beta.html\n"
+                        "write\tpublic/gamma.html\n"
+                        "write\tpublic/index.html\n"
+                        "write\tpublic/feed.xml\n"
+                        "write\tpublic/sosig.css\n"
+                        "write\tpublic/20240105T000000--paper.pdf\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+  os_memory_touch(os, "content/beta.md");
+  TEST_CHECK(is_listing(dry_run_listing(os, false, &arena),
+                        "keep\tpublic/alpha.html\n"
+                        "write\tpublic/beta.html\n"
+                        "write\tpublic/gamma.html\n"
+                        "write\tpublic/index.html\n"
+                        "write\tpublic/feed.xml\n"
+                        "write\tpublic/sosig.css\n"
+                        "write\tpublic/20240105T000000--paper.pdf\n"
+                        "write\tpublic/_sosig/v1-build-cache.tsv\n"));
+}
+
 // Any change below `templates_dir`, such as to a partial, makes every page again, because a page's
 // templates are tracked as a whole.
 static void test_changed_partial_makes_every_page(void) {
@@ -913,9 +1104,9 @@ static void test_cuts_workers_before_arenas_under_limit(void) {
   }
 }
 
-// A site with no content sources skips the parse and render phases, so the verbose log carries no
-// status or progress line for either. A phase with no jobs returns before it prints, so an empty
-// site does not report a worker count for work it never starts.
+// A site with no content sources skips the parse, conversion and render phases, so the verbose log
+// carries no status or progress line for any of them. A phase with no jobs returns before it
+// prints, so an empty site does not report a worker count for work it never starts.
 static void test_skips_empty_phases_in_verbose_output(void) {
   struct Os* os = site_fixture(NULL);
   // A file that is not a source keeps `content_dir` present while the site holds no sources.
@@ -1369,7 +1560,7 @@ static void test_stops_after_rejected_output_key(void) {
 // A content entry that cannot be parsed fails the build at the parse phase and its diagnostic
 // reaches the command boundary. This is a different wiring from
 // `test_reports_a_shared_render_failure_once`, which fails at the *page* phase: the two failures
-// travel through separate entry points, `entry_renderer_render_entries` and
+// travel through separate entry points, `entry_renderer_parse_entries` and
 // `page_renderer_render_pages`, so neither test covers the other's propagation. Without this, no
 // test shows a parse-phase error reaching the log that stops the build before its first write. An
 // unreadable source fails the same phase.
@@ -1386,6 +1577,51 @@ static void test_reports_unparsable_content(void) {
                          "missing closing '+++' frontmatter fence (in 'content/a.md')\nfailed to "
                          "read content: %s ('content/b.md')\n",
                          strerror(EACCES)));
+}
+
+// A link to a missing file and a link to a draft, by path and by denote identifier, each fail the
+// build with their own message, reported in one run with a parse error in another note, and the
+// build writes nothing. A dry run reports the same errors. A link from a draft is not checked.
+static void test_reports_every_broken_link(void) {
+  static const char* const expected =
+      "missing closing '+++' frontmatter fence (in 'content/bad.md')\n"
+      "link 'other.md' names no content file (in 'content/notes/a.org')\n"
+      "link '20240101T000000--b.org' names draft 'content/notes/20240101T000000--b.org' (in "
+      "'content/notes/a.org')\n"
+      "denote link '19990101T000000' names no file (in 'content/notes/a.org')\n"
+      "denote link '20240101T000000' names draft 'content/notes/20240101T000000--b.org' (in "
+      "'content/notes/a.org')\n";
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/bad.md", "+++\ntitle = \"Bad\"\n");
+  os_memory_write(os, "content/notes/a.org",
+                  "#+title: A\n#+date: 2024-01-03\n\n"
+                  "[[file:other.md][O]] [[file:20240101T000000--b.org][B]] "
+                  "[[denote:19990101T000000][G]] [[denote:20240101T000000][D]]\n");
+  os_memory_write(os, "content/notes/20240101T000000--b.org",
+                  "#+title: B\n#+date: 2024-01-01\n#+draft: true\n\n[[file:missing.org][M]]\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "%s", expected));
+  TEST_CHECK(log.errors == 5);
+  TEST_CHECK(!os_memory_has_path(os, "public"));
+
+  struct Log dry_run_log = test_log();
+  TEST_CHECK(execute_dry_run(os, &dry_run_log) == -1);
+  TEST_CHECK(test_log_is(&dry_run_log, "%s", expected));
+  TEST_CHECK(os_memory_is_printed(os, 1, ""));
+}
+
+// A link to a note whose parse failed reports only that note's own error, which already fails the
+// build.
+static void test_reports_only_the_parse_error_of_a_linked_note(void) {
+  struct Os* os = site_fixture(NULL);
+  os_memory_write(os, "content/a.md", "+++\ntitle = \"A\"\ndate = 2024-01-01\n+++\n[B](b.md)\n");
+  os_memory_write(os, "content/b.md", "+++\ntitle = \"B\"\n");
+
+  struct Log log = test_log();
+  TEST_CHECK(execute_build(os, &log) == -1);
+  TEST_CHECK(test_log_is(&log, "missing closing '+++' frontmatter fence (in 'content/b.md')\n"));
 }
 
 // A source over the content limit is rejected by its read. The file is extended as `truncate`
@@ -1508,6 +1744,9 @@ TEST_LIST = {
     {"copies assets beside content", test_copies_assets_beside_content},
     {"honors custom permalink", test_honors_custom_permalink},
     {"distinguishes same name in different dirs", test_distinguishes_same_name_in_different_dirs},
+    {"links notes to each others pages", test_links_notes_to_each_others_pages},
+    {"resolves each form of link", test_resolves_each_form_of_link},
+    {"links denote identifiers of each form", test_links_denote_identifiers_of_each_form},
     {"rebuild succeeds and repeats its outputs", test_rebuild_succeeds_and_repeats_its_outputs},
     {"rebuild removes stale outputs", test_rebuild_removes_stale_outputs},
     {"rebuild removes deleted asset", test_rebuild_removes_deleted_asset},
@@ -1525,6 +1764,8 @@ TEST_LIST = {
      test_changed_source_makes_its_page_and_the_aggregates},
     {"page reading the entry list follows every entry",
      test_page_reading_the_entry_list_follows_every_entry},
+    {"page linking an entry follows it", test_page_linking_an_entry_follows_it},
+    {"page linking an asset is made every build", test_page_linking_an_asset_is_made_every_build},
     {"changed partial makes every page", test_changed_partial_makes_every_page},
     {"force makes every output", test_force_makes_every_output},
     {"changed recipe field makes every output", test_changed_recipe_field_makes_every_output},
@@ -1564,6 +1805,9 @@ TEST_LIST = {
     {"rejects unsafe permalink", test_rejects_unsafe_permalink},
     {"stops after rejected output key", test_stops_after_rejected_output_key},
     {"reports unparsable content", test_reports_unparsable_content},
+    {"reports every broken link", test_reports_every_broken_link},
+    {"reports only the parse error of a linked note",
+     test_reports_only_the_parse_error_of_a_linked_note},
     {"rejects oversize source at read", test_rejects_oversize_source_at_read},
     {"rejects duplicate output", test_rejects_duplicate_output},
     {"reports every independent error", test_reports_every_independent_error},

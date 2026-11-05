@@ -31,6 +31,62 @@ struct Buf;
 void body_html_url_escape_append(struct Buf* buffer, struct Str text) __attribute__((nonnull(1)));
 
 /**
+ * @brief Writes a URL of the caller's in place of a link's or an image's target as written, or
+ *        declines to.
+ *
+ * Like a `HighlightLineFn`, it appends to the buffer the HTML grows in, so the URL needs no memory
+ * of its own.
+ *
+ * @param buffer         Buffer the HTML grows in, which receives the URL, escaped as
+ *                       `body_html_url_escape_append` escapes it. The callback may use the bytes
+ *                       past the buffer's end while it runs. Must not be `NULL`.
+ * @param type           Link type as org4c names it, such as `file`, `fuzzy` or `https`, or empty
+ *                       for a Markdown link.
+ * @param target         Target as written: an Org link's path, after its type, or a Markdown
+ *                       destination.
+ * @param is_image       Whether the target is an image's `src` rather than a link's `href`.
+ * @param is_written_out Receives `true` when the callback appended a URL, and `false` when it
+ *                       declined or failed. Must not be `NULL`.
+ * @param userdata       Opaque pointer from `struct LinkTargets`.
+ * @return `0` after appending a URL or declining, or `-1` after the callback recorded a failure of
+ *         its own or found nothing to link. On either path without a URL, the renderer drops what
+ *         the callback appended and writes the target as it does without a callback.
+ */
+typedef int (*LinkTargetWriteFn)(struct Buf* buffer,
+                                 struct Str type,
+                                 struct Str target,
+                                 bool is_image,
+                                 bool* is_written_out,
+                                 void* userdata);
+
+/** Callback that both renderers give every link and image target. */
+struct LinkTargets {
+  /** Writes a URL for a target, or declines to. Must not be `NULL`. */
+  LinkTargetWriteFn write;
+
+  /** Opaque pointer passed to `write`. */
+  void* userdata;
+};
+
+/**
+ * @brief Gives a link's or an image's target to `link_targets`, which may write a URL of its own
+ *        for it.
+ *
+ * @param buffer       Buffer the HTML grows in. Must not be `NULL`.
+ * @param type         Link type, as for `LinkTargetWriteFn`.
+ * @param target       Target as written.
+ * @param is_image     Whether the target is an image's `src`.
+ * @param link_targets Callback, or `NULL` for none.
+ * @return `0` after the callback wrote a URL, or `-1` with nothing written when there is no
+ *         callback, or it declined or failed. The caller then writes the target itself.
+ */
+int body_html_link_target_write(struct Buf* buffer,
+                                struct Str type,
+                                struct Str target,
+                                bool is_image,
+                                const struct LinkTargets* link_targets) __attribute__((nonnull(1)));
+
+/**
  * @brief Writes the opening tag of a heading.
  *
  * Markdown's `#` and Org's `*` are level 1, which is `<h2>`, so a body's sections sit below the

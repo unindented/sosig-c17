@@ -1,0 +1,6 @@
+#+title:      Denote Org Note
+#+date:       [2026-06-10 Wed 09:00]
+#+filetags:   :notes:
+#+identifier: 20260610T090000
+
+This Org note links [[denote:20260611T090000][the Markdown note]] by its denote identifier.

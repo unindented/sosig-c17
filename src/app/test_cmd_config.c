@@ -121,7 +121,8 @@ static void test_prints_loaded_config(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = [\"index.html\"]\n"
                     "feed_templates = [\"atom.xml\"]\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
 
 cleanup:
   remove_fixture_tree(root_dir);
@@ -163,7 +164,8 @@ static void test_prints_empty_template_arrays(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = []\n"
                     "feed_templates = []\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
 
 cleanup:
   remove_fixture_tree(root_dir);

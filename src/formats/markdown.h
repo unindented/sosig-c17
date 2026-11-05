@@ -6,6 +6,8 @@
 #include "shared/arena.h"
 #include "shared/str.h"
 
+struct LinkTargets;
+
 /**
  * Upper bound on Markdown input passed to `markdown_to_html`, in bytes.
  *
@@ -38,13 +40,19 @@ enum { MARKDOWN_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  * all per-render state lives in this function's frame. A vendor bump that introduced a global would
  * invalidate that without any call site changing.
  *
- * @param markdown Input bytes of Markdown, at most `MARKDOWN_INPUT_LEN_MAX`.
- * @param perm     Arena that owns the HTML. Must not be `NULL`.
- * @param scratch  Arena for a code block's text, held until the block ends, and for highlighting
- *                 it, in a region split off when the conversion starts.
+ * Every link's and image's destination goes to `link_targets` first, as written.
+ *
+ * @param markdown     Input bytes of Markdown, at most `MARKDOWN_INPUT_LEN_MAX`.
+ * @param link_targets Callback that may write the URL of a destination, or `NULL` to write every
+ *                     destination as written.
+ * @param perm         Arena that owns the HTML. Must not be `NULL`.
+ * @param scratch      Arena for a code block's text, held until the block ends, and for
+ *                     highlighting it, in a region split off when the conversion starts.
  * @return The HTML, owned by `perm`.
  */
-struct Str markdown_to_html(struct Str markdown, struct Arena* perm, struct Arena scratch)
-    __attribute__((nonnull(2)));
+struct Str markdown_to_html(struct Str markdown,
+                            const struct LinkTargets* link_targets,
+                            struct Arena* perm,
+                            struct Arena scratch) __attribute__((nonnull(3)));
 
 #endif

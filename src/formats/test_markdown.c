@@ -1,12 +1,35 @@
 #include <acutest.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
+#include "formats/body_html.h"
 #include "formats/markdown.h"
 #include "shared/arena.h"
 #include "shared/buf.h"
 #include "shared/str.h"
 #include "test_support.h"
+
+/** What `write_test_link_target` does with each target. */
+enum TestLinkMode {
+  /** Declines the target, so the renderer writes it. */
+  TEST_LINK_DECLINE,
+
+  /** Writes `u.html` for the target. */
+  TEST_LINK_WRITE,
+
+  /** Appends a part of a URL, then fails. */
+  TEST_LINK_FAIL,
+};
+
+/** State of `write_test_link_target`. */
+struct TestLinkTargets {
+  /** What the callback does with each target. */
+  enum TestLinkMode mode;
+
+  /** Every call so far, as `type|target|link;` or `type|target|image;`. */
+  struct Buf calls;
+};
 
 /**
  * @brief Converts Markdown to HTML, in arenas of its own.
@@ -16,7 +39,65 @@
  */
 static struct Str render_markdown(const char* markdown) {
   struct Arena perm = test_arena();
-  return markdown_to_html(str_from_cstr(markdown), &perm, test_arena());
+  return markdown_to_html(str_from_cstr(markdown), NULL, &perm, test_arena());
+}
+
+/**
+ * @brief Records a target, then writes a URL for it, declines it, or fails, as `mode` says. This is
+ *        a `LinkTargetWriteFn`.
+ *
+ * @param buffer         Buffer the HTML grows in. Must not be `NULL`.
+ * @param type           Link type the renderer gives.
+ * @param target         Target as written.
+ * @param is_image       Whether the target is an image's.
+ * @param is_written_out Receives whether a URL was written. Must not be `NULL`.
+ * @param userdata       `struct TestLinkTargets*`. Must not be `NULL`.
+ * @return `-1` in `TEST_LINK_FAIL` mode, or `0`.
+ */
+static int write_test_link_target(struct Buf* buffer,
+                                  struct Str type,
+                                  struct Str target,
+                                  bool is_image,
+                                  bool* is_written_out,
+                                  void* userdata) {
+  struct TestLinkTargets* targets = userdata;
+  buf_append(&targets->calls, type);
+  buf_append(&targets->calls, S("|"));
+  buf_append(&targets->calls, target);
+  buf_append(&targets->calls, is_image ? S("|image;") : S("|link;"));
+  *is_written_out = targets->mode == TEST_LINK_WRITE;
+  switch (targets->mode) {
+    case TEST_LINK_WRITE:
+      buf_append(buffer, S("u.html"));
+      return 0;
+    case TEST_LINK_FAIL:
+      buf_append(buffer, S("partial"));
+      return -1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * @brief Converts Markdown to HTML with `write_test_link_target` as the link callback, in arenas of
+ *        its own.
+ *
+ * @param markdown  Terminated Markdown text. Must not be `NULL`.
+ * @param mode      What the callback does with each target.
+ * @param calls_out Receives the calls the callback recorded. Must not be `NULL`.
+ * @return The HTML, in an arena that lives until the test exits.
+ */
+static struct Str render_markdown_linked(const char* markdown,
+                                         enum TestLinkMode mode,
+                                         struct Str* calls_out) {
+  struct Arena perm = test_arena();
+  struct Arena calls_arena = test_arena();
+  struct TestLinkTargets targets = {.mode = mode, .calls = {.arena = &calls_arena}};
+  const struct LinkTargets link_targets = {.write = write_test_link_target, .userdata = &targets};
+  const struct Str html =
+      markdown_to_html(str_from_cstr(markdown), &link_targets, &perm, test_arena());
+  *calls_out = buf_str(&targets.calls);
+  return html;
 }
 
 // Common Markdown constructs render to their expected HTML elements.
@@ -25,7 +106,7 @@ static void test_renders_basic_html(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm, scratch);
+  html = markdown_to_html(markdown, NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<h2>Title</h2>\n<p><em>em</em> and <code>code</code></p>\n")));
 }
@@ -104,7 +185,7 @@ static void test_renders_github_tables(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm, scratch);
+  html = markdown_to_html(markdown, NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n"
                             "<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n")));
@@ -120,7 +201,7 @@ static void test_passes_through_raw_html(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm, scratch);
+  html = markdown_to_html(markdown, NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<div class=\"note\">raw <b>x</b></div>\n")));
 }
@@ -133,9 +214,27 @@ static void test_collapses_whitespace_runs(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm, scratch);
+  html = markdown_to_html(markdown, NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a b c</p>\n")));
+}
+
+// Every link's and image's destination reaches the callback as written, with an empty type, once,
+// and a declined destination renders as it does without a callback.
+static void test_gives_every_target_to_the_callback(void) {
+  const char markdown[] = "[a](b.md#x \"t\") <denote:1> ![i](p.png) [w](https://e.com)\n";
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(render_markdown_linked(markdown, TEST_LINK_DECLINE, &calls),
+                    render_markdown(markdown)));
+  TEST_CHECK(str_eq(calls, S("|b.md#x|link;|denote:1|link;|p.png|image;|https://e.com|link;")));
+}
+
+// A URL the callback writes is the link's `href`, before its title, and an autolink keeps its text.
+static void test_writes_the_callback_url(void) {
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(render_markdown_linked("[a](b.md \"t\") <denote:1>\n", TEST_LINK_WRITE, &calls),
+                    S("<p><a href=\"u.html\" title=\"t\">a</a> <a "
+                      "href=\"u.html\">denote:1</a></p>\n")));
 }
 
 // A body beginning with a UTF-8 BOM renders without it. This is a reachable production case rather
@@ -147,7 +246,7 @@ static void test_skips_leading_byte_order_mark(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = {0};
-  html = markdown_to_html(markdown, &perm, scratch);
+  html = markdown_to_html(markdown, NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>hello</p>\n")));
 }
@@ -157,7 +256,7 @@ static void test_empty_input_yields_empty_string(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
   struct Str html = S("untouched");
-  html = markdown_to_html(S(""), &perm, scratch);
+  html = markdown_to_html(S(""), NULL, &perm, scratch);
   TEST_CHECK(html.len == 0);
 }
 
@@ -178,9 +277,19 @@ static void test_html_grows_in_place_in_perm(void) {
   struct Arena probe = perm;
   char* const start = arena_new(&probe, 0, char);
   struct Str html = {0};
-  html = markdown_to_html((struct Str){markdown, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm, scratch);
+  html = markdown_to_html((struct Str){markdown, PARAGRAPH_COUNT * PARAGRAPH_LEN}, NULL, &perm,
+                          scratch);
   TEST_CHECK(html.data == start);
   TEST_CHECK(html.len == PARAGRAPH_COUNT * S("<p>ab</p>\n").len);
+}
+
+// A destination the callback fails on renders as it does without a callback, without the part of a
+// URL the callback appended.
+static void test_writes_a_failed_target_as_without_a_callback(void) {
+  const char markdown[] = "[a](b.md) ![i](p.png)\n";
+  struct Str calls = {0};
+  TEST_CHECK(
+      str_eq(render_markdown_linked(markdown, TEST_LINK_FAIL, &calls), render_markdown(markdown)));
 }
 
 TEST_LIST = {
@@ -196,8 +305,12 @@ TEST_LIST = {
     {"renders github tables", test_renders_github_tables},
     {"passes through raw html", test_passes_through_raw_html},
     {"collapses whitespace runs", test_collapses_whitespace_runs},
+    {"gives every target to the callback", test_gives_every_target_to_the_callback},
+    {"writes the callback url", test_writes_the_callback_url},
     {"skips leading byte order mark", test_skips_leading_byte_order_mark},
     {"empty input yields empty string", test_empty_input_yields_empty_string},
     {"html grows in place in perm", test_html_grows_in_place_in_perm},
+    {"writes a failed target as without a callback",
+     test_writes_a_failed_target_as_without_a_callback},
     {NULL, NULL},
 };

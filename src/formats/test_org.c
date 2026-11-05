@@ -1,11 +1,35 @@
 #include <acutest.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
+#include "formats/body_html.h"
 #include "formats/org.h"
 #include "shared/arena.h"
+#include "shared/buf.h"
 #include "shared/str.h"
 #include "test_support.h"
+
+/** What `write_test_link_target` does with each target. */
+enum TestLinkMode {
+  /** Declines the target, so the renderer writes it. */
+  TEST_LINK_DECLINE,
+
+  /** Writes `u.html` for the target. */
+  TEST_LINK_WRITE,
+
+  /** Appends a part of a URL, then fails. */
+  TEST_LINK_FAIL,
+};
+
+/** State of `write_test_link_target`. */
+struct TestLinkTargets {
+  /** What the callback does with each target. */
+  enum TestLinkMode mode;
+
+  /** Every call so far, as `type|target|link;` or `type|target|image;`. */
+  struct Buf calls;
+};
 
 /** A source block in C, which has a grammar, and in `zz`, which has none, with the HTML of each. */
 struct SourceCase {
@@ -163,7 +187,64 @@ static const struct SourceCase source_cases[] = {
  */
 static struct Str render_org(const char* org) {
   struct Arena perm = test_arena();
-  return org_to_html(str_from_cstr(org), &perm, test_arena());
+  return org_to_html(str_from_cstr(org), NULL, &perm, test_arena());
+}
+
+/**
+ * @brief Records a target, then writes a URL for it, declines it, or fails, as `mode` says. This is
+ *        a `LinkTargetWriteFn`.
+ *
+ * @param buffer         Buffer the HTML grows in. Must not be `NULL`.
+ * @param type           Link type the renderer gives.
+ * @param target         Target as written.
+ * @param is_image       Whether the target is an image's.
+ * @param is_written_out Receives whether a URL was written. Must not be `NULL`.
+ * @param userdata       `struct TestLinkTargets*`. Must not be `NULL`.
+ * @return `-1` in `TEST_LINK_FAIL` mode, or `0`.
+ */
+static int write_test_link_target(struct Buf* buffer,
+                                  struct Str type,
+                                  struct Str target,
+                                  bool is_image,
+                                  bool* is_written_out,
+                                  void* userdata) {
+  struct TestLinkTargets* targets = userdata;
+  buf_append(&targets->calls, type);
+  buf_append(&targets->calls, S("|"));
+  buf_append(&targets->calls, target);
+  buf_append(&targets->calls, is_image ? S("|image;") : S("|link;"));
+  *is_written_out = targets->mode == TEST_LINK_WRITE;
+  switch (targets->mode) {
+    case TEST_LINK_WRITE:
+      buf_append(buffer, S("u.html"));
+      return 0;
+    case TEST_LINK_FAIL:
+      buf_append(buffer, S("partial"));
+      return -1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * @brief Converts Org to HTML with `write_test_link_target` as the link callback, in arenas of its
+ *        own.
+ *
+ * @param org       Terminated Org text. Must not be `NULL`.
+ * @param mode      What the callback does with each target.
+ * @param calls_out Receives the calls the callback recorded. Must not be `NULL`.
+ * @return The HTML, in an arena that lives until the test exits.
+ */
+static struct Str render_org_linked(const char* org,
+                                    enum TestLinkMode mode,
+                                    struct Str* calls_out) {
+  struct Arena perm = test_arena();
+  struct Arena calls_arena = test_arena();
+  struct TestLinkTargets targets = {.mode = mode, .calls = {.arena = &calls_arena}};
+  const struct LinkTargets link_targets = {.write = write_test_link_target, .userdata = &targets};
+  const struct Str html = org_to_html(str_from_cstr(org), &link_targets, &perm, test_arena());
+  *calls_out = buf_str(&targets.calls);
+  return html;
 }
 
 // Common Org constructs render to their expected HTML elements, and a top-level headline is an
@@ -173,7 +254,7 @@ static struct Str render_org(const char* org) {
 static void test_renders_basic_html(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
-  const struct Str html = org_to_html(S("* Title\n/em/ and =code=\n"), &perm, scratch);
+  const struct Str html = org_to_html(S("* Title\n/em/ and =code=\n"), NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<h2>Title</h2>\n<p><em>em</em> and <code>code</code></p>\n")));
 }
@@ -281,7 +362,7 @@ static void test_renders_entities(void) {
 static void test_renders_braced_subscripts_only(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
-  const struct Str html = org_to_html(S("a_{b} and a_b\n"), &perm, scratch);
+  const struct Str html = org_to_html(S("a_{b} and a_b\n"), NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a<sub>b</sub> and a_b</p>\n")));
 }
@@ -290,7 +371,7 @@ static void test_renders_braced_subscripts_only(void) {
 static void test_honors_in_buffer_options(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
-  const struct Str html = org_to_html(S("#+OPTIONS: ^:nil\na_{b}\n"), &perm, scratch);
+  const struct Str html = org_to_html(S("#+OPTIONS: ^:nil\na_{b}\n"), NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>a_{b}</p>\n")));
 }
@@ -303,7 +384,7 @@ static void test_passes_through_export_blocks(void) {
   struct Arena scratch = test_arena();
   const struct Str html =
       org_to_html(S("#+BEGIN_EXPORT html\n<div class=\"note\">raw <b>x</b></div>\n#+END_EXPORT\n"),
-                  &perm, scratch);
+                  NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<div class=\"note\">raw <b>x</b></div>\n")));
 }
@@ -374,6 +455,40 @@ static void test_points_org_file_links_at_pages(void) {
                       "<a href=\"c.txt\">C</a></p>\n")));
 }
 
+// Every link's and image's target reaches the callback with its org4c type and its path as written,
+// once, and a declined target renders as it does without a callback.
+static void test_gives_every_target_to_the_callback(void) {
+  const char org[] =
+      "[[file:a.org::#c][A]] [[denote:1::*H]] [[https://e.com][W]] [[#cid][C]] [[file:p.png]]\n";
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(render_org_linked(org, TEST_LINK_DECLINE, &calls), render_org(org)));
+  TEST_CHECK(str_eq(calls, S("file|a.org::#c|link;fuzzy|denote:1::*H|link;https|//e.com|link;"
+                             "custom-id|cid|link;file|p.png|image;")));
+}
+
+// A URL the callback writes is the link's `href`. A `file` link without a description shows that
+// URL as its text, as Emacs shows the path it exports, while another link without one shows the
+// target as typed. The callback sees each link once.
+static void test_writes_the_callback_url(void) {
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(
+      render_org_linked("[[file:a.org]] [[file:a.org][A]] [[denote:1]]\n", TEST_LINK_WRITE, &calls),
+      S("<p><a href=\"u.html\">u.html</a> <a href=\"u.html\">A</a> "
+        "<a href=\"u.html\">denote:1</a></p>\n")));
+  TEST_CHECK(str_eq(calls, S("file|a.org|link;file|a.org|link;fuzzy|denote:1|link;")));
+}
+
+// A link in a footnote, whose body the renderer holds in its scratch, takes the callback's URL too.
+static void test_writes_the_callback_url_in_a_footnote(void) {
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(
+      render_org_linked("A[fn:1]\n\n[fn:1] See [[file:b.org][B]].\n", TEST_LINK_WRITE, &calls),
+      S("<p>A<sup><a href=\"#fn-1\" id=\"fnref-1-1\" role=\"doc-noteref\">1</a></sup></p>\n"
+        "<section class=\"footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\">\nSee <a "
+        "href=\"u.html\">B</a>.<a href=\"#fnref-1-1\" class=\"footnote-backref\" "
+        "role=\"doc-backlink\">&#8617;</a>\n</li>\n</ol>\n</section>\n")));
+}
+
 // Org's dollar delimiters are math too: `$...$` inline and `$$...$$` displayed.
 static void test_renders_dollar_math(void) {
   TEST_CHECK(str_eq(
@@ -386,7 +501,7 @@ static void test_renders_dollar_math(void) {
 static void test_skips_leading_byte_order_mark(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
-  const struct Str html = org_to_html(S("\xef\xbb\xbfhello\n"), &perm, scratch);
+  const struct Str html = org_to_html(S("\xef\xbb\xbfhello\n"), NULL, &perm, scratch);
 
   TEST_CHECK(str_eq(html, S("<p>hello</p>\n")));
 }
@@ -395,7 +510,7 @@ static void test_skips_leading_byte_order_mark(void) {
 static void test_empty_input_yields_empty_string(void) {
   struct Arena perm = test_arena();
   struct Arena scratch = test_arena();
-  const struct Str html = org_to_html(S(""), &perm, scratch);
+  const struct Str html = org_to_html(S(""), NULL, &perm, scratch);
 
   TEST_CHECK(html.len == 0);
 }
@@ -417,9 +532,17 @@ static void test_html_grows_in_place_in_perm(void) {
   struct Arena probe = perm;
   char* const start = arena_new(&probe, 0, char);
   const struct Str html =
-      org_to_html((struct Str){org, PARAGRAPH_COUNT * PARAGRAPH_LEN}, &perm, scratch);
+      org_to_html((struct Str){org, PARAGRAPH_COUNT * PARAGRAPH_LEN}, NULL, &perm, scratch);
   TEST_CHECK(html.data == start);
   TEST_CHECK(html.len == PARAGRAPH_COUNT * S("<p>ab</p>\n").len);
+}
+
+// A target the callback fails on renders as it does without a callback, without the part of a URL
+// the callback appended.
+static void test_writes_a_failed_target_as_without_a_callback(void) {
+  const char org[] = "[[file:a.org]] [[file:b.png]] [[denote:1][D]]\n";
+  struct Str calls = {0};
+  TEST_CHECK(str_eq(render_org_linked(org, TEST_LINK_FAIL, &calls), render_org(org)));
 }
 
 TEST_LIST = {
@@ -445,9 +568,14 @@ TEST_LIST = {
     {"matches admonition names in any case", test_matches_admonition_names_in_any_case},
     {"keeps admonition names", test_keeps_admonition_names},
     {"points org file links at pages", test_points_org_file_links_at_pages},
+    {"gives every target to the callback", test_gives_every_target_to_the_callback},
+    {"writes the callback url", test_writes_the_callback_url},
+    {"writes the callback url in a footnote", test_writes_the_callback_url_in_a_footnote},
     {"renders dollar math", test_renders_dollar_math},
     {"skips leading byte order mark", test_skips_leading_byte_order_mark},
     {"empty input yields empty string", test_empty_input_yields_empty_string},
     {"html grows in place in perm", test_html_grows_in_place_in_perm},
+    {"writes a failed target as without a callback",
+     test_writes_a_failed_target_as_without_a_callback},
     {NULL, NULL},
 };

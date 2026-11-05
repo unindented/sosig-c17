@@ -6,6 +6,8 @@
 #include "shared/arena.h"
 #include "shared/str.h"
 
+struct LinkTargets;
+
 /**
  * Upper bound on Org input passed to `org_to_html`, in bytes.
  *
@@ -30,14 +32,23 @@ enum { ORG_INPUT_LEN_MAX = 256 * 1024 * 1024 };
  * all per-render state lives in this function's frame. A vendor bump that introduced a global would
  * invalidate that without any call site changing.
  *
- * @param org     Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
- * @param perm    Arena that owns the HTML. Must not be `NULL`.
- * @param scratch Arena for what is held until its element ends: a figure's caption, a footnote's
- *                body, a source block's code and code references, and an inline source's code; and
- *                for highlighting them, in a region split off when the conversion starts.
+ * Every link's and image's target goes to `link_targets` first, with its org4c type, such as `file`
+ * or `fuzzy`, and its path. A `file` link without a description shows the URL that the callback
+ * wrote, as Emacs shows the path it exports.
+ *
+ * @param org          Input bytes of Org, at most `ORG_INPUT_LEN_MAX`.
+ * @param link_targets Callback that may write the URL of a target, or `NULL` to write every target
+ *                     as the renderer does by itself.
+ * @param perm         Arena that owns the HTML. Must not be `NULL`.
+ * @param scratch      Arena for what is held until its element ends: a figure's caption, a
+ *                     footnote's body, a source block's code and code references, and an inline
+ *                     source's code; and for highlighting them, in a region split off when the
+ *                     conversion starts.
  * @return The HTML, owned by `perm`.
  */
-struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
-    __attribute__((nonnull(2)));
+struct Str org_to_html(struct Str org,
+                       const struct LinkTargets* link_targets,
+                       struct Arena* perm,
+                       struct Arena scratch) __attribute__((nonnull(3)));
 
 #endif

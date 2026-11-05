@@ -164,7 +164,8 @@ static void test_config_command_is_dispatched(void) {
                     "content_template = \"content.html\"\n"
                     "aggregate_templates = []\n"
                     "feed_templates = []\n"
-                    "feed_count = 10\n") == 0);
+                    "feed_count = 10\n"
+                    "frontmatter_ignored_keys = []\n") == 0);
   TEST_CHECK(dispatch_out.stderr_out[0] == '\0');
   // No page was written, which is what separates `config` from `build`.
   TEST_CHECK(access("public/hello.html", F_OK) != 0);
@@ -210,6 +211,8 @@ static void test_build_command_receives_parsed_options(void) {
                     "collecting content entries\n"
                     "building output manifest\n"
                     "ignoring build cache, rendering every page\n"
+                    "converting bodies\n"
+                    "\rconverting bodies 1/2\rconverting bodies 2/2\n"
                     "rendering content, workers: 1\n"
                     "\rrendering content 1/2\rrendering content 2/2\n"
                     "rendering aggregate templates\n"

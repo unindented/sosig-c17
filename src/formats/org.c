@@ -176,6 +176,9 @@ struct OrgRender {
   /** Buffer every write goes to: `html`, `footnote` while one is held, or `caption`. */
   struct Buf* output;
 
+  /** Callback that may write the URL of a link's or an image's target, or `NULL`. */
+  const struct LinkTargets* link_targets;
+
   /** `enum OrgExport` bits. */
   unsigned export_flags;
 
@@ -947,7 +950,10 @@ static bool is_blank(char c);
  */
 static struct StrCut cut_word(struct Str text);
 
-struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch) {
+struct Str org_to_html(struct Str org,
+                       const struct LinkTargets* link_targets,
+                       struct Arena* perm,
+                       struct Arena scratch) {
   // An Org file has no fence ahead of its body, so a BOM at the start of the file reaches the
   // converter. It is skipped before the `#+OPTIONS:` lines are looked for, so one on the first line
   // counts.
@@ -984,6 +990,7 @@ struct Str org_to_html(struct Str org, struct Arena* perm, struct Arena scratch)
       .footnote = {.arena = &scratch},
       .code = {.arena = &scratch},
       .inline_code = {.arena = &scratch},
+      .link_targets = link_targets,
       .export_flags = export_flags,
   };
   render.output = &render.html;
@@ -1994,13 +2001,24 @@ static void write_link_open(struct OrgRender* render,
   }
   struct Buf* output = render->output;
   buf_append(output, S("<a href=\""));
-  write_link_target(output, link);
+  const ptrdiff_t href_start = output->len;
+  const bool is_href_written =
+      body_html_link_target_write(output, attribute_text(&link->type), attribute_text(&link->path),
+                                  false, render->link_targets) == 0;
+  if (!is_href_written) {
+    write_link_target(output, link);
+  }
+  const ptrdiff_t href_len = output->len - href_start;
   buf_append(output, S("\""));
   write_affiliated_attributes(
       render, is_attribute_named(&link->type, S("coderef")) ? S("coderef") : S(""),
       has_affiliated_attrs ? ORG_AFFILIATED_ATTRS | ORG_AFFILIATED_LINK : 0);
   buf_append(output, S(">"));
-  if (is_path_text_link(link)) {
+  if (is_path_text_link(link) && is_href_written) {
+    // The text is the URL the callback wrote, copied rather than asked for again, so the callback
+    // sees each link once. The copy reads bytes that stay where they are if the buffer moves.
+    buf_append(output, (struct Str){output->data + href_start, href_len});
+  } else if (is_path_text_link(link)) {
     write_file_link_path(output, &link->path, html_escape_append);
   }
 }
@@ -2015,7 +2033,10 @@ static void write_image(struct OrgRender* render,
   buf_append(output, S("<img"));
   if (source == NULL) {
     buf_append(output, S(" src=\""));
-    write_link_target(output, link);
+    if (body_html_link_target_write(output, attribute_text(&link->type),
+                                    attribute_text(&link->path), true, render->link_targets) != 0) {
+      write_link_target(output, link);
+    }
     buf_append(output, S("\""));
   } else if (is_attr_html_written(source)) {
     buf_append(output, S(" src=\""));

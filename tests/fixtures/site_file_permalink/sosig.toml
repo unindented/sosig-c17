@@ -6,3 +6,4 @@ output_dir = "public"
 templates_dir = "templates"
 feed_templates = ["atom.xml", "rss.xml"]
 feed_count = 3
+frontmatter_ignored_keys = ["identifier", "signature"]

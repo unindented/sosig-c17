@@ -102,6 +102,7 @@ This table lists every key that the config file can contain. `sosig` rejects any
 | `aggregate_templates` | `["index.html"]` | The templates that the build renders once, with every entry that is not a draft. |
 | `feed_templates` | `["atom.xml"]` | The templates that the build renders once, with the newest `feed_count` entries. |
 | `feed_count` | `10` | The maximum number of entries in each feed. |
+| `frontmatter_ignored_keys` | `[]` | The keys that Markdown frontmatter can contain in addition to the keys that [Markdown frontmatter](#markdown-frontmatter) lists. `sosig` accepts any value for these keys, and does not read it. For denote notes, set it to `["identifier", "signature"]`. |
 
 `sosig` removes trailing `/` characters from the values of the four directory keys. A directory value must not be empty. It can be an absolute path, or a relative path that contains `..`.
 
@@ -174,7 +175,8 @@ A build writes the build cache to `_sosig/v1-build-cache.tsv` below `output_dir`
 
 The next build keeps a content page, and does not render it again, if its content file, its templates, and the configuration did not change. The build keeps the aggregates and feeds if no content file changed. Some changes make the build render pages again:
 
-- If any entry changes, the build renders again each page whose template reads `content_entries` or `site.modified`.
+- If any entry changes, the build renders again each page whose template reads `content_entries` or `site.modified`, and each page whose body [links another content file](#links-between-content-files).
+- If a page has a denote link to an asset in its body, the build renders that page, every aggregate, and every feed in every build, because the build cache does not record assets.
 - If any file below `templates_dir` changes, such as a partial, the build renders every page again.
 
 Every build still converts the Markdown or Org of every content file.
@@ -237,7 +239,7 @@ template = "feature.html"
 +++
 ```
 
-`sosig` rejects any other key. For example, the misspelled key `drfat` makes the build fail. The build does not ignore the key and use the default value of `draft`.
+`sosig` rejects any other key, unless `frontmatter_ignored_keys` lists it. For example, the misspelled key `drfat` makes the build fail. The build does not ignore the key and use the default value of `draft`.
 
 ### Org keywords
 
@@ -270,7 +272,7 @@ The filename of a denote or org-roam note starts with a timestamp. The filename 
 
 The `permalink` pattern sets the URL and output path of each entry. It supports the placeholders `{slug}` and `{section}`. It must contain `{slug}`, so that each entry gets a different path. `{section}` is the directory of the content file, relative to `content_dir`, with each directory segment normalized as a slug. If an expanded path ends in `/`, `sosig` adds `index.html` to it. For example, `/{slug}/` gives an entry a URL such as `/<slug>/index.html`.
 
-A relative link from a page to an asset, such as `![Diagram](diagram.svg)`, or to another Org note, such as `[[file:other.org]]`, works only if the page is in the output directory that matches the directory of its content file. The default permalink, `/{section}/{slug}.html`, gives this result if slug normalization does not change the directory names. A `/{slug}/` permalink puts each page one directory lower, and a directory named `Field Notes` becomes the section `field-notes`, so in these cases the link breaks. The link also breaks in an aggregate or a feed that includes the body of a page below a section, because a browser resolves the link against the path of the aggregate or the feed. `sosig` does not change the link that you wrote.
+A relative path from a page to an asset, such as `![Diagram](diagram.svg)`, works only if the page is in the output directory that matches the directory of its content file. The default permalink, `/{section}/{slug}.html`, gives this result if slug normalization does not change the directory names. A `/{slug}/` permalink puts each page one directory lower, and a directory named `Field Notes` becomes the section `field-notes`, so in these cases the link breaks. `sosig` does not change such a link. A link to another content file works for every permalink, because `sosig` points it to the page of that file, as [Links between content files](#links-between-content-files) describes. Both kinds of link break in an aggregate or a feed that includes the body of a page below a section, because a browser resolves the link against the path of the aggregate or the feed.
 
 `sosig` normalizes a slug in these steps:
 
@@ -279,6 +281,43 @@ A relative link from a page to an asset, such as `![Diagram](diagram.svg)`, or t
 3. It removes leading and trailing dashes.
 4. It replaces each non-ASCII input byte with lowercase hexadecimal digits.
 5. It uses `untitled` if no characters remain.
+
+### Links between content files
+
+A link in a content file can point to another content file. `sosig` writes the link as the relative path from the directory of the linking page to the page of the other file. `sosig` knows the URL of every page, so the link works for every permalink and every directory name, and on a site below a subpath. A link names the other file by its path or by its denote identifier:
+
+| Link                 | Org                                 | Markdown                          |
+| -------------------- | ----------------------------------- | --------------------------------- |
+| By path              | `[[file:other.org][Other]]`         | `[Other](other.md)`               |
+| By denote identifier | `[[denote:20240819T110654][Other]]` | `[Other](denote:20240819T110654)` |
+
+A path link names a file whose path ends in `.md` or `.org`, in any letter case, in either format. The path is relative to the directory of the linking file, and it can contain `.` and `..` segments. In Markdown, the link has no scheme such as `https:`. `sosig` does not change a link to any other file, such as an image, or a path that starts with `/`.
+
+A denote link names the file whose name contains the identifier, in one of the two forms that denote writes: the `YYYYMMDDTHHMMSS` timestamp at the start of the name, or the text after `@@` up to the next `==`, `--`, `__`, `@@`, or `.`. These forms cover every identifier format and every order of the parts of a file name. The file can be a content file or an asset, such as a PDF that denote renamed. A link to an asset points to the copy of the asset in `output_dir`. If two files have the same identifier, the link names a content file before an asset, and then the first path in sorted order. `sosig` does not read the `#+identifier:` keyword, the `identifier` key, or the exclusion settings of denote. In Markdown, `<denote:20240819T110654>` is also a denote link.
+
+A link can also name a place in the other file:
+
+- A Markdown `#fragment`, or an Org `::#custom-id` search option, becomes the fragment of the URL, such as `other.html#custom-id`. The link goes to the other page, but not to the heading, because `sosig` does not write the `CUSTOM_ID` of a heading as its `id`.
+- `sosig` removes every other Org search option, such as `::*Heading`, because it does not read the headlines of the other file.
+
+An Org `file` link without a description shows the URL that `sosig` writes, as Emacs shows the path that it exports. A denote link without a description shows `denote:` and the identifier, as it does in Emacs.
+
+A link to a file that does not exist below `content_dir`, or to a draft, makes the build fail, because the link would be broken on the published page. A draft has no page. Each such link is one error, which names the target and the linking file:
+
+```text
+link 'other.md' names no content file (in 'content/a.md')
+link 'b.org' names draft 'content/notes/b.org' (in 'content/notes/a.org')
+denote link '19990101T000000' names no file (in 'content/a.org')
+denote link '20240101T000000' names draft 'content/b.org' (in 'content/a.org')
+```
+
+The build checks every link before it writes to `output_dir`, and it reports the broken links together with the other errors of the build. A failed build changes nothing, and a dry run reports the same errors. The build does not check the links in a draft, because it does not convert the body of a draft. Emacs exports a link to a missing file, or writes `[[Denote query for ‘ID’]]`, and both give a broken link on the published page.
+
+To publish a directory of denote notes without changes:
+
+- Use the `org` file type or the `markdown-toml` file type of denote. `sosig` cannot read the YAML frontmatter of the `markdown-yaml` file type.
+- For Markdown notes, set `frontmatter_ignored_keys = ["identifier", "signature"]`, so that `sosig` accepts the keys that denote writes.
+- Give each Markdown link a description. Denote writes a Markdown link without a description in Org syntax, `[[denote:20240819T110654]]`, which is not a Markdown link, so `sosig` shows it as text. The default link commands of denote write a description.
 
 ### Markdown
 
@@ -302,7 +341,7 @@ A relative link from a page to an asset, such as `![Diagram](diagram.svg)`, or t
 - `#+BEGIN_EXPORT html` blocks and `@@html:...@@` snippets pass raw HTML through to the output. `sosig` omits `#+HTML:` lines from the output.
 - If Markdown has the same feature, `sosig` writes the same HTML as for Markdown. See [Generated HTML](#generated-html).
 - `sosig` writes an inline `src_c{…}` as its code, unless its `:exports` is `none` or `results`. By default, Emacs exports the results of an inline `src_c{…}`, but `sosig` never evaluates code.
-- A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work. A `[[file:other.org]]` link points to `other.html` in the same directory as the page, and so does a link to `other.ORG`. This link works only if the permalink of the other note gives that path, as [URLs and slugs](#urls-and-slugs) describes.
+- A `[[id:...]]` link points to an anchor on the same page, so a link to another note does not work. A `[[file:other.org]]` link and a `[[denote:...]]` link point to the page of the other note, as [Links between content files](#links-between-content-files) describes.
 
 As in Emacs, a property drawer at the top of the file renders nothing. A `Footnotes` headline and its subtree also render nothing, but their footnote definitions go into the footnote list at the end. The Org renderer of `sosig` is a port of the renderer in org4c, so the other differences that the org4c [README](https://github.com/unindented/org4c#differences-from-emacs-ox-html) lists also apply to `sosig`, except for the shared HTML that the next section describes.
 

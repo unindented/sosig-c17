@@ -91,7 +91,7 @@ static int render_pages(const struct SiteConfig* site_config,
 }
 
 /**
- * @brief Renders named fixture sources through both parallel phases on one worker.
+ * @brief Renders named fixture sources through the three parallel phases on one worker.
  *
  * Loads `sosig.toml` from `root_dir` and runs with `root_dir` as the working directory, restoring
  * the previous one before returning. The configuration, the path list, and the entry arrays live in
@@ -134,9 +134,16 @@ static int render_sources(const char* root_dir,
       path_list_push(source_paths, str_from_cstr(relative_paths[i]), log->buf.arena);
     }
     struct JobArenas* worker_arenas = test_job_arenas(1, log->buf.arena);
-    rc = entry_renderer_render_entries(site_config, source_paths, CONTENT_FILE_LEN_MAX, 1,
-                                       worker_arenas, false, os_posix(), test_arena(),
-                                       source_entries, log);
+    bool* draft_flags = arena_new(log->buf.arena, relative_path_count, bool);
+    const struct PathList asset_paths = {0};
+    rc = entry_renderer_parse_entries(site_config, source_paths, CONTENT_FILE_LEN_MAX, 1,
+                                      worker_arenas, false, os_posix(), test_arena(),
+                                      source_entries, draft_flags, log);
+    if (rc == 0) {
+      rc = entry_renderer_convert_bodies(source_entries, draft_flags, site_config, source_paths,
+                                         &asset_paths, 1, worker_arenas, false, os_posix(),
+                                         test_arena(), log);
+    }
     if (rc == 0) {
       rc = render_pages(site_config, source_entries, relative_path_count, 1, worker_arenas, log);
     }
@@ -146,7 +153,7 @@ static int render_sources(const char* root_dir,
 }
 
 /**
- * @brief Renders one fixture source through both parallel phases on one worker.
+ * @brief Renders one fixture source through the three parallel phases on one worker.
  *
  * Equivalent to `render_sources` with a single path.
  *
@@ -233,10 +240,11 @@ static int render_entries_capturing_stderr(const struct SiteConfig* site_config,
   if (capture_begin(stderr, &stderr_capture) != 0) {
     return TEST_PLUMBING_FAILED;
   }
+  bool* draft_flags = arena_new(log->buf.arena, source_paths->count, bool);
   const int rc =
-      entry_renderer_render_entries(site_config, source_paths, CONTENT_FILE_LEN_MAX, worker_count,
-                                    test_job_arenas(worker_count, log->buf.arena), true, os_posix(),
-                                    test_arena(), source_entries, log);
+      entry_renderer_parse_entries(site_config, source_paths, CONTENT_FILE_LEN_MAX, worker_count,
+                                   test_job_arenas(worker_count, log->buf.arena), true, os_posix(),
+                                   test_arena(), source_entries, draft_flags, log);
   return capture_end(&stderr_capture, stderr_out, stderr_out_len) == 0 ? rc : TEST_PLUMBING_FAILED;
 }
 
@@ -269,9 +277,10 @@ static int parse_source_in_dir(const char* root_dir,
   struct PathList source_paths = {0};
   path_list_push(&source_paths, str_from_cstr(relative_path), log->buf.arena);
   *entry_out = NULL;
+  bool is_draft = false;
   const int rc =
-      entry_renderer_render_entries(&site_config, &source_paths, source_len_max, 1, worker_arenas,
-                                    false, os_posix(), test_arena(), entry_out, log);
+      entry_renderer_parse_entries(&site_config, &source_paths, source_len_max, 1, worker_arenas,
+                                   false, os_posix(), test_arena(), entry_out, &is_draft, log);
   return working_dir_leave(saved_dir_fd) == 0 ? rc : TEST_PLUMBING_FAILED;
 }
 
@@ -639,9 +648,9 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
-// The parse phase accepts an empty site with a `NULL` entry slot array, which its contract allows
-// for a count of 0, and runs no job. `test_accepts_empty_entry_set` in `test_page_renderer.c` pins
-// the same for the page phase.
+// The parse and conversion phases accept an empty site with `NULL` slot arrays, which their
+// contracts allow for a count of 0, and run no job. `test_accepts_empty_entry_set` in
+// `test_page_renderer.c` pins the same for the page phase.
 static void test_accepts_empty_site(void) {
   struct SiteConfig site_config;
   site_config_init(&site_config);
@@ -649,9 +658,12 @@ static void test_accepts_empty_site(void) {
   struct Arena perm = test_arena();
   struct Log log = {.buf = {.arena = &perm}};
 
-  TEST_CHECK(entry_renderer_render_entries(&site_config, &source_paths, CONTENT_FILE_LEN_MAX, 1,
-                                           test_job_arenas(1, &perm), false, os_posix(),
-                                           test_arena(), NULL, &log) == 0);
+  TEST_CHECK(entry_renderer_parse_entries(&site_config, &source_paths, CONTENT_FILE_LEN_MAX, 1,
+                                          test_job_arenas(1, &perm), false, os_posix(),
+                                          test_arena(), NULL, NULL, &log) == 0);
+  TEST_CHECK(entry_renderer_convert_bodies(NULL, NULL, &site_config, &source_paths, &source_paths,
+                                           1, test_job_arenas(1, &perm), false, os_posix(),
+                                           test_arena(), &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
 }
 
