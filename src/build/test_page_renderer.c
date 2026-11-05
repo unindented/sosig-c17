@@ -26,7 +26,8 @@
  * @brief Initializes a parsed, non-draft content entry the page phase can render.
  *
  * Copies every string, `body_html` included, into `arena`, as the parse phase copies them into its
- * worker's long-lived arena.
+ * worker's long-lived arena. The entry sets no `modified`, so `modified_epoch` is `date_epoch`, as
+ * the parse phase leaves it.
  *
  * @param entry       Entry to initialize. Must not be `NULL`.
  * @param source_path Source path the diagnostics name. Must not be `NULL`.
@@ -49,13 +50,14 @@ static void init_page_entry(struct ContentEntry* entry,
   entry->title = str_clone(str_from_cstr(title), arena);
   entry->date = str_clone(str_from_cstr(date), arena);
   entry->date_epoch = date_epoch;
+  entry->modified_epoch = date_epoch;
   entry->body_html = str_clone(S("<p>Body</p>\n"), arena);
 }
 
 /**
  * @brief Initializes the two published entries most tests share.
  *
- * `newer` is dated a day after `older`, so the sorted entry set and `site.updated` both follow
+ * `newer` is dated a day after `older`, so the sorted entry set and `site.modified` both follow
  * `newer`.
  *
  * @param older Entry dated `2026-07-01`. Must not be `NULL`.
@@ -111,8 +113,8 @@ static int render_entry_slots(struct ContentEntry* const* source_entries,
     }
   }
   content_entry_sort(entries, entry_count);
-  const struct Str site_updated =
-      content_entry_date_latest((const struct ContentEntry* const*)entries, entry_count);
+  const struct Str site_modified =
+      content_entry_modified_latest((const struct ContentEntry* const*)entries, entry_count);
 
   struct SiteConfig site_config;
   site_config_init(&site_config);
@@ -120,17 +122,17 @@ static int render_entry_slots(struct ContentEntry* const* source_entries,
   bool* entry_list_flags = arena_new(&perm, source_entry_count > 0 ? source_entry_count : 1, bool);
   return page_renderer_render_pages(
       &writer, &site_config, (const struct ContentEntry* const*)source_entries, source_entry_count,
-      (const struct ContentEntry* const*)entries, entry_count, site_updated, NULL, worker_count,
+      (const struct ContentEntry* const*)entries, entry_count, site_modified, NULL, worker_count,
       worker_arenas, false, os, test_arena(), entry_list_flags, log);
 }
 
-// A content template resolves `site.updated` to the newest entry's date, not to nothing. The page
-// phase runs after the build parses and sorts every source, so the value can exist: the date
-// belongs to a different entry than the one being rendered. The end-to-end assertion lives in the
-// golden test suite.
-static void test_renders_site_updated_in_content_template(void) {
+// A content template resolves `site.modified` to the newest change among the entries, not to
+// nothing. The page phase runs after the build parses and sorts every source, so the value can
+// exist: here it is the older entry's `modified`, which is later than the newer entry's date. The
+// end-to-end assertion lives in the golden test suite.
+static void test_renders_site_modified_in_content_template(void) {
   struct Os* os = os_memory();
-  os_memory_write(os, "templates/content.html", "[{{site.updated}}]\n");
+  os_memory_write(os, "templates/content.html", "[{{site.modified}}]\n");
   struct ContentEntry older;
   struct ContentEntry newer;
   // The last slot is a draft's, which the parse phase leaves `NULL`.
@@ -138,11 +140,13 @@ static void test_renders_site_updated_in_content_template(void) {
   struct Arena arena = test_arena();
   struct Log log = {.buf = {.arena = &arena}};
   init_older_and_newer(&older, &newer, &arena);
+  older.modified = str_clone(S("2026-07-03T00:00:00Z"), &arena);
+  older.modified_epoch = 1783036800;
 
   TEST_CHECK(render_entry_slots(source_entries, 3, 1, os, &log) == 0);
   TEST_CHECK(test_log_is_empty(&log));
-  TEST_CHECK(os_memory_is_file(os, "public/older.html", "[2026-07-02T00:00:00Z]\n"));
-  TEST_CHECK(os_memory_is_file(os, "public/newer.html", "[2026-07-02T00:00:00Z]\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/older.html", "[2026-07-03T00:00:00Z]\n"));
+  TEST_CHECK(os_memory_is_file(os, "public/newer.html", "[2026-07-03T00:00:00Z]\n"));
   // The `NULL` slot is skipped, so it writes no page.
   TEST_CHECK(os_memory_files(os, "public").count == 2);
 }
@@ -269,7 +273,7 @@ static void test_reports_write_failure_per_entry(void) {
 }
 
 TEST_LIST = {
-    {"renders site updated in content template", test_renders_site_updated_in_content_template},
+    {"renders site modified in content template", test_renders_site_modified_in_content_template},
     {"iterates content entries in content template",
      test_iterates_content_entries_in_content_template},
     {"writes pages sharing parents concurrently", test_writes_pages_sharing_parents_concurrently},

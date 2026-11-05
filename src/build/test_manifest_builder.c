@@ -842,7 +842,7 @@ static void test_rejects_oversize_template_segment(void) {
 }
 
 // The writing this module guards lives in `site_writer` and is tested in
-// `src/build/test_site_writer.c`. Entry ordering and `site.updated` derivation live in
+// `src/build/test_site_writer.c`. Entry ordering and `site.modified` derivation live in
 // `content_entry` and are tested in `src/domain/test_content_entry.c`.
 
 TEST_LIST = {

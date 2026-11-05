@@ -30,8 +30,8 @@
  */
 enum { EXPECTED_SIZE = 1024 };
 
-/** Timestamp every render below passes as `site.updated`, which `TemplateContext` requires. */
-static const struct Str SITE_UPDATED = STR_INIT("2026-07-01T00:00:00Z");
+/** Timestamp every render below passes as `site.modified`, which `TemplateContext` requires. */
+static const struct Str SITE_MODIFIED = STR_INIT("2026-07-01T00:00:00Z");
 
 /**
  * @brief Initializes shared site metadata for template tests.
@@ -216,7 +216,7 @@ static void test_renders_escaped_title_and_raw_body(void) {
   entry.title = S("Content Entry <One>");
   const char* templates_dir = "tests/fixtures/site_file_permalink/templates";
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   TEST_ASSERT(render(templates_dir, "content.html", &context, &perm, &rendered_html, NULL) == 0);
   TEST_CHECK(strstr(rendered_html, "Content Entry &lt;One&gt;") != NULL);
@@ -224,7 +224,7 @@ static void test_renders_escaped_title_and_raw_body(void) {
   TEST_CHECK(strstr(rendered_html, "rel=\"alternate\"") != NULL);
 }
 
-// A render reports whether it read the entry list: `content_entries` and `site.updated` depend on
+// A render reports whether it read the entry list: `content_entries` and `site.modified` depend on
 // every entry, directly or through a partial, and the other `site.*` fields and the current entry's
 // own fields do not.
 static void test_reports_whether_it_read_the_entry_list(void) {
@@ -235,7 +235,7 @@ static void test_reports_whether_it_read_the_entry_list(void) {
       {"{{title}} {{site.title}} {{generator}}", false},
       {"{{#content_entries}}{{title}}{{/content_entries}}", true},
       {"{{^content_entries}}none{{/content_entries}}", true},
-      {"{{site.updated}}", true},
+      {"{{site.modified}}", true},
       {"{{>card}}", true},
   };
   for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
@@ -244,7 +244,7 @@ static void test_reports_whether_it_read_the_entry_list(void) {
     if (write_template_fixture(root_dir, cases[i].text) != 0) {
       return;
     }
-    if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "{{site.updated}}") == 0)) {
+    if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "{{site.modified}}") == 0)) {
       remove_fixture_tree(root_dir);
       return;
     }
@@ -252,8 +252,9 @@ static void test_reports_whether_it_read_the_entry_list(void) {
     init_test_site_config(&site_config);
     struct ContentEntry entry;
     init_test_content_entry(&entry);
-    const struct TemplateContext context = {
-        .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+    const struct TemplateContext context = {.site_config = &site_config,
+                                            .content_entry_current = &entry,
+                                            .site_modified = SITE_MODIFIED};
     struct Str html = {0};
     bool is_entry_list_read = !cases[i].is_entry_list_read;
     struct Log log = test_log();
@@ -286,7 +287,7 @@ static void test_iterates_content_entries_and_tags(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 2,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   static struct Str first_tags[] = {STR_INIT("c"), STR_INIT("x&y")};
   static struct Str second_tags[] = {STR_INIT("z")};
@@ -305,11 +306,10 @@ cleanup:
   remove_fixture_tree(root_dir);
 }
 
-// An empty tag renders as an empty item and does not end the iteration. `node_scalar` maps `""` to
-// `NULL` so an unset optional *field* is falsey, but a tag list must not inherit that rule: `NULL`
-// from the child callback means end-of-list to mustache4c, so an empty tag would silently drop
-// every tag after it. Frontmatter accepts `tags = ["", "x"]`, so this is reachable from a real
-// site.
+// An empty tag renders as an empty item and does not end the iteration. `NULL` from the child
+// callback means end-of-list to mustache4c, so a tag list must yield a node for every tag, even an
+// empty one, or an empty tag would silently drop every tag after it. Frontmatter accepts
+// `tags = ["", "x"]`, so this is reachable from a real site.
 static void test_empty_tag_does_not_truncate_tag_list(void) {
   struct Arena perm = test_arena();
   char root_dir[] = "/tmp/sosig-template-XXXXXX";
@@ -325,7 +325,7 @@ static void test_empty_tag_does_not_truncate_tag_list(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 1,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   static struct Str tags[] = {STR_INIT("a"), STR_INIT(""), STR_INIT("b")};
@@ -366,7 +366,7 @@ static void test_nested_section_reiterates_content_entries(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 2,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   first.title = S("One");
   second.title = S("Two");
@@ -391,7 +391,7 @@ static void test_escapes_double_brace_and_leaves_triple_brace_raw(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   entry.title = S("Content Entry <One>");
@@ -421,7 +421,7 @@ static void test_renders_atom_feed(void) {
                                           .content_entry_current = NULL,
                                           .content_entries = content_entries,
                                           .content_entry_count = 1,
-                                          .site_updated = entry.date};
+                                          .site_modified = entry.date};
   char* rendered_html = NULL;
   TEST_ASSERT(render(templates_dir, "atom.xml", &context, &perm, &rendered_html, NULL) == 0);
   TEST_CHECK(strstr(rendered_html, "<title>Content Entry &lt;One&gt;</title>") != NULL);
@@ -446,7 +446,7 @@ static void test_renders_generator(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 1,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
   const struct Str version = sosig_version_string();
   char* rendered_html = NULL;
   char expected[64];
@@ -479,7 +479,7 @@ static void test_renders_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "{{title}}") == 0)) {
@@ -518,7 +518,7 @@ static void test_repeated_partial_renders_same_content_each_time(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 3,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char* rendered_html = NULL;
   if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "[{{title}}]") == 0)) {
@@ -567,7 +567,7 @@ static void test_repeated_partial_stays_under_distinct_limit(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
@@ -596,7 +596,7 @@ static void test_empty_template_yields_empty_string(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   if (!TEST_CHECK(render(root_dir, "index.html", &context, &perm, &rendered_html, NULL) == 0)) {
@@ -620,7 +620,7 @@ static void test_unknown_variable_renders_empty(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   if (!TEST_CHECK(render(root_dir, "index.html", &context, &perm, &rendered_html, NULL) == 0)) {
@@ -646,12 +646,12 @@ static void test_inverted_section_renders_when_list_empty(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context_empty = {.site_config = &site_config,
-                                                .site_updated = SITE_UPDATED};
+                                                .site_modified = SITE_MODIFIED};
   const struct ContentEntry* content_entries[] = {&entry};
   const struct TemplateContext context_full = {.site_config = &site_config,
                                                .content_entries = content_entries,
                                                .content_entry_count = 1,
-                                               .site_updated = SITE_UPDATED};
+                                               .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
 
@@ -673,14 +673,17 @@ cleanup:
 
 // An empty field value is falsey as a section, so an unset optional field reads as absent. Were an
 // empty scalar truthy, `{{#description}}` would render for every entry and `{{^description}}` for
-// none, so both branches are asserted here.
+// none, so both branches are asserted here. The list renders a second time inside a content page
+// whose entry has a description and tags, and a listed entry without them still reads as empty,
+// rather than showing the page entry's, which Mustache's lookup in the enclosing context would.
 static void test_empty_field_is_falsey_as_section(void) {
   struct Arena perm = test_arena();
   char root_dir[] = "/tmp/sosig-template-XXXXXX";
   if (write_template_fixture(
           root_dir,
           "{{#content_entries}}[{{#description}}D:{{description}}{{/description}}"
-          "{{^description}}NONE{{/description}}]{{/content_entries}}") != 0) {
+          "{{^description}}NONE{{/description}}{{^tags}}|NOTAGS{{/tags}}]{{/content_entries}}") !=
+      0) {
     return;
   }
 
@@ -696,14 +699,84 @@ static void test_empty_field_is_falsey_as_section(void) {
   const struct TemplateContext context = {.site_config = &site_config,
                                           .content_entries = content_entries,
                                           .content_entry_count = 2,
-                                          .site_updated = SITE_UPDATED};
+                                          .site_modified = SITE_MODIFIED};
+  struct ContentEntry current;
+  init_test_content_entry(&current);
+  current.description = S("Page");
+  struct Str current_tags[] = {S("tag")};
+  current.tags = current_tags;
+  current.tag_count = 1;
+  const struct TemplateContext page_context = {.site_config = &site_config,
+                                               .content_entry_current = &current,
+                                               .content_entries = content_entries,
+                                               .content_entry_count = 2,
+                                               .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   first.description = S("");
   second.description = S("Desc");
   if (!TEST_CHECK(render(root_dir, "index.html", &context, &perm, &rendered_html, NULL) == 0)) {
     goto cleanup;
   }
-  TEST_CHECK(strcmp(rendered_html, "[NONE][D:Desc]") == 0);
+  TEST_CHECK(strcmp(rendered_html, "[NONE|NOTAGS][D:Desc|NOTAGS]") == 0);
+
+  if (!TEST_CHECK(render(root_dir, "index.html", &page_context, &perm, &rendered_html, NULL) ==
+                  0)) {
+    goto cleanup;
+  }
+  TEST_CHECK(strcmp(rendered_html, "[NONE|NOTAGS][D:Desc|NOTAGS]") == 0);
+
+cleanup:
+  remove_fixture_tree(root_dir);
+}
+
+// `{{modified}}` renders the current entry's modified date and each listed entry's, and
+// `{{#modified}}` skips an entry without one, so a feed can fall back to `{{date}}` there. The list
+// renders with a current entry that has a modified date, as a content template does, and a listed
+// entry without one still falls back to its own date rather than showing the current entry's.
+static void test_renders_modified_with_date_fallback(void) {
+  struct Arena perm = test_arena();
+  char root_dir[] = "/tmp/sosig-template-XXXXXX";
+  if (write_template_fixture(root_dir,
+                             "{{#content_entries}}[{{#modified}}{{modified}}{{/modified}}"
+                             "{{^modified}}{{date}}{{/modified}}]{{/content_entries}}") != 0) {
+    return;
+  }
+  if (!TEST_CHECK(write_fixture_file(root_dir, "content.html", "[{{modified}}]") == 0)) {
+    remove_fixture_tree(root_dir);
+    return;
+  }
+
+  struct SiteConfig site_config;
+  init_test_site_config(&site_config);
+  struct ContentEntry first;
+  struct ContentEntry second;
+  init_test_content_entry(&first);
+  init_test_content_entry(&second);
+  first.modified = S("2026-07-03T00:00:00Z");
+  const struct ContentEntry* content_entries[] = {&first, &second};
+  const struct TemplateContext list_context = {.site_config = &site_config,
+                                               .content_entry_current = &first,
+                                               .content_entries = content_entries,
+                                               .content_entry_count = 2,
+                                               .site_modified = SITE_MODIFIED};
+  const struct TemplateContext first_context = {
+      .site_config = &site_config, .content_entry_current = &first, .site_modified = SITE_MODIFIED};
+  const struct TemplateContext second_context = {.site_config = &site_config,
+                                                 .content_entry_current = &second,
+                                                 .site_modified = SITE_MODIFIED};
+  char* list_html = NULL;
+  char* first_html = NULL;
+  char* second_html = NULL;
+  if (!TEST_CHECK(render(root_dir, "index.html", &list_context, &perm, &list_html, NULL) == 0) ||
+      !TEST_CHECK(render(root_dir, "content.html", &first_context, &perm, &first_html, NULL) ==
+                  0) ||
+      !TEST_CHECK(render(root_dir, "content.html", &second_context, &perm, &second_html, NULL) ==
+                  0)) {
+    goto cleanup;
+  }
+  TEST_CHECK(strcmp(list_html, "[2026-07-03T00:00:00Z][2026-07-01T00:00:00Z]") == 0);
+  TEST_CHECK(strcmp(first_html, "[2026-07-03T00:00:00Z]") == 0);
+  TEST_CHECK(strcmp(second_html, "[]") == 0);
 
 cleanup:
   remove_fixture_tree(root_dir);
@@ -721,7 +794,7 @@ static void test_comments_are_dropped(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char* rendered_html = NULL;
   init_test_content_entry(&entry);
   if (!TEST_CHECK(render(root_dir, "index.html", &context, &perm, &rendered_html, NULL) == 0)) {
@@ -752,7 +825,7 @@ static void test_output_bound_applies_per_call(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char* rendered_html = NULL;
   char expected_err[EXPECTED_SIZE];
@@ -799,7 +872,7 @@ static void test_rejects_unsafe_partial_name(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char* rendered_html = NULL;
   char expected_invalid_tag[EXPECTED_SIZE];
@@ -848,7 +921,7 @@ static void test_rejects_unsafe_partial_name_in_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   init_test_content_entry(&entry);
   if (!TEST_CHECK(write_fixture_file(root_dir, "partials/card.html", "outer {{>a/b}}\n") == 0)) {
@@ -890,7 +963,7 @@ static void test_rejects_unreadable_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char reason[ERROR_SYSTEM_MESSAGE_SIZE];
   char expected[EXPECTED_SIZE];
@@ -922,7 +995,7 @@ static void test_rejects_template_with_nul_byte(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -958,7 +1031,7 @@ static void test_rejects_partial_with_nul_byte(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -994,7 +1067,7 @@ static void test_rejects_oversize_template_and_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Arena arena = test_arena();
   const off_t file_len = (off_t)TEMPLATE_FILE_LEN_MAX + 1;
   struct Log log = test_log();
@@ -1065,7 +1138,7 @@ static void test_rejects_partial_count_past_limit(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   char at_limit[RENDER_PARTIAL_COUNT_MAX * 10];
   char over_limit[(RENDER_PARTIAL_COUNT_MAX + 1) * 10];
   size_t at_limit_len = 0;
@@ -1156,7 +1229,7 @@ static void test_rejects_recursive_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   init_test_content_entry(&entry);
   if (!TEST_CHECK(write_fixture_file(root_dir, "partials/loop.html", "{{>loop}}") == 0)) {
@@ -1187,7 +1260,7 @@ static void test_rejects_mutual_partial_cycle(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   init_test_content_entry(&entry);
   if (!TEST_CHECK(write_fixture_file(root_dir, "partials/ping.html", "{{>pong}}") == 0)) {
@@ -1233,7 +1306,7 @@ static void test_rejects_oversize_render_output(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected_head[EXPECTED_SIZE];
   int expected_head_len = 0;
@@ -1279,7 +1352,7 @@ static void test_rejects_unclosed_section(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -1315,7 +1388,7 @@ static void test_rejects_section_name_mismatch(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -1351,7 +1424,7 @@ static void test_rejects_malformed_tags(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   init_test_content_entry(&entry);
 
   static const struct {
@@ -1400,7 +1473,7 @@ static void test_rejects_syntax_error_in_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -1437,7 +1510,7 @@ static void test_rejects_syntax_error_inside_partial(void) {
   init_test_site_config(&site_config);
   struct ContentEntry entry;
   const struct TemplateContext context = {
-      .site_config = &site_config, .content_entry_current = &entry, .site_updated = SITE_UPDATED};
+      .site_config = &site_config, .content_entry_current = &entry, .site_modified = SITE_MODIFIED};
   struct Log log = test_log();
   char expected[EXPECTED_SIZE];
   int expected_len = 0;
@@ -1481,6 +1554,7 @@ TEST_LIST = {
     {"unknown variable renders empty", test_unknown_variable_renders_empty},
     {"inverted section renders when list empty", test_inverted_section_renders_when_list_empty},
     {"empty field is falsey as section", test_empty_field_is_falsey_as_section},
+    {"renders modified with date fallback", test_renders_modified_with_date_fallback},
     {"comments are dropped", test_comments_are_dropped},
     {"output bound applies per call", test_output_bound_applies_per_call},
     {"rejects unsafe partial name", test_rejects_unsafe_partial_name},

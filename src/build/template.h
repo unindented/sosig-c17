@@ -57,8 +57,8 @@ struct TemplateContext {
   /** Current entry for content templates, or `NULL` for aggregate and feed templates. */
   const struct ContentEntry* content_entry_current;
 
-  /** Site last-updated timestamp exposed as `site.updated`. */
-  struct Str site_updated;
+  /** Site last-modified timestamp exposed as `site.modified`. */
+  struct Str site_modified;
 };
 
 /**
@@ -87,8 +87,8 @@ struct TemplateContext {
  *                               not overlap `perm`.
  * @param html_out               Receives the HTML, owned by `perm`, on success. Must not be `NULL`.
  * @param is_entry_list_read_out Receives, on success, whether the render resolved `content_entries`
- *                               or `site.updated`, the two names whose values depend on every entry
- *                               and not just the current one. Ignored when `NULL`.
+ *                               or `site.modified`, the two names whose values depend on every
+ *                               entry and not just the current one. Ignored when `NULL`.
  * @param log                    Log that receives the render's first failure: an unreadable
  *                               template or partial, a syntax error, or an exceeded limit. A page
  *                               render, one with `content_entry_current` set, ends the message with

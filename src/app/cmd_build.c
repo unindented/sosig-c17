@@ -179,10 +179,10 @@ struct BuildState {
   ptrdiff_t content_entry_count;
 
   /**
-   * Site last-updated timestamp exposed to every template as `site.updated`. Derived from
+   * Site last-modified timestamp exposed to every template as `site.modified`. Derived from
    * `content_entries` once they are sorted, so it is unset until then.
    */
-  struct Str site_updated;
+  struct Str site_modified;
 
   /** Path of the build cache below `output_dir`, in `perm`. */
   struct Str build_cache_path;
@@ -356,7 +356,7 @@ static int render_content_entries(struct BuildState* state, struct Log* log)
     __attribute__((nonnull(1, 2)));
 
 /**
- * @brief Compacts rendered non-draft content entries, orders them, and derives `site.updated`.
+ * @brief Compacts rendered non-draft content entries, orders them, and derives `site.modified`.
  *
  * @param state Build state whose `content_entries` array is filled and sorted. Must not be `NULL`.
  */
@@ -366,7 +366,7 @@ static void collect_content_entries(struct BuildState* state) __attribute__((non
  * @brief Compacts every rendered non-draft entry into one contiguous array.
  *
  * Sizes the array in a first pass and fills it in a second, so the two never disagree. Writes both
- * `content_entries` and `content_entry_count` on the state, which the sort and the `site.updated`
+ * `content_entries` and `content_entry_count` on the state, which the sort and the `site.modified`
  * derivation in the caller then read.
  *
  * @param state Build state whose `content_entries` array is allocated and filled. Must not be
@@ -483,7 +483,7 @@ static int empty_build_cache(const struct BuildState* state, struct Log* log)
  * @brief Renders and writes every content entry's page, dispatching jobs across worker threads.
  *
  * Runs after the entries are collected and sorted, so a content template sees the whole entry set
- * and the site's last-updated timestamp. Runs after the manifest, so no two jobs write one file. A
+ * and the site's last-modified timestamp. Runs after the manifest, so no two jobs write one file. A
  * site with no sources skips the phase, so it prints no status line and starts no pool.
  *
  * @param state Build state holding the parsed and sorted entries. Must not be `NULL`.
@@ -778,7 +778,7 @@ static int load_build_inputs_require_read_roots(const struct BuildState* state, 
 }
 
 static int run_build_phases(struct BuildState* state, struct Log* log) {
-  // The order below follows the data: a content template can read `site.updated` and iterate
+  // The order below follows the data: a content template can read `site.modified` and iterate
   // `content_entries`. Parsing every source has to finish, and the entries have to be collected and
   // sorted, before any page is rendered. A source that failed to parse leaves its slot empty, and
   // the manifest checks the rest.
@@ -829,15 +829,15 @@ static void collect_content_entries(struct BuildState* state) {
   build_verbose(state, "collecting content entries");
   collect_content_entries_compact(state);
 
-  // Every template render below reads the entries in this order, and `site.updated` is the newest
-  // date among them, so the code settles both here rather than per render.
+  // Every template render below reads the entries in this order, and `site.modified` is the newest
+  // change among them, so the code settles both here rather than per render.
   content_entry_sort(state->content_entries, state->content_entry_count);
   // C has no implicit qualification conversion for pointer-to-pointer, so handing the entry array
   // to a read-only callee needs this cast spelled out. It recurs at all six such call sites in this
   // file. It only adds `const`, at both levels, and the deep `const` is a thread-safety
   // requirement. A `TemplateContext` with only `const` pointers keeps one render job from writing
   // an entry another job is reading.
-  state->site_updated = content_entry_date_latest(
+  state->site_modified = content_entry_modified_latest(
       (const struct ContentEntry* const*)state->content_entries, state->content_entry_count);
 }
 
@@ -1012,7 +1012,7 @@ static int render_content_pages(struct BuildState* state, struct Log* log) {
   return page_renderer_render_pages(
       &state->writer, &state->site_config, (const struct ContentEntry* const*)state->source_entries,
       state->source_paths.count, (const struct ContentEntry* const*)state->content_entries,
-      state->content_entry_count, state->site_updated,
+      state->content_entry_count, state->site_modified,
       (const struct BuildCacheEntry* const*)state->fresh_rows, state->worker_count,
       state->worker_arenas, state->is_verbose, state->os, state->scratch, state->entry_list_flags,
       log);
@@ -1025,7 +1025,7 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
       (const struct ContentEntry* const*)state->content_entries;
   if (site_writer_write_templates(&state->writer, site_config, site_config->aggregate_templates,
                                   site_config->aggregate_template_count, entries,
-                                  state->content_entry_count, state->site_updated,
+                                  state->content_entry_count, state->site_modified,
                                   state->is_aggregates_fresh, state->os, state->perm,
                                   state->scratch, log) != 0) {
     return -1;
@@ -1036,7 +1036,7 @@ static int write_generated_site(struct BuildState* state, struct Log* log) {
                                          : site_config->feed_count;
   if (site_writer_write_templates(&state->writer, site_config, site_config->feed_templates,
                                   site_config->feed_template_count, entries, feed_entry_count,
-                                  state->site_updated, state->is_aggregates_fresh, state->os,
+                                  state->site_modified, state->is_aggregates_fresh, state->os,
                                   state->perm, state->scratch, log) != 0) {
     return -1;
   }

@@ -1,6 +1,7 @@
 +++
 title = "Inline Math"
 date = 2026-09-02T09:00:00-07:00
+modified = 2026-09-20T10:30:00-07:00
 description = "An inline math span."
 slug = "inline-math"
 tags = ["math"]

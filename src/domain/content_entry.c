@@ -6,10 +6,10 @@
 #include "shared/str.h"
 
 /**
- * `content_entry_date_latest` returns the Unix epoch when there are no entries. This gives
- * `site.updated` a valid RFC 3339 value before the first post.
+ * `content_entry_modified_latest` returns the Unix epoch when there are no entries. This gives
+ * `site.modified` a valid RFC 3339 value before the first post.
  */
-#define DATE_LATEST_FALLBACK S("1970-01-01T00:00:00Z")
+#define MODIFIED_LATEST_FALLBACK S("1970-01-01T00:00:00Z")
 
 /**
  * @brief Orders two content entries newest-first, breaking ties by output path.
@@ -27,9 +27,20 @@ void content_entry_sort(struct ContentEntry** content_entries, ptrdiff_t content
   }
 }
 
-struct Str content_entry_date_latest(const struct ContentEntry* const* content_entries,
-                                     ptrdiff_t content_entry_count) {
-  return content_entry_count > 0 ? content_entries[0]->date : DATE_LATEST_FALLBACK;
+struct Str content_entry_modified_latest(const struct ContentEntry* const* content_entries,
+                                         ptrdiff_t content_entry_count) {
+  if (content_entry_count == 0) {
+    return MODIFIED_LATEST_FALLBACK;
+  }
+  // The entries sort by `date`, so the newest change can be any of them. A tie keeps the earlier
+  // entry, which makes a site without `modified` values return the first entry's `date`.
+  const struct ContentEntry* latest = content_entries[0];
+  for (ptrdiff_t i = 1; i < content_entry_count; i++) {
+    if (content_entries[i]->modified_epoch > latest->modified_epoch) {
+      latest = content_entries[i];
+    }
+  }
+  return latest->modified.len > 0 ? latest->modified : latest->date;
 }
 
 static int compare_content_entries(const void* a, const void* b) {

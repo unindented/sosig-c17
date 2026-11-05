@@ -33,8 +33,9 @@ struct ContentEntry {
   struct Str title;
 
   /**
-   * Normalized RFC 3339 timestamp. The Atom feed emits it verbatim into its `updated` element, so
-   * the format is part of the feed's contract, not only a display choice.
+   * Normalized RFC 3339 timestamp. A feed template can write it verbatim into an Atom `updated`
+   * element when `modified` is empty, so the format is part of the feed's contract, not only a
+   * display choice.
    */
   struct Str date;
 
@@ -44,6 +45,19 @@ struct ContentEntry {
    * agreeing or the feed order stops matching the shown dates.
    */
   int64_t date_epoch;
+
+  /**
+   * Normalized RFC 3339 timestamp of the last change, from the `modified` key or the
+   * `last_modified` keyword, in the same format as `date`. Empty when the source sets none, so a
+   * template shows it only for an entry that set it.
+   */
+  struct Str modified;
+
+  /**
+   * Same instant as `modified` in Unix epoch seconds, or `date_epoch` when `modified` is empty, so
+   * it always holds the entry's last change. `content_entry_modified_latest` compares it.
+   */
+  int64_t modified_epoch;
 
   /** Optional summary text for templates. Empty when the source omits it. */
   struct Str description;
@@ -101,18 +115,21 @@ struct ContentEntry {
 void content_entry_sort(struct ContentEntry** content_entries, ptrdiff_t content_entry_count);
 
 /**
- * @brief Returns the newest date among the entries, exposed to templates as `site.updated`.
+ * @brief Returns the newest change among the entries, exposed to templates as `site.modified`.
  *
- * Resolved once from the sorted entry set and passed to every render, so a content template and an
- * aggregate template cannot disagree about it. An empty set falls back to the Unix epoch, so
- * `site.updated` always holds a valid RFC 3339 value even for a site with no posts yet.
+ * An entry's change is its `modified`, or its `date` when `modified` is empty. Resolved once from
+ * the sorted entry set and passed to every render, so a content template and an aggregate template
+ * cannot disagree about it. An empty set falls back to the Unix epoch, so `site.modified` always
+ * holds a valid RFC 3339 value even for a site with no posts yet.
  *
- * @param content_entries     Content entries sorted newest-first. May be `NULL` only when
- *                            `content_entry_count` is 0.
+ * @param content_entries     Content entries sorted newest-first. Each entry must have
+ *                            `modified_epoch` set. May be `NULL` only when `content_entry_count` is
+ *                            0.
  * @param content_entry_count Number of entries in `content_entries`.
- * @return The newest content entry's date, or the Unix epoch when there are no entries.
+ * @return The newest change, from the first entry in sorted order that has it, or the Unix epoch
+ *         when there are no entries.
  */
-struct Str content_entry_date_latest(const struct ContentEntry* const* content_entries,
-                                     ptrdiff_t content_entry_count);
+struct Str content_entry_modified_latest(const struct ContentEntry* const* content_entries,
+                                         ptrdiff_t content_entry_count);
 
 #endif

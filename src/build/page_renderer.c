@@ -23,7 +23,7 @@
 struct PageRenderContext {
   /**
    * Template context every page render starts from, fully populated here so a job varies only
-   * `content_entry_current`. Leaving a field zeroed would make `site.updated` render empty. That
+   * `content_entry_current`. Leaving a field zeroed would make `site.modified` render empty. That
    * every pointer in `TemplateContext` is `const` is a thread-safety invariant. During this phase
    * every worker holds pointers to every entry, and the `const` keeps any job from writing what
    * another job reads. Do not relax it to add a mutable field.
@@ -132,7 +132,7 @@ int page_renderer_render_pages(const struct OutputWriter* writer,
                                ptrdiff_t source_entry_count,
                                const struct ContentEntry* const* content_entries,
                                ptrdiff_t content_entry_count,
-                               struct Str site_updated,
+                               struct Str site_modified,
                                const struct BuildCacheEntry* const* fresh_rows,
                                ptrdiff_t worker_count,
                                struct JobArenas* worker_arenas,
@@ -148,7 +148,7 @@ int page_renderer_render_pages(const struct OutputWriter* writer,
               .content_entry_current = NULL,
               .content_entries = content_entries,
               .content_entry_count = content_entry_count,
-              .site_updated = site_updated,
+              .site_modified = site_modified,
           },
       .templates_dir = site_config->templates_dir,
       .os = os,

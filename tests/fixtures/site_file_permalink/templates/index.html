@@ -12,7 +12,7 @@
     {{#content_entries}}
     <section class="content-entry-card">
       <h2><a href="{{url}}">{{title}}</a></h2>
-      <p class="meta">{{date}}</p>
+      <p class="meta">{{date}}{{#modified}} · {{modified}}{{/modified}}</p>
       <p>{{description}}</p>
     </section>
     {{/content_entries}}

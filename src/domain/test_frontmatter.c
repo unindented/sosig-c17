@@ -176,6 +176,7 @@ static void test_split_rejects_document_without_a_first_line(void) {
 }
 
 // Parsing fills required fields, defaults the description, derives the slug, and copies tags.
+// Without `modified`, the modified date is empty and its epoch is the date's.
 static void test_parse_fills_required_and_defaults(void) {
   const char fm[] =
       "title = \"Title\"\n"
@@ -191,6 +192,9 @@ static void test_parse_fills_required_and_defaults(void) {
   TEST_CHECK(entry.tag_count == 2);
   TEST_CHECK(str_eq(entry.tags[1], S("b")));
   TEST_CHECK(entry.template.len == 0);
+  TEST_CHECK(entry.modified.len == 0);
+  TEST_CHECK(entry.date_epoch == 1782907200);
+  TEST_CHECK(entry.modified_epoch == entry.date_epoch);
 }
 
 // An explicit slug is normalized instead of trusted as a path.
@@ -242,6 +246,30 @@ static void test_date_epoch_uses_timezone(void) {
              0);
   TEST_CHECK(test_log_is_empty(&log));
   TEST_CHECK(later.date_epoch > earlier.date_epoch);
+}
+
+// `modified` takes a TOML date or a datetime with an offset, normalized as `date` is. A modified
+// date earlier than the entry's date is accepted, as an imported note can have one.
+static void test_parse_reads_modified(void) {
+  static const struct {
+    const char* fm;
+    const char* modified;
+    int64_t modified_epoch;
+  } cases[] = {
+      {"title = \"T\"\ndate = 2026-07-01T12:00:00Z\nmodified = 2026-07-05T09:00:00-07:00\n",
+       "2026-07-05T09:00:00-07:00", 1783267200},
+      {"title = \"T\"\ndate = 2026-07-05T12:00:00Z\nmodified = 2026-07-03\n",
+       "2026-07-03T00:00:00Z", 1783036800},
+  };
+
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(cases[i].fm), "content/t.md", &log) == 0);
+    TEST_CHECK(test_log_is_empty(&log));
+    TEST_CHECK(str_eq(entry.modified, str_from_cstr(cases[i].modified)));
+    TEST_CHECK(entry.modified_epoch == cases[i].modified_epoch);
+  }
 }
 
 // A TOML syntax error is reported at its line in the *file*, not its line in the frontmatter slice
@@ -360,7 +388,8 @@ static void test_rejects_unsafe_template(void) {
 }
 
 // Wrong-typed metadata is rejected with the offending key named and the expected type stated. A
-// quoted date is rejected as a type error even when it is a well-formed date string.
+// quoted date or modified date is rejected as a type error even when it is a well-formed date
+// string, and the rejected modified date is not stored.
 static void test_rejects_invalid_metadata(void) {
   const char bad_date[] =
       "title = \"Title\"\n"
@@ -371,6 +400,18 @@ static void test_rejects_invalid_metadata(void) {
   TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_date), "content/title.md", &log) == -1);
   TEST_CHECK(is_one_error_taken(&log, "frontmatter key 'date' must be a TOML date/datetime",
                                 "content/title.md"));
+
+  const char bad_modified[] =
+      "title = \"Title\"\n"
+      "date = 2026-07-01T12:00:00Z\n"
+      "modified = \"2030-01-02\"\n";
+  entry = (struct ContentEntry){0};
+  TEST_CHECK(parse_frontmatter(&entry, str_from_cstr(bad_modified), "content/title.md", &log) ==
+             -1);
+  TEST_CHECK(is_one_error_taken(&log, "frontmatter key 'modified' must be a TOML date/datetime",
+                                "content/title.md"));
+  TEST_CHECK(entry.modified.len == 0);
+  TEST_CHECK(entry.modified_epoch == entry.date_epoch);
 
   const char bad_description[] =
       "title = \"Title\"\n"
@@ -513,7 +554,7 @@ static void test_parse_rejects_raw_nul_in_frontmatter(void) {
 
 // An org-roam note reads as it stands: its keywords follow the top property drawer, the tags come
 // from `#+filetags:`, and a keyword for another tool, such as `#+startup:`, is ignored rather than
-// rejected.
+// rejected. Without `#+last_modified:`, the modified date is empty and its epoch is the date's.
 static void test_org_fills_note_after_property_drawer(void) {
   const struct Str org =
       S(":PROPERTIES:\n"
@@ -533,6 +574,8 @@ static void test_org_fills_note_after_property_drawer(void) {
   TEST_CHECK(str_eq(entry.title, S("Sync notes between machines")));
   TEST_CHECK(str_eq(entry.date, S("2024-07-12T00:00:00Z")));
   TEST_CHECK(entry.date_epoch == 1720742400);
+  TEST_CHECK(entry.modified.len == 0);
+  TEST_CHECK(entry.modified_epoch == entry.date_epoch);
   TEST_CHECK(str_eq(entry.description, S("")));
   TEST_CHECK(str_eq(entry.slug, S("sync-notes")));
   TEST_CHECK(entry.tag_count == 2);
@@ -602,6 +645,34 @@ static void test_org_reads_each_timestamp_form(void) {
     TEST_CHECK(test_log_is_empty(&log));
     TEST_CHECK(str_eq(entry.date, str_from_cstr(cases[i].date)));
     TEST_CHECK(entry.date_epoch == cases[i].date_epoch);
+  }
+}
+
+// `#+last_modified:` reads as `#+date:` does, with or without a time and in any letter case, and
+// gives the entry's modified date and epoch.
+static void test_org_reads_last_modified(void) {
+  static const struct {
+    const char* org;
+    const char* modified;
+    int64_t modified_epoch;
+  } cases[] = {
+      {"#+title: T\n#+date: 2024-07-12\n#+last_modified: [2025-01-18 Sat 16:39]\n",
+       "2025-01-18T16:39:00Z", 1737218340},
+      {"#+title: T\n#+date: 2024-07-12\n#+last_modified: [2025-01-18 Sat]\n",
+       "2025-01-18T00:00:00Z", 1737158400},
+      {"#+title: T\n#+date: 2024-07-12\n#+LAST_MODIFIED: [2025-01-18 Sat 16:39]\n",
+       "2025-01-18T16:39:00Z", 1737218340},
+  };
+
+  for (ptrdiff_t i = 0; i < (ptrdiff_t)(sizeof(cases) / sizeof(cases[0])); i++) {
+    struct ContentEntry entry = {0};
+    struct Log log = test_log();
+    TEST_CHECK(parse_frontmatter_org(&entry, str_from_cstr(cases[i].org), "content/t.org", &log) ==
+               0);
+    TEST_CHECK(test_log_is_empty(&log));
+    TEST_CHECK(str_eq(entry.date, S("2024-07-12T00:00:00Z")));
+    TEST_CHECK(str_eq(entry.modified, str_from_cstr(cases[i].modified)));
+    TEST_CHECK(entry.modified_epoch == cases[i].modified_epoch);
   }
 }
 
@@ -776,6 +847,36 @@ static void test_org_rejects_repeated_date(void) {
       "content/t.org"));
 }
 
+// A `#+last_modified:` that is not a timestamp is rejected with its own keyword named, and the
+// rejected value is not stored.
+static void test_org_rejects_invalid_last_modified(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(
+                 &entry, S("#+title: T\n#+date: 2026-07-01\n#+last_modified: yesterday\n"),
+                 "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(
+      &log, "Org keyword 'last_modified' must be one Org timestamp, such as '[2024-07-12 Fri]'",
+      "content/t.org"));
+  TEST_CHECK(entry.modified.len == 0);
+}
+
+// Two `#+last_modified:` lines join, as `#+date:` lines do, so they are no longer one timestamp and
+// the modified date is rejected rather than one of them chosen.
+static void test_org_rejects_repeated_last_modified(void) {
+  struct ContentEntry entry = {0};
+  struct Log log = test_log();
+  TEST_CHECK(parse_frontmatter_org(&entry,
+                                   S("#+title: T\n#+date: 2024-07-12\n"
+                                     "#+last_modified: [2025-01-18 Sat]\n"
+                                     "#+last_modified: [2025-02-01 Sat]\n"),
+                                   "content/t.org", &log) == -1);
+  TEST_CHECK(is_one_error_taken(
+      &log, "Org keyword 'last_modified' must be one Org timestamp, such as '[2024-07-12 Fri]'",
+      "content/t.org"));
+  TEST_CHECK(entry.modified.len == 0);
+}
+
 // `#+draft:` takes only the two TOML boolean spellings.
 static void test_org_rejects_invalid_draft(void) {
   struct ContentEntry entry = {0};
@@ -814,6 +915,7 @@ TEST_LIST = {
     {"sanitizes explicit slug", test_sanitizes_explicit_slug},
     {"parse fills optional template and draft", test_parse_fills_optional_template_and_draft},
     {"date epoch uses timezone", test_date_epoch_uses_timezone},
+    {"parse reads modified", test_parse_reads_modified},
     {"rejects invalid toml at file line", test_rejects_invalid_toml_at_file_line},
     {"rejects missing required key", test_rejects_missing_required_key},
     {"rejects unknown keys", test_rejects_unknown_keys},
@@ -828,6 +930,7 @@ TEST_LIST = {
     {"org fills optional keywords", test_org_fills_optional_keywords},
     {"org matches keys in any case", test_org_matches_keys_in_any_case},
     {"org reads each timestamp form", test_org_reads_each_timestamp_form},
+    {"org reads last modified", test_org_reads_last_modified},
     {"org reads denote note without headline", test_org_reads_denote_note_without_headline},
     {"org ignores keyword after headline", test_org_ignores_keyword_after_headline},
     {"org skips comments and crlf", test_org_skips_comments_and_crlf},
@@ -838,6 +941,8 @@ TEST_LIST = {
     {"org ends keywords at hash and tab", test_org_ends_keywords_at_hash_and_tab},
     {"org rejects invalid timestamp", test_org_rejects_invalid_timestamp},
     {"org rejects repeated date", test_org_rejects_repeated_date},
+    {"org rejects invalid last modified", test_org_rejects_invalid_last_modified},
+    {"org rejects repeated last modified", test_org_rejects_repeated_last_modified},
     {"org rejects invalid draft", test_org_rejects_invalid_draft},
     {"org rejects unsafe template", test_org_rejects_unsafe_template},
     {NULL, NULL},

@@ -55,27 +55,58 @@ static void test_sort_handles_empty_and_single(void) {
   TEST_CHECK(one[0] == &only);
 }
 
-// The latest date is the newest entry's own `date` bytes, not a copy, and the empty set falls back
-// to the Unix epoch. Neither is reachable from the golden test suite, whose fixture sites always
-// have entries. Without this test, `DATE_LATEST_FALLBACK` could change without a failure. An
-// invalid `<updated>` value would then appear in every feed for an empty site. Both expected values
-// came from a run.
-static void test_date_latest_uses_newest_or_epoch(void) {
-  TEST_CHECK(str_eq(content_entry_date_latest(NULL, 0), S("1970-01-01T00:00:00Z")));
+// Without `modified` values, the latest change is the newest entry's own `date` bytes, not a copy,
+// and the empty set falls back to the Unix epoch. Neither is reachable from the golden test suite,
+// whose fixture sites always have entries. Without this test, `MODIFIED_LATEST_FALLBACK` could
+// change without a failure. An invalid `<updated>` value would then appear in every feed for an
+// empty site. Both expected values came from a run.
+static void test_modified_latest_uses_newest_or_epoch(void) {
+  TEST_CHECK(str_eq(content_entry_modified_latest(NULL, 0), S("1970-01-01T00:00:00Z")));
 
-  struct ContentEntry newer = {.date = STR_INIT("2026-07-01T00:00:00Z")};
-  struct ContentEntry older = {.date = STR_INIT("2020-01-01T00:00:00Z")};
+  struct ContentEntry newer = {.date = STR_INIT("2026-07-01T00:00:00Z"),
+                               .date_epoch = 1782864000,
+                               .modified_epoch = 1782864000};
+  struct ContentEntry older = {.date = STR_INIT("2020-01-01T00:00:00Z"),
+                               .date_epoch = 1577836800,
+                               .modified_epoch = 1577836800};
   const struct ContentEntry* entries[] = {&newer, &older};
-  const struct Str updated = content_entry_date_latest(entries, 2);
-  TEST_CHECK(str_eq(updated, S("2026-07-01T00:00:00Z")));
+  const struct Str modified = content_entry_modified_latest(entries, 2);
+  TEST_CHECK(str_eq(modified, S("2026-07-01T00:00:00Z")));
   // The entry's own string, borrowed rather than copied: every render holds it for the build.
-  TEST_CHECK(updated.data == newer.date.data);
+  TEST_CHECK(modified.data == newer.date.data);
 
   // A single entry, which is the boundary between the two cases above and the shape a new site has
   // on its first post. A count guard of `> 1` instead of `> 0` still satisfies both assertions
   // above while handing that site the 1970 fallback as its feed's `<updated>`.
   const struct ContentEntry* only[] = {&newer};
-  TEST_CHECK(content_entry_date_latest(only, 1).data == newer.date.data);
+  TEST_CHECK(content_entry_modified_latest(only, 1).data == newer.date.data);
+}
+
+// The latest change is the newest `modified`, even on an entry that sorts after a newer `date`, and
+// an entry without `modified` competes with its `date`. On a tie, the entry that sorts first wins,
+// as it does for a site without `modified` values.
+static void test_modified_latest_picks_newest_change(void) {
+  struct ContentEntry newer = {.date = STR_INIT("2026-07-01T00:00:00Z"),
+                               .date_epoch = 1782864000,
+                               .modified_epoch = 1782864000};
+  struct ContentEntry older = {.date = STR_INIT("2020-01-01T00:00:00Z"),
+                               .date_epoch = 1577836800,
+                               .modified = STR_INIT("2026-07-03T00:00:00Z"),
+                               .modified_epoch = 1783036800};
+  const struct ContentEntry* entries[] = {&newer, &older};
+  const struct Str modified = content_entry_modified_latest(entries, 2);
+  TEST_CHECK(str_eq(modified, S("2026-07-03T00:00:00Z")));
+  TEST_CHECK(modified.data == older.modified.data);
+
+  // An earlier `modified` loses to the newer entry's `date`.
+  older.modified = S("2025-01-01T00:00:00Z");
+  older.modified_epoch = 1735689600;
+  TEST_CHECK(content_entry_modified_latest(entries, 2).data == newer.date.data);
+
+  // The same instant on both entries resolves to the first in sorted order.
+  older.modified = S("2026-07-01T00:00:00Z");
+  older.modified_epoch = newer.modified_epoch;
+  TEST_CHECK(content_entry_modified_latest(entries, 2).data == newer.date.data);
 }
 
 TEST_LIST = {
@@ -83,6 +114,7 @@ TEST_LIST = {
     {"sort output path tie break is deterministic",
      test_sort_output_path_tie_break_is_deterministic},
     {"sort handles empty and single", test_sort_handles_empty_and_single},
-    {"date latest uses newest or epoch", test_date_latest_uses_newest_or_epoch},
+    {"modified latest uses newest or epoch", test_modified_latest_uses_newest_or_epoch},
+    {"modified latest picks newest change", test_modified_latest_picks_newest_change},
     {NULL, NULL},
 };

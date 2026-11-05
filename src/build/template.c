@@ -111,9 +111,8 @@ struct Node {
   const struct ContentEntry* entry;
 
   /**
-   * Borrowed text for `NODE_SCALAR`. Never empty when it came from `node_scalar`, which rejects an
-   * empty value so an unset optional field reads as absent. A tag may still be empty, because
-   * `node_get_child_by_index` builds tag nodes directly to keep an empty tag from ending the list.
+   * Borrowed text for `NODE_SCALAR`, empty for an unset optional field or an empty tag.
+   * `node_get_child_by_index` makes an empty scalar falsey as a section.
    */
   struct Str scalar;
 };
@@ -175,7 +174,7 @@ struct ProviderData {
   struct Log* log;
 
   /**
-   * Whether the render resolved `content_entries` or `site.updated`, whose values depend on every
+   * Whether the render resolved `content_entries` or `site.modified`, whose values depend on every
    * entry. A partial's lookups count too, because they share this state.
    */
   bool is_entry_list_read;
@@ -400,11 +399,11 @@ static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind
     __attribute__((nonnull(1), returns_nonnull));
 
 /**
- * @brief Returns a scalar node wrapping `value`, or `NULL` when `value` is empty.
+ * @brief Returns a scalar node wrapping `value`, which may be empty.
  *
  * @param provider_data Render provider state owning the node arena. Must not be `NULL`.
  * @param value         String to wrap, borrowed for the rest of the render.
- * @return A scalar node, or `NULL` when `value` is empty.
+ * @return A scalar node.
  */
 static struct Node* node_scalar(struct ProviderData* provider_data, struct Str value)
     __attribute__((nonnull(1)));
@@ -412,7 +411,7 @@ static struct Node* node_scalar(struct ProviderData* provider_data, struct Str v
 /**
  * @brief Resolves a `site.*` name against the render's site configuration and timestamp.
  *
- * @param provider_data Render provider state holding the site configuration and `site.updated`.
+ * @param provider_data Render provider state holding the site configuration and `site.modified`.
  *                      Must not be `NULL`.
  * @param name          Requested field name.
  * @return The resolved node, or `NULL` when the name is unmatched or its value is unset.
@@ -426,8 +425,8 @@ static struct Node* resolve_site(struct ProviderData* provider_data, struct Str 
  * @param provider_data Render provider state. Must not be `NULL`.
  * @param entry         Content entry to resolve against, or `NULL`.
  * @param name          Requested field name.
- * @return The resolved node, or `NULL` when the name is unmatched, the field is absent, or `entry`
- *         is `NULL`.
+ * @return The resolved node, which is empty for an unset field, or `NULL` when the name is
+ *         unmatched or `entry` is `NULL`.
  */
 static struct Node* resolve_entry(struct ProviderData* provider_data,
                                   const struct ContentEntry* entry,
@@ -703,13 +702,14 @@ static void* node_get_child_by_index(void* node_ptr, unsigned index, void* provi
     if (index >= entry->tag_count) {
       return NULL;
     }
-    // This is deliberately not `node_scalar`. That maps `""` to `NULL` so an unset optional field
-    // is falsey as a section, but here `NULL` is how this callback says end of list, so an empty
-    // tag would silently drop every tag after it. A tag list carries an explicit count, so every
-    // index below it yields a node whatever the tag holds.
-    struct Node* child = node_alloc(provider_data, NODE_SCALAR);
-    child->scalar = entry->tags[index];
-    return child;
+    // A tag list carries an explicit count, so every index below it yields a node, whatever the tag
+    // holds, and `NULL` only ends the list.
+    return node_scalar(provider_data, entry->tags[index]);
+  }
+  // An empty scalar is falsey, so `{{#field}}` skips an unset optional field and `{{^field}}`
+  // fires, as for an empty tag list.
+  if (node->kind == NODE_SCALAR && node->scalar.len == 0) {
+    return NULL;
   }
   // `vendor/mustache4c/mustache.h` requires this. Per the Mustache specification a single value is
   // iterable too, so this callback returns the node itself for index 0 and `NULL` for every other
@@ -879,14 +879,11 @@ static struct Node* node_alloc(struct ProviderData* provider_data, enum NodeKind
 }
 
 static struct Node* node_scalar(struct ProviderData* provider_data, struct Str value) {
-  // An empty value is absent, not present-and-empty, so `{{#field}}` skips it and `{{^field}}`
-  // fires. mustache4c decides a section's truthiness by asking for child 0. A non-list node answers
-  // with itself, so returning a node here for `""` would make a section over an unset field always
-  // render. Interpolation is unchanged. `{{field}}` writes zero bytes whether the node is absent or
-  // holds an empty string. `resolve_entry` already applies this same rule to an empty tag list.
-  if (value.len == 0) {
-    return NULL;
-  }
+  // An empty value is a present field, not a missing name. mustache4c looks a missing name up in
+  // the enclosing contexts, so inside `{{#content_entries}}` in a content template, a listed entry
+  // with no `modified` would show the current page's. A present empty node stops the lookup at the
+  // listed entry, and `node_get_child_by_index` makes it falsey, so `{{#field}}` skips it and
+  // `{{^field}}` fires.
   struct Node* node = node_alloc(provider_data, NODE_SCALAR);
   node->scalar = value;
   return node;
@@ -903,10 +900,10 @@ static struct Node* resolve_site(struct ProviderData* provider_data, struct Str 
   if (str_eq(name, S("base_url"))) {
     return node_scalar(provider_data, site_config->base_url);
   }
-  if (str_eq(name, S("updated"))) {
+  if (str_eq(name, S("modified"))) {
     // This is derived from the whole entry set rather than read off the configuration.
     provider_data->is_entry_list_read = true;
-    return node_scalar(provider_data, provider_data->context->site_updated);
+    return node_scalar(provider_data, provider_data->context->site_modified);
   }
   return NULL;
 }
@@ -923,6 +920,9 @@ static struct Node* resolve_entry(struct ProviderData* provider_data,
   if (str_eq(name, S("date"))) {
     return node_scalar(provider_data, entry->date);
   }
+  if (str_eq(name, S("modified"))) {
+    return node_scalar(provider_data, entry->modified);
+  }
   if (str_eq(name, S("description"))) {
     return node_scalar(provider_data, entry->description);
   }
@@ -936,9 +936,8 @@ static struct Node* resolve_entry(struct ProviderData* provider_data,
     return node_scalar(provider_data, entry->body_html);
   }
   if (str_eq(name, S("tags"))) {
-    if (entry->tag_count == 0) {
-      return NULL;
-    }
+    // An empty list is a present field too, so the lookup stops here, and the list is falsey
+    // because `node_get_child_by_index` has no child 0 for it.
     struct Node* tags = node_alloc(provider_data, NODE_TAG_LIST);
     tags->entry = entry;
     return tags;

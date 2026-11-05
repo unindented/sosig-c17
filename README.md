@@ -174,7 +174,7 @@ A build writes the build cache to `_sosig/v1-build-cache.tsv` below `output_dir`
 
 The next build keeps a content page, and does not render it again, if its content file, its templates, and the configuration did not change. The build keeps the aggregates and feeds if no content file changed. Some changes make the build render pages again:
 
-- If any entry changes, the build renders again each page whose template reads `content_entries` or `site.updated`.
+- If any entry changes, the build renders again each page whose template reads `content_entries` or `site.modified`.
 - If any file below `templates_dir` changes, such as a partial, the build renders every page again.
 
 Every build still converts the Markdown or Org of every content file.
@@ -213,6 +213,7 @@ Each content file is one entry. A Markdown entry starts with TOML frontmatter, a
 | --- | --- | --- | --- |
 | `title` | `title` | `#+title:` | Required. Plain text, so Org markup such as `=foo=` shows as it is written. |
 | `date` | `date`, a TOML date or datetime | `#+date:`, an Org timestamp such as `[2024-07-12 Fri]`, `<2024-08-19 Mon 11:02>`, or `2024-07-12`, read as UTC | Required. Templates receive it in RFC 3339 format, and `sosig` sorts the entries by it. |
+| `modified` | `modified`, a TOML date or datetime | `#+last_modified:`, an Org timestamp, as for `#+date:` | Optional. The date of the last change to the entry. Templates receive it in RFC 3339 format, as for `date`. The default is an empty string. |
 | `description` | `description` | `#+description:` | Optional summary. The default is an empty string. |
 | `tags` | `tags`, a list | `#+filetags:`, where `:Emacs:Org:` gives `Emacs` and `Org` | Optional. |
 | `slug` | `slug` | `#+slug:` | Optional. The default is the name of the content file without its extension, normalized as [URLs and slugs](#urls-and-slugs) describes. |
@@ -227,6 +228,7 @@ The frontmatter is TOML between `+++` fences. This example uses every key that t
 +++
 title = "Content Entry Title"
 date = 2026-07-01T12:00:00Z
+modified = 2026-07-03T09:30:00Z
 description = "Short summary for listings."
 slug = "content-entry-title"
 tags = ["c", "sosig"]
@@ -244,10 +246,11 @@ An Org entry needs no fences:
 ```org
 #+title: Content Entry Title
 #+date: [2026-07-01 Wed]
+#+last_modified: [2026-07-03 Fri 09:30]
 #+filetags: :c:sosig:
 ```
 
-`sosig` reads the keywords at the top of the file. It stops at the first line that is not a blank line, a comment, a property drawer, or a keyword. It does not read a keyword in the body, such as a keyword inside a code block. `sosig` trims the value of a keyword and matches its name in any letter case, so `#+TITLE:` and `#+title:` are the same. Emacs also reads `#+title:`, `#+date:`, `#+description:`, and `#+filetags:`, so `sosig` can publish a note that you write for Emacs export, and you do not have to change the note.
+`sosig` reads the keywords at the top of the file. It stops at the first line that is not a blank line, a comment, a property drawer, or a keyword. It does not read a keyword in the body, such as a keyword inside a code block. `sosig` trims the value of a keyword and matches its name in any letter case, so `#+TITLE:` and `#+title:` are the same. Emacs also reads `#+title:`, `#+date:`, `#+description:`, and `#+filetags:`, so `sosig` can publish a note that you write for Emacs export, and you do not have to change the note. `sosig` also reads `#+last_modified:`. Emacs does not read this keyword, but the ox-huguito exporter for Hugo does.
 
 `sosig` ignores every other keyword, such as `#+options:`, `#+author:`, or `#+startup:`, because Org files contain keywords for other tools. So a misspelled optional keyword such as `#+drfat:` has no effect. To mark an entry as a draft, use `#+draft: true`.
 
@@ -258,6 +261,8 @@ An Org entry needs no fences:
 - It adds the tags of each `#+filetags:` line.
 - It uses the first `#+slug:`, `#+draft:`, or `#+template:` line, as Emacs does for most keywords that have one value.
 - It also joins `#+date:` lines. The result contains more than one timestamp, so the build rejects it.
+
+`sosig` joins `#+last_modified:` lines in the same way as `#+date:` lines, as ox-huguito does, so the build also rejects two `#+last_modified:` lines.
 
 The filename of a denote or org-roam note starts with a timestamp. The filename of a denote note also contains the tags. If such a note has no `#+slug:`, `sosig` publishes it at a URL such as `/20240819t110231-a-test-note-typescript.html`. This URL changes when you change the tags of the note. To keep the URL fixed, set `#+slug:`.
 
@@ -374,10 +379,10 @@ Templates use [Mustache](https://mustache.github.io/) syntax and are in `templat
 | Variable | Templates | Value |
 | --- | --- | --- |
 | `site.title`, `site.base_url`, `site.author` | All | The values from the configuration. |
-| `site.updated` | All | The newest entry date, or `1970-01-01T00:00:00Z` for an empty site. |
+| `site.modified` | All | The date of the newest change to the site. For each entry, the change is its `modified`, or its `date` if `modified` is empty. For an empty site, the value is `1970-01-01T00:00:00Z`. |
 | `content_entries` | All | Every entry that is not a draft, newest first. A feed template receives only the newest `feed_count` entries. Use `{{#content_entries}}` to iterate through them. |
 | `generator` | All | The name and version of `sosig`, for a tag such as `<meta name="generator" content="{{generator}}">`. |
-| `title`, `date`, `description`, `slug`, `url`, `body`, `tags` | Content templates, and any template inside `{{#content_entries}}` | The fields of the entry. Use `{{#tags}}{{.}}{{/tags}}` to iterate through the tags. |
+| `title`, `date`, `modified`, `description`, `slug`, `url`, `body`, `tags` | Content templates, and any template inside `{{#content_entries}}` | The fields of the entry. Use `{{#tags}}{{.}}{{/tags}}` to iterate through the tags. |
 
 A partial reference `{{> name}}` loads `templates_dir/partials/<name>.html`. A partial name can contain only letters, digits, `_`, and `-`.
 
@@ -389,6 +394,24 @@ A partial reference `{{> name}}` loads `templates_dir/partials/<name>.html`. A p
   {{{body}}}
 </article>
 {{> footer}}
+```
+
+If an entry does not set `modified`, its `modified` is empty, so `{{#modified}}` writes its contents only for an entry that sets it. A content template can show the date of the last change only when the entry has one:
+
+```html
+<p class="meta">{{date}}{{#modified}} | Updated {{modified}}{{/modified}}</p>
+```
+
+An Atom feed template can use `site.modified` for the `<updated>` element of the feed. For the `<updated>` element of an entry, it can use `modified`, or `date` if the entry has no `modified`:
+
+```xml
+<updated>{{site.modified}}</updated>
+{{#content_entries}}
+<entry>
+  <title>{{title}}</title>
+  <updated>{{#modified}}{{modified}}{{/modified}}{{^modified}}{{date}}{{/modified}}</updated>
+</entry>
+{{/content_entries}}
 ```
 
 ## Development

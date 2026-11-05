@@ -18,8 +18,8 @@
 // Every test here runs against the in-memory host: the writers read templates and static files and
 // write their outputs only through `runtime/os.h`.
 
-/** Timestamp every write below passes as `site.updated`, which the writers require. */
-#define SITE_UPDATED S("2026-07-01T00:00:00Z")
+/** Timestamp every write below passes as `site.modified`, which the writers require. */
+#define SITE_MODIFIED S("2026-07-01T00:00:00Z")
 
 /**
  * @brief Initializes a configuration rooted at `templates` and `public`, with no outputs.
@@ -63,7 +63,7 @@ static void test_writes_complete_output_layer(void) {
   os_memory_write(os, "templates/nested/links.html",
                   "{{#content_entries}}{{url}};{{/content_entries}}");
   os_memory_write(os, "templates/feeds/atom.xml",
-                  "<updated>{{site.updated}}</updated>{{#content_entries}}{{title}};"
+                  "<updated>{{site.modified}}</updated>{{#content_entries}}{{title}};"
                   "{{/content_entries}}");
   os_memory_write(os, "static/icons/a.txt", "static");
   const struct ContentEntry newer = {.title = S("Newer"), .url_path = S("/newer.html")};
@@ -89,8 +89,9 @@ static void test_writes_complete_output_layer(void) {
   struct Arena output = test_arena();
   struct Log log = test_log();
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, aggregates, 2, entries, 2,
-                                         SITE_UPDATED, false, os, output, test_arena(), &log) == 0);
-  TEST_CHECK(site_writer_write_templates(&writer, &site_config, feeds, 1, entries, 1, SITE_UPDATED,
+                                         SITE_MODIFIED, false, os, output, test_arena(),
+                                         &log) == 0);
+  TEST_CHECK(site_writer_write_templates(&writer, &site_config, feeds, 1, entries, 1, SITE_MODIFIED,
                                          false, os, output, test_arena(), &log) == 0);
   TEST_CHECK(site_writer_copy_static_files(&writer, &site_config, &static_paths,
                                            site_config.static_dir, test_arena(), &log) == 0);
@@ -142,7 +143,7 @@ static void test_write_templates_reports_write_failure(void) {
   struct Arena output = test_arena();
   struct Log log = test_log();
   TEST_CHECK(site_writer_write_templates(&writer, &site_config, aggregates, 1, NULL, 0,
-                                         SITE_UPDATED, false, os, output, test_arena(),
+                                         SITE_MODIFIED, false, os, output, test_arena(),
                                          &log) == -1);
   TEST_CHECK(test_log_is(&log, "failed to write template output: %s ('public/index.html')\n",
                          strerror(EISDIR)));

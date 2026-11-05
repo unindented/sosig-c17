@@ -3,7 +3,7 @@
   <title>{{site.title}}</title>
   <link href="{{site.base_url}}"/>
   <id>{{site.base_url}}</id>
-  <updated>{{site.updated}}</updated>
+  <updated>{{site.modified}}</updated>
 {{#content_entries}}  <entry>
     <title>{{title}}</title>
     <link href="{{site.base_url}}{{url}}"/>

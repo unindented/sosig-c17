@@ -59,7 +59,7 @@ struct BuildCacheEntry {
   int64_t mtime_ns;
 
   /**
-   * For a content row, whether the page read the entry list, `content_entries` or `site.updated`,
+   * For a content row, whether the page read the entry list, `content_entries` or `site.modified`,
    * so that it changes when any other entry does. `false` for a template row.
    */
   bool is_entry_list_read;

@@ -54,8 +54,8 @@ struct OrgKeyword {
  * step reads must be listed here.
  */
 static const struct Str frontmatter_keys[] = {
-    STR_INIT("title"), STR_INIT("date"),  STR_INIT("description"), STR_INIT("slug"),
-    STR_INIT("tags"),  STR_INIT("draft"), STR_INIT("template"),
+    STR_INIT("title"), STR_INIT("date"), STR_INIT("modified"), STR_INIT("description"),
+    STR_INIT("slug"),  STR_INIT("tags"), STR_INIT("draft"),    STR_INIT("template"),
 };
 
 /**
@@ -138,6 +138,26 @@ static int frontmatter_parse_metadata_date(struct ContentEntry* entry,
                                            struct Str source_path,
                                            struct Arena* perm,
                                            struct Log* log) __attribute__((nonnull(1, 4, 5)));
+
+/**
+ * @brief Reads the optional modified date and records both its display and sortable forms.
+ *
+ * Without the key, `modified` stays empty and `modified_epoch` takes `date_epoch`, so it still
+ * holds the entry's last change. Runs after `frontmatter_parse_metadata_date`, which sets
+ * `date_epoch`.
+ *
+ * @param entry       Entry that receives `modified` and `modified_epoch`. Must not be `NULL`.
+ * @param table       Parsed frontmatter table.
+ * @param source_path Source file the frontmatter came from, named in the error.
+ * @param perm        Arena that owns the copied value. Must not be `NULL`.
+ * @param log         Log that receives the error. Must not be `NULL`.
+ * @return `0` on success or when the key is absent, or `-1` on a wrong type.
+ */
+static int frontmatter_parse_metadata_modified(struct ContentEntry* entry,
+                                               toml_datum_t table,
+                                               struct Str source_path,
+                                               struct Arena* perm,
+                                               struct Log* log) __attribute__((nonnull(1, 4, 5)));
 
 /**
  * @brief Copies the optional description string when present.
@@ -261,6 +281,29 @@ static int view_string_value(toml_datum_t value,
                              struct Log* log) __attribute__((nonnull(2, 4, 5)));
 
 /**
+ * @brief Converts a present TOML date or datetime datum into its RFC 3339 and epoch forms.
+ *
+ * Writes both outputs only on success, so a rejected value leaves their defaults in place.
+ *
+ * @param value       Datum to convert. Must be present, not `TOML_UNKNOWN`.
+ * @param key         Terminated key name used in diagnostics. Must not be `NULL`.
+ * @param source_path Source file the frontmatter came from, named in the error.
+ * @param arena       Arena that owns the formatted timestamp. Must not be `NULL`.
+ * @param value_out   Receives the normalized RFC 3339 timestamp on success. Must not be `NULL`.
+ * @param epoch_out   Receives the same instant in Unix epoch seconds on success. Must not be
+ *                    `NULL`.
+ * @param log         Log that receives the error. Must not be `NULL`.
+ * @return `0` on success, or `-1` if the datum is not a TOML date or datetime.
+ */
+static int convert_timestamp_value(toml_datum_t value,
+                                   const char* key,
+                                   struct Str source_path,
+                                   struct Arena* arena,
+                                   struct Str* value_out,
+                                   int64_t* epoch_out,
+                                   struct Log* log) __attribute__((nonnull(2, 4, 5, 6, 7)));
+
+/**
  * @brief Copies the required `#+title:`.
  *
  * The title is plain text, as a TOML `title` is, so Org markup in it, such as `=foo=`, shows as
@@ -282,27 +325,37 @@ static int frontmatter_parse_org_title(struct ContentEntry* entry,
                                        struct Log* log) __attribute__((nonnull(1, 4, 6)));
 
 /**
- * @brief Reads the required `#+date:` timestamp and records both its display and sortable forms.
+ * @brief Reads a timestamp keyword, such as `#+date:`, and records both its display and sortable
+ *        forms.
  *
  * The timestamp becomes a TOML date or datetime datum, so it takes the same conversion and RFC 3339
  * spelling as a TOML `date`, and is UTC, as a TOML date without an offset is. Repeated lines join,
- * as Emacs joins them, so two dates are not one timestamp, while an empty line beside one date
- * leaves it one.
+ * as Emacs joins `#+date:` lines, so two timestamps are not one timestamp, while an empty line
+ * beside one timestamp leaves it one. Writes both outputs only on success, so an absent optional
+ * keyword or a rejected value leaves their defaults in place.
  *
- * @param entry       Entry that receives `date` and `date_epoch`. Must not be `NULL`.
  * @param org         Full Org file bytes.
+ * @param key         Lowercase keyword name, without `#+` and `:`.
+ * @param is_required Whether a file without the keyword fails.
  * @param source_path Source file the keywords came from, named in the error.
- * @param perm        Arena that owns the copied value. Must not be `NULL`.
+ * @param perm        Arena that owns the formatted timestamp. Must not be `NULL`.
  * @param scratch     Arena for the lines a repeated keyword joins.
+ * @param value_out   Receives the normalized RFC 3339 timestamp on success. Must not be `NULL`.
+ * @param epoch_out   Receives the same instant in Unix epoch seconds on success. Must not be
+ *                    `NULL`.
  * @param log         Log that receives the error. Must not be `NULL`.
- * @return `0` on success, or `-1` if the keyword is missing or not an Org timestamp.
+ * @return `0` on success or when an optional keyword is absent, or `-1` if a required keyword is
+ *         missing or the value is not one Org timestamp.
  */
-static int frontmatter_parse_org_date(struct ContentEntry* entry,
-                                      struct Str org,
-                                      struct Str source_path,
-                                      struct Arena* perm,
-                                      struct Arena scratch,
-                                      struct Log* log) __attribute__((nonnull(1, 4, 6)));
+static int frontmatter_parse_org_timestamp(struct Str org,
+                                           struct Str key,
+                                           bool is_required,
+                                           struct Str source_path,
+                                           struct Arena* perm,
+                                           struct Arena scratch,
+                                           struct Str* value_out,
+                                           int64_t* epoch_out,
+                                           struct Log* log) __attribute__((nonnull(5, 7, 8, 9)));
 
 /**
  * @brief Copies the optional `#+description:` when present.
@@ -581,7 +634,14 @@ int frontmatter_parse_org(struct ContentEntry* entry,
   if (frontmatter_parse_org_title(entry, org, source_path, perm, scratch, log) != 0) {
     rc = -1;
   }
-  if (frontmatter_parse_org_date(entry, org, source_path, perm, scratch, log) != 0) {
+  if (frontmatter_parse_org_timestamp(org, S("date"), true, source_path, perm, scratch,
+                                      &entry->date, &entry->date_epoch, log) != 0) {
+    rc = -1;
+  }
+  // A note without `#+last_modified:` changed last at its `date`.
+  entry->modified_epoch = entry->date_epoch;
+  if (frontmatter_parse_org_timestamp(org, S("last_modified"), false, source_path, perm, scratch,
+                                      &entry->modified, &entry->modified_epoch, log) != 0) {
     rc = -1;
   }
   frontmatter_parse_org_description(entry, org, perm, scratch);
@@ -639,6 +699,9 @@ static int frontmatter_parse_metadata(struct ContentEntry* entry,
   if (frontmatter_parse_metadata_date(entry, table, source_path, perm, log) != 0) {
     rc = -1;
   }
+  if (frontmatter_parse_metadata_modified(entry, table, source_path, perm, log) != 0) {
+    rc = -1;
+  }
   if (frontmatter_parse_metadata_description(entry, table, source_path, perm, log) != 0) {
     rc = -1;
   }
@@ -674,12 +737,23 @@ static int frontmatter_parse_metadata_date(struct ContentEntry* entry,
   if (date.type == TOML_UNKNOWN) {
     return log_error_in(log, source_path, "missing required frontmatter key 'date'");
   }
-  if (toml_datum_to_epoch(date, &entry->date_epoch) != 0) {
-    return log_error_in(log, source_path, "frontmatter key 'date' must be a TOML date/datetime");
+  return convert_timestamp_value(date, "date", source_path, perm, &entry->date, &entry->date_epoch,
+                                 log);
+}
+
+static int frontmatter_parse_metadata_modified(struct ContentEntry* entry,
+                                               toml_datum_t table,
+                                               struct Str source_path,
+                                               struct Arena* perm,
+                                               struct Log* log) {
+  // A note without `modified` changed last at its `date`.
+  entry->modified_epoch = entry->date_epoch;
+  toml_datum_t modified = toml_get(table, "modified");
+  if (modified.type == TOML_UNKNOWN) {
+    return 0;
   }
-  // The epoch conversion has just accepted the datum's type, so the format cannot refuse it.
-  entry->date = toml_datum_format_rfc3339(date, perm);
-  return 0;
+  return convert_timestamp_value(modified, "modified", source_path, perm, &entry->modified,
+                                 &entry->modified_epoch, log);
 }
 
 static int frontmatter_parse_metadata_description(struct ContentEntry* entry,
@@ -827,6 +901,23 @@ static int view_string_value(toml_datum_t value,
   return 0;
 }
 
+static int convert_timestamp_value(toml_datum_t value,
+                                   const char* key,
+                                   struct Str source_path,
+                                   struct Arena* arena,
+                                   struct Str* value_out,
+                                   int64_t* epoch_out,
+                                   struct Log* log) {
+  int64_t epoch = 0;
+  if (toml_datum_to_epoch(value, &epoch) != 0) {
+    return log_error_in(log, source_path, "frontmatter key '%s' must be a TOML date/datetime", key);
+  }
+  // The epoch conversion has just accepted the datum's type, so the format cannot refuse it.
+  *value_out = toml_datum_format_rfc3339(value, arena);
+  *epoch_out = epoch;
+  return 0;
+}
+
 static int frontmatter_parse_org_title(struct ContentEntry* entry,
                                        struct Str org,
                                        struct Str source_path,
@@ -841,26 +932,33 @@ static int frontmatter_parse_org_title(struct ContentEntry* entry,
   return 0;
 }
 
-static int frontmatter_parse_org_date(struct ContentEntry* entry,
-                                      struct Str org,
-                                      struct Str source_path,
-                                      struct Arena* perm,
-                                      struct Arena scratch,
-                                      struct Log* log) {
-  const struct OrgKeyword date = join_org_keyword(org, S("date"), S(" "), &scratch);
-  if (!date.is_found) {
-    return log_error_in(log, source_path, "missing required Org keyword 'date'");
+static int frontmatter_parse_org_timestamp(struct Str org,
+                                           struct Str key,
+                                           bool is_required,
+                                           struct Str source_path,
+                                           struct Arena* perm,
+                                           struct Arena scratch,
+                                           struct Str* value_out,
+                                           int64_t* epoch_out,
+                                           struct Log* log) {
+  const struct OrgKeyword timestamp = join_org_keyword(org, key, S(" "), &scratch);
+  if (!timestamp.is_found) {
+    if (is_required) {
+      return log_error_in(log, source_path, "missing required Org keyword '%.*s'", STR_FMT(key));
+    }
+    return 0;
   }
   toml_datum_t datum = {0};
-  if (parse_org_timestamp(trim_org_blanks(date.value), &datum) != 0) {
+  if (parse_org_timestamp(trim_org_blanks(timestamp.value), &datum) != 0) {
     return log_error_in(log, source_path,
-                        "Org keyword 'date' must be one Org timestamp, such as '[2024-07-12 Fri]'");
+                        "Org keyword '%.*s' must be one Org timestamp, such as '[2024-07-12 Fri]'",
+                        STR_FMT(key));
   }
   // The conversion accepts every date and datetime datum, which is all the timestamp parse makes.
-  const int epoch_rc = toml_datum_to_epoch(datum, &entry->date_epoch);
+  const int epoch_rc = toml_datum_to_epoch(datum, epoch_out);
   assert(epoch_rc == 0);
   (void)epoch_rc;
-  entry->date = toml_datum_format_rfc3339(datum, perm);
+  *value_out = toml_datum_format_rfc3339(datum, perm);
   return 0;
 }
 

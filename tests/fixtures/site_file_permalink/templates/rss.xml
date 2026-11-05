@@ -4,7 +4,7 @@
     <title>{{site.title}}</title>
     <link>{{site.base_url}}</link>
     <description>{{site.title}}</description>
-    <lastBuildDate>{{site.updated}}</lastBuildDate>
+    <lastBuildDate>{{site.modified}}</lastBuildDate>
 {{#content_entries}}    <item>
       <title>{{title}}</title>
       <link>{{site.base_url}}{{url}}</link>
