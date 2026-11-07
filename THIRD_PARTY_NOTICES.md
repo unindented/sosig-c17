@@ -86,7 +86,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### tree-sitter (https://github.com/tree-sitter/tree-sitter)
 
-Vendored at release `v0.27.1`, commit `10eb5ac119eec9cb4267a8e035066473983f5f3a`.
+Vendored at release `0.27.2`, commit `10eb5ac119eec9cb4267a8e035066473983f5f3a`.
 
 Only the C runtime is vendored: `lib/include` and `lib/src`, without `lib/src/wasm-stdlib`.
 
